@@ -543,7 +543,7 @@ const COMMAND_BAND: &[Row] = &[
         "height",
         "5",
         &[
-            "Rows the band occupies. It has no frame (SQ-0667) - every row here",
+            "Rows the band occupies. It has no frame - every row here",
             "is content. Clamped to 3-11, and to whatever the screen can spare.",
             "Resize mode (the band is one of its targets while open) writes this",
             "key.",

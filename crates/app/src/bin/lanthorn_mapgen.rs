@@ -84,8 +84,8 @@ struct Cli {
     #[arg(long)]
     no_layout: bool,
 
-    /// Do not split mazes and portal-only regions onto their own layers
-    /// (SQ-1308): everything lands on one flat map, as before that quest.
+    /// Do not split mazes and portal-only regions onto their own layers:
+    /// everything lands on one flat map, as before this option existed.
     #[arg(long)]
     no_auto_layers: bool,
 
@@ -95,7 +95,7 @@ struct Cli {
     /// a couple of dozen keypresses and two `look`s — purely to read the
     /// starting room, which is then the room the map highlights and the room
     /// whose layer is called `Main`. Without it the largest region is `Main`
-    /// instead, which is what mapgen did before SQ-1359. Nothing else about
+    /// instead, which is what mapgen used to do. Nothing else about
     /// the map depends on it, and the map is still read statically either way.
     #[arg(long)]
     no_boot: bool,

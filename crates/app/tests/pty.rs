@@ -42,3 +42,5 @@ mod pty_oracle;
 mod pty_picker_return;
 #[path = "suites/pty_query_replies.rs"]
 mod pty_query_replies;
+#[path = "suites/public_surfaces_no_quest_refs.rs"]
+mod public_surfaces_no_quest_refs;

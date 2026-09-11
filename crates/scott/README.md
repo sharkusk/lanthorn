@@ -105,6 +105,6 @@ Crate-level documentation (`cargo doc --open -p lanthorn-scott`, or
 [docs.rs/lanthorn-scott](https://docs.rs/lanthorn-scott) once published)
 covers every dialect's module and the full save/restore story.
 
-Reading the remaining refused dialects is tracked as SQ-1414.
+Reading the remaining refused dialects is still open work.
 
 License: BSD-3-Clause.

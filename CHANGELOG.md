@@ -2743,7 +2743,7 @@ it; the sections above are the summary.
   previously ignored them — a mistyped `--no-statu` did nothing and exited 0 —
   and `zvm-cli` took an unknown single-dash argument such as `-x` for the story
   path. A missing option value and a second positional argument are errors too.
-- **A full-workspace code review closed forty-odd defects** (SQ-0619–SQ-0661), the
+- **A full-workspace code review closed forty-odd defects**, the
   themes being:
   - *Hostile files can no longer crash or hang the host.* Illegal Z-machine
     instructions latch a fault instead of panicking; crafted stories, saves,
@@ -2977,7 +2977,7 @@ the game itself does, and `config.toml` learned to explain itself.
 - **Glulx rooms are identified the way the game identifies them** — by its own location
   global rather than by the room's printed name, so two rooms sharing a name stay
   distinct and a renamed room stays itself.
-- **One save format, whoever asked for it (SQ-0531).** A story's own `SAVE` now
+- **One save format, whoever asked for it.** A story's own `SAVE` now
   writes the same self-contained `.lanthorn` archive Ctrl+S writes — map, screen,
   transcript and inline art included — instead of a bare VM-state-only file. So an
   in-game `restore` finally brings your scrollback back with it, even into a
@@ -2993,7 +2993,7 @@ the game itself does, and `config.toml` learned to explain itself.
 
 ### Fixed
 
-- **A Glulx game's own `SAVE` now loads from the saves manager (SQ-0556).**
+- **A Glulx game's own `SAVE` now loads from the saves manager.**
   `SAVE` behaves the same on every engine again: on Z-machine, Glulx and Scott
   Adams alike it writes a `.lanthorn`, the archive appears in the manager, and it
   restores through both the game's own `RESTORE` and the host's. Picking a Glulx
@@ -3234,6 +3234,6 @@ exists.
 - **Glulx cross-interpreter save interop isn't golden-tested.** The Glulx in-game
   save round-trips internally and follows the Glulx-Quetzal spec, but reading our
   Glulx saves in another interpreter (and vice versa) isn't yet pinned by a
-  golden test the way the Z-machine `.qzl` interop is (tracked in SQ-0229).
+  golden test the way the Z-machine `.qzl` interop is.
 - **v6 menu opcodes are stubs** — `print_form` / `make_menu` are recognized but
-  not implemented (tracked in SQ-0457).
+  not implemented.

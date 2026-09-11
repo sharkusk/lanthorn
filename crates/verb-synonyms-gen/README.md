@@ -141,7 +141,7 @@ suggestion with its verdict. A wrong offer (`shove` → `pull · drag`) is a
 line-order or sense problem in this table; a silent story is usually a grammar
 this generator could not read at all, and the harvest's own skip report names it.
 
-**A growing corpus can REMOVE a mapping, and one guard here did** (SQ-1234).
+**A growing corpus can REMOVE a mapping, and one guard here did.**
 The gap-fill refuses a union whose CHILD synset a story can match, and it used
 to test that per SYNSET: one of the thirty stories added between 119 and 149
 implements `derive`, so {`derive`, `gain`} stopped being unioned onto its
@@ -152,7 +152,7 @@ than the whole row, and the invariant is unchanged: nothing left in a gap-filled
 group is a specific word a story can match. Watch for the same shape in the
 other whole-row refusals when the corpus next grows.
 
-**Diff the two scans on member SETS, and read a lost offer twice** (SQ-1234).
+**Diff the two scans on member SETS, and read a lost offer twice.**
 Going from 119 stories to 149 moved 2,831 rows' positions and rewrote 222 sets,
 and the whole visible effect on the 188-story scan was 346 offers becoming 345.
 Two of the three changes were traced to a single ADDED row — `rush hasten hurry
@@ -186,14 +186,14 @@ One story is one author's idiom: at support 1 the corpus contributes a
 33-member `attack` group carrying `vandalise` and `torture`, and a 21-member
 `cut`. Two is where those disappear and the survivors are IF conventions.
 
-Re-measured on the 149-story corpus with the SQ-1233 rules and the SQ-1234
+Re-measured on the 149-story corpus with the four rules below and the
 gap-fill fix in place, which is what the shipped table is built from. The
 knob's shape is what argues for it and the shape has not moved: every extra
 story raises every row, coverage climbs about half a point per support level
 down, and support 1 still buys its 1.0 point by believing 1,054 sets exactly
 one author ever wrote.
 
-### Four more rules (SQ-1233)
+### Four more rules
 
 A 30-story guidance-scan audit found four systematic ways the table (and the
 mechanisms above) still misled a player. All four are in `build.rs`, and none
