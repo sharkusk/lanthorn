@@ -6,7 +6,7 @@ All notable changes to lanthorn are recorded here.
 [`.github/workflows/release.yml`](.github/workflows/release.yml)). A tag whose
 name contains a hyphen — `v0.1.0-beta.1`, `v0.2.0-rc.1` — is published as a
 **pre-release**; a bare `vMAJOR.MINOR.PATCH` is a full release. The workspace
-version in `Cargo.toml` (currently `0.5.3`) versions every crate and every
+version in `Cargo.toml` (currently `0.6.1`) versions every crate and every
 binary's `--version` at once, and carries any pre-release suffix so a build
 identifies itself without reading its git hash.
 
@@ -19,7 +19,43 @@ Absolute URLs or no link.
 
 ---
 
-## Unreleased
+## v0.6.1 — 2026-09-11
+
+### Changed
+
+- **`lanthorn-scott` is no longer experimental.** A fuzz sweep over the
+  picture readers (S.A.G.A. on Commodore 64, Atari, Apple II and MS-DOS), the
+  ZX Spectrum snapshot reader and the story loader found nothing to fix, and
+  the crate's public API is tidier for it — types a host
+  builds by hand stay open, everything else is read through accessors so a
+  future field can be added without breaking anyone embedding the crate.
+
+### Fixed
+
+- **Clicking an illustration thumbnail now opens the full-size picture**, in
+  Anchorhead and any other Glulx game that draws a small image beside its
+  text as a link to a bigger one. Typing the game's own view command always
+  worked; the click didn't.
+- **The story panel lays out at the right width again after `/reset-game`**
+  in a Glulx game — it used to stay at a narrower fallback width until you
+  actually resized the terminal.
+- **InvisiClues downloads are only offered for Infocom's own games.** A
+  non-Infocom title whose name happened to share a word with an Infocom
+  catalog entry — Scott Adams' *The Sorcerer of Claymorgue Castle* against
+  Infocom's *Sorcerer*, for one — was incorrectly offered a hint download
+  that didn't exist for it.
+- **The story list's TYPE column no longer truncates.** The widest label now
+  fits in full instead of being cut off with an ellipsis, and the IBM PC
+  DOS medium is now labelled "MS-DOS" rather than the more generic "DOS".
+- **The automapper no longer draws a phantom exit where a story killed you
+  and revived you elsewhere.** Dying while the automapper was quietly
+  scouting a direction — reproducible in Zork I's cellar and maze — used to
+  record the room you woke up in as if it were an ordinary destination,
+  mislabelling the map and occasionally erasing a real passage in the
+  process.
+- **`lanthorn-mapgen --layer-min 0` now actually turns layers off.** It used
+  to still split mazes onto their own layer at that setting; now it produces
+  the same flat map as `--no-auto-layers`.
 
 ---
 
