@@ -806,7 +806,7 @@ the type label rather than a separate badge.)
 
 The container is part of that label, so a story you're playing off its original
 release floppy reads `Z6 (ADF)` off an Amiga disk, `Z6 (HFS)` off a Macintosh
-one, `Z6 (DOS)` off a PC floppy, `Z4 (ST)` off an Atari ST one or
+one, `Z6 (MS-DOS)` off a PC floppy, `Z4 (ST)` off an Atari ST one or
 `Z5 (ProDOS)` off an Apple II disk, `Z3 (Boot)` off one of Infocom's raw
 self-booting Apple floppies, or `Z4 (CBM)` off a Commodore 1541 disk, and is never
 mistaken for a loose story file. The disk says so, not the

@@ -391,7 +391,7 @@ declares a picture space: see [v6 graphics](v6-graphics.md#apple-ii-artwork).
 
 Disk images are first-class in the library too: point lanthorn at a directory of
 them and the picker's TYPE column names the container alongside the format —
-`Z6 (ADF)` off an Amiga disk, `Z6 (HFS)` off a Macintosh one, `Z6 (DOS)` off a PC
+`Z6 (ADF)` off an Amiga disk, `Z6 (HFS)` off a Macintosh one, `Z6 (MS-DOS)` off a PC
 floppy, `Z3 (ST)` off an Atari one and `Z5 (ProDOS)` off an Apple II disk — from the same content-based
 identification, so a floppy is never listed as a bare story file, and one
 machine's media is never labelled as another's. See

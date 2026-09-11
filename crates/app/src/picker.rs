@@ -2278,7 +2278,7 @@ pub fn sort_stories(stories: &mut [StoryEntry], sort: Sort) {
     /// Within one engine and version, a row with NO parenthetical sorts first
     /// (nothing before something — its label is a prefix of every other label
     /// in the group), then containers alphabetically and
-    /// **case-insensitively**: "blorb" is a format name and "ADF"/"HFS"/"DOS"
+    /// **case-insensitively**: "blorb" is a format name and "ADF"/"HFS"/"MS-DOS"
     /// are acronyms, so a raw byte compare would file every acronym ahead of
     /// "blorb" by that accident of casing rather than by anything a reader
     /// means. See [`type_container`] for what a row shows, which is the same

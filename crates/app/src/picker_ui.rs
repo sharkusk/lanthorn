@@ -153,9 +153,15 @@ const YEAR_COL_W: u16 = 6;
 /// fits where the old 6-wide column could only take `RATE ▲`.
 const RATING_COL_W: u16 = 10;
 /// Interpreter/format column ("Z5", "Z5 (blorb)", "G3.1.2"): fixed width, sits
-/// just left of the badge cluster. `Z6 (Atari DOS)` (14) is the widest —
-/// SQ-1458's Atari 8-bit floppy container name overtook `Scott (blorb)` (13).
-const INTERP_COL_W: u16 = 14;
+/// just left of the badge cluster. `Scott (Atari DOS)` (17) is the widest —
+/// the Scott base is the longest engine letters and `Atari DOS` (9) is the
+/// longest container name; the column used to be 14 and truncate that row
+/// deliberately (SQ-1475), which the user overruled (SQ-1507): the column is
+/// now sized to the true worst case rather than an accepted truncation.
+/// `interp_label_fits_the_column_for_every_base_and_container` below proves
+/// it against every engine base × every container `type_container` can
+/// answer, so a new label cannot silently overflow it again.
+const INTERP_COL_W: u16 = 17;
 const TITLE_MIN_W: u16 = 8;
 /// Title keeps this much before the author column is allowed to grow past its
 /// base width — title has priority for the shared space, so a long author name
@@ -4723,7 +4729,7 @@ mod tests {
         // …and SQ-0833/SQ-0835: the PC and the Atari ST, which share a
         // filesystem and must still be named apart, because they are different
         // machines and the column is the only place a player is told which.
-        assert_eq!(super::interp_label(&meta(Some(DiskImage::Fat12Dos)), false), "Z6 (DOS)");
+        assert_eq!(super::interp_label(&meta(Some(DiskImage::Fat12Dos)), false), "Z6 (MS-DOS)");
         assert_eq!(super::interp_label(&meta(Some(DiskImage::Fat12AtariSt)), false), "Z6 (ST)");
         // Not a disk image: exactly what it rendered before.
         assert_eq!(super::interp_label(&meta(None), false), "Z6");
@@ -4743,13 +4749,11 @@ mod tests {
     /// Apple II pair — and until this change every one of them read "Scott"
     /// with nothing to tell them apart.
     ///
-    /// **"Scott (Atari DOS)" is 17 columns and `INTERP_COL_W` is 14**, so the
-    /// column truncates it (to "Scott (Atari …"). That is deliberate and
-    /// measured: the alternative is three columns off every title on every
-    /// row, forever, to spell out one container name in full. The label is
-    /// pinned here in its untruncated form because it is the label that is
-    /// under test; the truncation is `truncate_to_width`'s business and is
-    /// tested there.
+    /// **"Scott (Atari DOS)" is 17 columns**, which is `INTERP_COL_W`'s value —
+    /// it is the widest label the column has to hold (SQ-1507). The column
+    /// used to be 14 and truncate this one deliberately; the user overruled
+    /// that, so it is now sized to fit every label rather than to elide the
+    /// longest one.
     #[test]
     fn interp_label_names_a_scott_rows_container() {
         use app::hints::DiskImage;
@@ -4766,6 +4770,91 @@ mod tests {
         // Unchanged for everything that is not on a disk.
         assert_eq!(super::interp_label(&meta(None), false), "Scott");
         assert_eq!(super::interp_label(&meta(None), true), "Scott (blorb)");
+    }
+
+    /// SQ-1507: `INTERP_COL_W` must hold the widest label [`interp_label`] can
+    /// ever produce, not just the handful pinned above. This crosses every
+    /// engine base the column can show — Z-code bare and Z1..Z8, Glulx bare
+    /// and a real Glulx version, Scott — against every container
+    /// [`app::picker::type_container`] can name: every [`DiskImage`] variant's
+    /// own `label()` (read off the table, not copied), plus the two
+    /// picture-sourced containers ("z80", "zip") and "blorb". A future
+    /// container or a Z-machine version wider than one digit that doesn't fit
+    /// fails here instead of panicking a row draw, the way SQ-1458's three new
+    /// disk images did.
+    #[test]
+    fn interp_label_fits_the_column_for_every_base_and_container() {
+        use app::hints::DiskImage;
+        use app::picker::{Engine, Features, ScottPictures, StoryMeta};
+        let base = |engine: Engine, version: Option<&str>| StoryMeta {
+            size_bytes: 0, story_bytes: 0, modified: None, engine, format: String::new(),
+            version: version.map(String::from), serial: None, release: None, ifid: String::new(),
+            features: Features::default(), self_blorb: None, scott_pictures: None, disk_image: None, disk_entry: None,
+            author: None, year: None,
+            genre: None, language: None, description: None, ifdb_link: None, ifdb_rating: None, ifdb_rating_count: None, fetch_not_found: false,
+        };
+        let check = |meta: &StoryMeta, blorb: bool| {
+            let label = super::interp_label(meta, blorb);
+            assert!(
+                label.len() <= super::INTERP_COL_W as usize,
+                "{label:?} ({} cols) overflows INTERP_COL_W ({})",
+                label.len(),
+                super::INTERP_COL_W
+            );
+        };
+
+        // Z-code: bare and every version 1..=8, each crossed with no
+        // container, a sibling blorb, and every disk image.
+        let z_versions: [Option<&str>; 9] =
+            [None, Some("1"), Some("2"), Some("3"), Some("4"), Some("5"), Some("6"), Some("7"), Some("8")];
+        for v in z_versions {
+            let mut m = base(Engine::ZCode, v);
+            check(&m, false);
+            check(&m, true);
+            for image in DiskImage::all() {
+                m.disk_image = Some(image);
+                check(&m, false);
+                check(&m, true); // a disk image wins over blorb; still must fit
+            }
+        }
+
+        // Glulx never grows a container (`type_container` always answers
+        // `None` for it), but its own bases must still fit alone.
+        for v in [None, Some("3.1.2")] {
+            let m = base(Engine::Glulx, v);
+            check(&m, false);
+            check(&m, true);
+        }
+
+        // Scott: no container, a sibling blorb, every disk image, and the two
+        // picture-sourced containers.
+        let mut m = base(Engine::Scott, None);
+        check(&m, false);
+        check(&m, true);
+        for image in DiskImage::all() {
+            m.disk_image = Some(image);
+            check(&m, false);
+        }
+        m.disk_image = None;
+        m.scott_pictures = Some(ScottPictures::NativeZx { pictures: 1 });
+        check(&m, false); // "Scott (z80)"
+        m.scott_pictures = Some(ScottPictures::SagaDosCga { pictures: 1 });
+        check(&m, false); // "Scott (zip)"
+
+        // The widest label of all, pinned by value, plus the MS-DOS rename
+        // (SQ-1507) in both engines that can show it.
+        let mut widest = base(Engine::Scott, None);
+        widest.disk_image = Some(DiskImage::AtariDos2);
+        assert_eq!(super::interp_label(&widest, false), "Scott (Atari DOS)");
+        assert_eq!(super::interp_label(&widest, false).len(), super::INTERP_COL_W as usize);
+
+        let mut pc_z = base(Engine::ZCode, Some("6"));
+        pc_z.disk_image = Some(DiskImage::Fat12Dos);
+        assert_eq!(super::interp_label(&pc_z, false), "Z6 (MS-DOS)");
+
+        let mut pc_scott = base(Engine::Scott, None);
+        pc_scott.disk_image = Some(DiskImage::Fat12Dos);
+        assert_eq!(super::interp_label(&pc_scott, false), "Scott (MS-DOS)");
     }
 
     /// End to end on real media (skips vacuously — `stories/` is gitignored):
@@ -5132,7 +5221,7 @@ mod tests {
         let badges = vec![app::picker::RowBadges::default(); 2];
         let mut list = app::list_scroll::ListScroll::new();
         list.len(stories.len());
-        let area = Rect::new(0, 0, 60, 10);
+        let area = Rect::new(0, 0, 63, 10);
 
         // Default sort (Title, ascending): only TITLE carries an arrow.
         let mut buf = Buffer::empty(area);
@@ -5172,7 +5261,7 @@ mod tests {
         let badges = vec![app::picker::RowBadges::default(); 2];
         let mut list = app::list_scroll::ListScroll::new();
         list.len(stories.len());
-        let area = Rect::new(0, 0, 60, 10);
+        let area = Rect::new(0, 0, 63, 10);
         let mut buf = Buffer::empty(area);
         super::draw_story_picker(
             &stories, &mut list, &badges, &glyphs, &super::PickerHeading::browse(std::path::Path::new("/tmp")),
@@ -5243,17 +5332,17 @@ mod tests {
         let mut list = app::list_scroll::ListScroll::new();
         list.len(1);
 
-        // (width, author shown, year shown). Right zone = INTERP_COL_W(14) +
-        // COL_GAP(2) + cluster_w(save+hint=2) = 18, reserved 19; so avail =
-        // width - 21. year needs avail >= 38 (width >= 59); author needs avail
-        // >= 30 (width >= 51). Below that: title + right-zone only.
+        // (width, author shown, year shown). Right zone = INTERP_COL_W(17) +
+        // COL_GAP(2) + cluster_w(save+hint=2) = 21, reserved 22; so avail =
+        // width - 24. year needs avail >= 38 (width >= 62); author needs avail
+        // >= 30 (width >= 54). Below that: title + right-zone only.
         for &(width, want_author, want_year) in &[
-            (71u16, true, true),
-            (59, true, true),
-            (58, true, false),
-            (51, true, false),
-            (50, false, false),
-            (31, false, false),
+            (74u16, true, true),
+            (62, true, true),
+            (61, true, false),
+            (54, true, false),
+            (53, false, false),
+            (34, false, false),
         ] {
             let area = Rect::new(0, 0, width, 10);
             let mut buf = Buffer::empty(area);
@@ -5286,7 +5375,7 @@ mod tests {
         let badges = vec![app::picker::RowBadges::default()];
         let mut list = app::list_scroll::ListScroll::new();
         list.len(1);
-        let area = Rect::new(0, 0, 60, 10);
+        let area = Rect::new(0, 0, 63, 10);
         let mut buf = Buffer::empty(area);
         super::draw_story_picker(
             &stories, &mut list, &badges, &glyphs, &super::PickerHeading::browse(std::path::Path::new("/tmp")),
@@ -5297,7 +5386,7 @@ mod tests {
         assert!(row0.contains('…'), "truncated author ends with an ellipsis: {row0:?}");
         assert!(row0.contains("1980"), "year column unaffected by the author overrun: {row0:?}");
         // TYPE column ("Z" here) stays put at its fixed right-zone offset.
-        let interp_x = 60u16 - 1 - 2 - super::COL_GAP - super::INTERP_COL_W;
+        let interp_x = 63u16 - 1 - 2 - super::COL_GAP - super::INTERP_COL_W;
         assert_eq!(
             buf.cell((interp_x, 2)).unwrap().symbol(), "Z",
             "TYPE column unaffected by the author overrun"
@@ -5339,13 +5428,13 @@ mod tests {
         let badges = vec![app::picker::RowBadges::default()];
         let mut list = app::list_scroll::ListScroll::new();
         list.len(1);
-        let area = Rect::new(0, 0, 60, 10);
+        let area = Rect::new(0, 0, 63, 10);
         let mut buf = Buffer::empty(area);
         let (_, _, header_rects) = super::draw_story_picker(
             &stories, &mut list, &badges, &glyphs, &super::PickerHeading::browse(std::path::Path::new("/tmp")),
             &cs, &km(), app::picker::Sort::default(), area, &mut buf,
         );
-        // 60 cells is too narrow for the RATING column, so four headers show.
+        // 63 cells is too narrow for the RATING column, so four headers show.
         assert_eq!(header_rects.len(), 4, "title/author/year/type at this width: {header_rects:?}");
         for (key, rect) in &header_rects {
             let expected_char = match key {

@@ -648,7 +648,7 @@ const FORMATS: &[Format] = &[
     // question, asked of the boot sector — see `crate::fat12`.
     Format {
         image: DiskImage::Fat12Dos,
-        label: "DOS",
+        label: "MS-DOS",
         // **`None`, and that is the IBM PC's answer rather than a gap.** This
         // codebase's IBM PC bundle — `app::interpreter::InterpreterProfile::IbmPc`,
         // where a DOS disk resolves — deliberately returns no number of its
@@ -981,7 +981,7 @@ const FORMATS: &[Format] = &[
     Format {
         image: DiskImage::AppleDos33,
         // The filesystem's own name, and the version is what tells it from the
-        // IBM PC row's "DOS" — they are different filesystems on different
+        // IBM PC row's "MS-DOS" — they are different filesystems on different
         // machines that happen to share three letters, and DOS 3.3 is what
         // everyone who has ever held one of these disks calls it. It sits beside
         // "ProDOS", the Apple II's other filesystem, which is the pairing a
@@ -1486,8 +1486,8 @@ impl Volume for Hfs {
         // A DOS build on the Macintosh half of a hybrid disc is a DOS build:
         // it wears the DOS row, so it answers the DOS row's interpreter number
         // (`None` — the IBM PC's rule is version-dependent) and calls itself
-        // "DOS" in a listing, instead of claiming the Macintosh the FILESYSTEM
-        // implies. See `hfs::HfsEntry::is_from_dos`.
+        // "MS-DOS" in a listing, instead of claiming the Macintosh the
+        // FILESYSTEM implies. See `hfs::HfsEntry::is_from_dos`.
         Hfs::is_from_dos(self, path)?.then_some(DiskImage::Fat12Dos)
     }
 }
@@ -2411,7 +2411,7 @@ mod tests {
                 // constant expresses it and its own rule is already in force.
                 // The Atari ST's is a flat 5, written as such by Infocom's own
                 // ST interpreters; both are argued at their rows in `FORMATS`.
-                DiskImage::Fat12Dos => ("DOS", None),
+                DiskImage::Fat12Dos => ("MS-DOS", None),
                 DiskImage::Fat12AtariSt => ("ST", Some(ATARI_ST_INTERPRETER_NUMBER)),
                 // …and the Apple II answers like the ST rather than like DOS,
                 // which is the reversal SQ-0857 argued at the row. ProDOS still
