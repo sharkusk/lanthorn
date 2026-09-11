@@ -2438,8 +2438,7 @@ pub fn compute_row_badges(
         HintBadge::Present
     } else {
         // No local hint — light the lowercase glyph if one is downloadable.
-        let stem = entry.path.file_stem().and_then(|s| s.to_str()).unwrap_or("");
-        if hints::hint_download_for(&entry.meta.ifid, stem, &entry.title).is_some() {
+        if hints::hint_download_for(&entry.meta.ifid).is_some() {
             HintBadge::Available
         } else {
             HintBadge::None
@@ -3663,13 +3662,34 @@ mod tests {
         let base = dir.join("data");
         let hi = hints::load_hint_index(&dir); // empty index
 
-        // "deadline" matches the SLAG catalog → Available (no local file).
-        let e_dl = entry_with("IFID-DL", dir.join("deadline.z3"), None);
+        // Deadline r18/s820311, an identity the SLAG catalog covers → Available
+        // (no local file).
+        let e_dl = entry_with("ZCODE-18-820311-0000", dir.join("deadline.z3"), None);
         assert_eq!(compute_row_badges(&e_dl, &base, &hi).hint, HintBadge::Available);
 
-        // A game no catalog covers stays None.
+        // An unresolved identity stays None.
         let e_none = entry_with("IFID-N", dir.join("colossal.z5"), None);
         assert_eq!(compute_row_badges(&e_none, &base, &hi).hint, HintBadge::None);
+
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// SQ-1505 regression: the badge that offers a hint download must not light
+    /// for a title or filename stem that merely *contains* a catalog word.
+    /// "The Sorcerer of Claymorgue Castle" is a Scott Adams game (a non-Infocom
+    /// IFID, so `known_titles.tsv` cannot resolve it) whose title contains
+    /// "sorcerer" — a catalog key for Infocom's unrelated *Sorcerer* — and whose
+    /// stem `adv13` is the Scott Adams catalog number. Neither may light the
+    /// download-available badge.
+    #[test]
+    fn compute_row_badges_does_not_offer_a_download_for_an_unrelated_title_match() {
+        let dir = temp_dir("badge-sorcerer");
+        let base = dir.join("data");
+        let hi = hints::load_hint_index(&dir); // empty index
+
+        let mut e = entry_with("SCOTT-1234567890ABCDEF", dir.join("adv13.saga"), None);
+        e.title = "The Sorcerer of Claymorgue Castle".into();
+        assert_eq!(compute_row_badges(&e, &base, &hi).hint, HintBadge::None);
 
         let _ = std::fs::remove_dir_all(&dir);
     }

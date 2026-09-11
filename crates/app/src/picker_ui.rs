@@ -2851,13 +2851,7 @@ pub(crate) fn run_story_picker(
                     if entry.hint_sidecar.is_some() {
                         progress_line = Some(format!("{} already has a hint file", entry.title));
                     } else {
-                        let stem =
-                            entry.path.file_stem().and_then(|s| s.to_str()).unwrap_or("");
-                        match app::hints::hint_download_for(
-                            &entry.meta.ifid,
-                            stem,
-                            &entry.title,
-                        ) {
+                        match app::hints::hint_download_for(&entry.meta.ifid) {
                             Some(dl) => {
                                 let dest = entry.path.with_file_name(&dl.filename);
                                 progress_line =
@@ -3715,14 +3709,8 @@ fn draw_info_panel(
     // when a matching InvisiClues can be downloaded with `H` (SQ-0445).
     if let Some(name) = hint_sidecar.and_then(|p| p.file_name()).and_then(|s| s.to_str()) {
         lines.push((format!("Hints: {name}"), story_info_value));
-    } else {
-        let stem = std::path::Path::new(filename)
-            .file_stem()
-            .and_then(|s| s.to_str())
-            .unwrap_or("");
-        if app::hints::hint_download_for(&meta.ifid, stem, title).is_some() {
-            lines.push(("Hints: available to download (press H)".to_string(), story_info_value));
-        }
+    } else if app::hints::hint_download_for(&meta.ifid).is_some() {
+        lines.push(("Hints: available to download (press H)".to_string(), story_info_value));
     }
     // author · year · genre (SQ-0348): one line, present parts only — a story
     // with none of the three renders no line at all, so a no-metadata panel
