@@ -19,6 +19,10 @@ Absolute URLs or no link.
 
 ---
 
+## Unreleased
+
+---
+
 ## v0.6.1 — 2026-09-11
 
 ### Changed
