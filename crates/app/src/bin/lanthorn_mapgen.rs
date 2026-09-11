@@ -39,7 +39,9 @@ their own layer — the same split the interpreter offers a player as a prompt, 
 every prompt were accepted. The layer holding the room the story STARTS in is the main one, \
 which is why mapgen boots the story for a moment before reading it; --no-boot skips that and \
 keeps the largest region instead. --no-auto-layers turns layers off for one flat map; \
---layer-min sets how big a portal-only region has to be first (mazes have no floor).\n\n\
+--layer-min sets how big a portal-only region has to be first (mazes have no floor at any \
+setting of 1 or more) — --layer-min 0 is the exception, and turns layers off entirely, mazes \
+included, the same flat map --no-auto-layers produces.\n\n\
 LIMITS. This is the map as compiled, so a passage a story builds or removes while it runs is \
 not in it, and neither is one whose destination a routine decides. Conditional exits and doors \
 ARE included, and are marked as such. Some stories declare no map anywhere in the file; \
@@ -101,7 +103,9 @@ struct Cli {
     /// The smallest portal-only region worth its own layer. Defaults to the
     /// same floor the live app's layer suggestions use
     /// (`mapper::suggest::STRUCTURAL_FLOOR`) so a static map and a played one
-    /// agree; a maze region has no floor and always gets its own layer.
+    /// agree; a maze region has no floor and always gets its own layer. 0 is
+    /// the exception: it turns layers off entirely, mazes included — the same
+    /// flat map `--no-auto-layers` produces.
     #[arg(long, value_name = "N")]
     layer_min: Option<usize>,
 }

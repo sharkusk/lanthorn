@@ -1507,9 +1507,11 @@ passes, in order:
 `mapper::suggest::STRUCTURAL_FLOOR` (4) — **the same constant the live
 suggestion engine floors a structural region at**, so a static map and a
 played one agree about how big a region has to be before it earns a layer of
-its own. A maze has no floor: any size gets its own layer once its name says
-so. `--no-auto-layers` skips all three passes, reproducing the flat,
-single-layer map mapgen wrote before SQ-1308.
+its own. A maze has no floor at any `N` of 1 or more: any size gets its own
+layer once its name says so. `--no-auto-layers` skips all three passes,
+reproducing the flat, single-layer map mapgen wrote before SQ-1308 — and
+`--layer-min 0` does the same thing, mazes included: 0 means "never split at
+all", not "no floor for anything" (SQ-1508).
 
 Zork I r52/s871125 splits into six layers at the default floor: `Main` (21
 rooms — the surface world, because West of House is where the game starts,

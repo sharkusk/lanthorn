@@ -328,7 +328,9 @@ pub struct MapgenOptions {
     pub auto_layers: bool,
     /// The smallest portal-only region worth its own layer — [`STRUCTURAL_FLOOR`]
     /// by default. A maze region has no floor: any size gets its own layer once
-    /// its name says so.
+    /// its name says so — for any `layer_min` of 1 or more. `0` is the one
+    /// exception: it means "never split at all", the same flat map
+    /// `auto_layers = false` produces, mazes included (SQ-1508).
     ///
     /// [`STRUCTURAL_FLOOR`]: mapper::suggest::STRUCTURAL_FLOOR
     pub layer_min: usize,
@@ -613,12 +615,14 @@ fn absorb_maze_adjacent_rooms(graph: &mut MapGraph) {
 ///    Cellar and its neighbours "Main".
 ///
 /// `opts.auto_layers = false` skips both passes and returns an empty list —
-/// the pre-SQ-1308 flat map.
+/// the pre-SQ-1308 flat map. `opts.layer_min == 0` does the same, mazes
+/// included: 0 means "never split at all", not "a maze has no floor,
+/// everything else has none either" (SQ-1508).
 pub fn split_layers(graph: &mut MapGraph, opts: &MapgenOptions) -> Vec<LayerSplit> {
     use mapper::layer::{move_region, planar_region, MoveTarget, Region, MAIN_LAYER};
 
     let mut splits = Vec::new();
-    if !opts.auto_layers {
+    if !opts.auto_layers || opts.layer_min == 0 {
         return splits;
     }
 

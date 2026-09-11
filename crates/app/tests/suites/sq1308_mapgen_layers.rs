@@ -250,6 +250,47 @@ fn a_maze_named_region_splits_and_is_flagged_regardless_of_floor() {
     assert!(g.layer_is_maze(splits[0].id));
 }
 
+/// SQ-1508: `layer_min: 0` means "never split at all" — the same flat map
+/// `auto_layers: false` produces — and that includes mazes, which otherwise
+/// have no floor at any `N` of 1 or more. The maze graph above still has a
+/// maze at `layer_min: 100`; here it must NOT split at `layer_min: 0`.
+#[test]
+fn layer_min_zero_leaves_a_maze_unsplit_too() {
+    let mut g = MapGraph::new();
+    g.upsert_room(1, "Troll Room".into());
+    g.upsert_room(5, "Round Room".into());
+    for id in 2..=4u32 {
+        g.upsert_room(id, "Maze".into());
+    }
+    g.add_edge(1, Direction::W, 2);
+    g.add_edge(2, Direction::E, 1);
+    g.add_edge(2, Direction::N, 3);
+    g.add_edge(3, Direction::S, 2);
+    g.add_edge(3, Direction::E, 4);
+    g.add_edge(4, Direction::W, 3);
+    g.add_edge(1, Direction::E, 5);
+    g.add_edge(5, Direction::W, 1);
+
+    let opts = MapgenOptions { layer_min: 0, ..MapgenOptions::default() };
+    let splits = mapgen::split_layers(&mut g, &opts);
+    assert_eq!(splits, vec![], "layer_min: 0 must skip the maze pass too");
+    assert_eq!(g.layers().len(), 1, "everything on one layer");
+    assert!(g.rooms().all(|r| r.layer == MAIN_LAYER), "every room stays on Main");
+}
+
+/// SQ-1508: a portal-only region that would split at the default floor
+/// (4, well above the floor of 1 this test also checks) stays put at
+/// `layer_min: 0` — the same "no split at all" rule as the maze case above.
+#[test]
+fn layer_min_zero_leaves_a_portal_only_region_unsplit_too() {
+    let mut g = synthetic_portal_region();
+    let opts = MapgenOptions { layer_min: 0, ..MapgenOptions::default() };
+    let splits = mapgen::split_layers(&mut g, &opts);
+    assert_eq!(splits, vec![], "layer_min: 0 must skip the portal-only pass too");
+    assert_eq!(g.layers().len(), 1, "everything on one layer");
+    assert_eq!(g.rooms_in_layer(MAIN_LAYER).len(), 15, "all 15 rooms stay on Main");
+}
+
 /// SQ-1311: a "Dead End" hanging off a maze by a single reciprocal compass
 /// pair joins the maze layer even though its own name never mentions "maze" —
 /// `maze_region`'s walk stops at the name (the Cyclops Room protection), so
