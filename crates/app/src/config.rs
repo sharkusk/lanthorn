@@ -615,6 +615,36 @@ pub enum ColourSource {
     Machine,
 }
 
+impl ColourSource {
+    /// The per-game sidecar's own spelling (SQ-1532), read by [`Self::from_key`].
+    /// Deliberately hand-written rather than read off the `clap::ValueEnum`
+    /// derive's `PossibleValue` — that borrows from a temporary, so it cannot
+    /// hand back a `&'static str` the way every other per-game key's `.key()`
+    /// does ([`crate::graphics::ScottPictureResolution::key`] is the pattern) —
+    /// but it MUST agree with the derive's `rename_all = "lowercase"` spelling,
+    /// which is what `--colour`/`--color` parses; the round-trip test below
+    /// checks the two against each other so they cannot drift apart.
+    pub fn key(self) -> &'static str {
+        match self {
+            ColourSource::Terminal => "terminal",
+            ColourSource::Theme => "theme",
+            ColourSource::Machine => "machine",
+        }
+    }
+
+    /// Parse the sidecar's spelling. An unrecognised token is `None` — the same
+    /// "a corrupt sidecar inherits the default" rule every other per-game key
+    /// follows (`styles::PerGameConfig::read`).
+    pub fn from_key(s: &str) -> Option<ColourSource> {
+        match s {
+            "terminal" => Some(ColourSource::Terminal),
+            "theme" => Some(ColourSource::Theme),
+            "machine" => Some(ColourSource::Machine),
+            _ => None,
+        }
+    }
+}
+
 /// Terminal image protocol for cover art. `Auto` detects the best available
 /// (falling back to half-blocks); the rest force a specific mode for testing.
 #[derive(Copy, Clone, Debug, PartialEq, Eq, clap::ValueEnum)]
@@ -1288,6 +1318,14 @@ pub mod keys {
     pub const V6_RENDER: &str = "v6_render";
     pub const SYSTEM_FONT_DISK: &str = "system_font_disk";
     pub const SYSTEM_COLOURS: &str = "system_colours";
+    /// Not a `config.toml` key at all — `colour_source` is `#[serde(skip)]` and
+    /// has no global-config write path to guard. Pinned only so
+    /// `Config::one_run` can answer "was `--colour` passed on THIS launch",
+    /// which is what the launch-options dialog's colour-source row (SQ-1532)
+    /// reads to decide whether it is CLI-locked. Pinned for every arm of
+    /// `--colour`, not only `machine` — `SYSTEM_COLOURS` above stays the
+    /// narrower, `machine`-only signal it already was.
+    pub const COLOUR_SOURCE: &str = "colour_source";
 }
 
 /// A value a one-run source pinned, in the shape the TOML key holds it.
@@ -2501,6 +2539,10 @@ pub fn resolve(cli: &Cli) -> Config {
     // wrote `system_colours = true` into the user's file for good.
     if let Some(src) = cli.colour {
         cfg.colour_source = src;
+        // Pinned for every arm (SQ-1532), not only `Machine`: this is the
+        // launch-options dialog's one signal for "was `--colour` passed on this
+        // launch at all", independent of which source it named.
+        cfg.one_run.pin(keys::COLOUR_SOURCE, src.key());
         if src == ColourSource::Machine {
             cfg.system_colours = true;
             cfg.one_run.pin(keys::SYSTEM_COLOURS, true);
@@ -5329,6 +5371,46 @@ use_defaults = false
             let cfg = resolve(&flagged(Some(src)));
             assert_eq!(cfg.colour_source, src);
             assert!(!cfg.system_colours, "{src:?} asks for a source, not for a machine");
+        }
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// `ColourSource::key()` is hand-written (it needs a `&'static str`, which
+    /// `clap::ValueEnum`'s `PossibleValue` cannot hand back), so this checks it
+    /// against the derive's own `rename_all = "lowercase"` spelling directly —
+    /// the same spelling `--colour`/`--color` parses — and round-trips through
+    /// `from_key`.
+    #[test]
+    fn colour_source_key_matches_the_clap_spelling_and_round_trips() {
+        use clap::ValueEnum;
+        for src in [ColourSource::Terminal, ColourSource::Theme, ColourSource::Machine] {
+            let clap_name = src.to_possible_value().unwrap().get_name().to_string();
+            assert_eq!(src.key(), clap_name, "{src:?} key must match the clap spelling");
+            assert_eq!(ColourSource::from_key(src.key()), Some(src));
+        }
+        assert_eq!(ColourSource::from_key("bogus"), None);
+    }
+
+    /// SQ-1532: pinned for every arm now, not only `Machine` — the launch-options
+    /// dialog's colour-source row needs to tell "`--colour` was passed on this
+    /// launch" apart from "nothing was said and `Machine` is simply the default",
+    /// and only a pin unconditional on the arm can say that.
+    #[test]
+    fn colour_source_pins_for_every_arm_not_only_machine() {
+        let dir = std::env::temp_dir().join(format!("bm-coloursourcepin-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        let cfg_path = dir.join("config.toml");
+        std::fs::write(&cfg_path, "# mine\n").unwrap();
+        let flagged =
+            |v: Option<ColourSource>| Cli { colour: v, ..cli_with_config(&cfg_path, None) };
+
+        let plain = resolve(&flagged(None));
+        assert!(!plain.one_run.holds(keys::COLOUR_SOURCE), "nothing was typed, nothing is pinned");
+
+        for src in [ColourSource::Terminal, ColourSource::Theme, ColourSource::Machine] {
+            let cfg = resolve(&flagged(Some(src)));
+            assert!(cfg.one_run.holds(keys::COLOUR_SOURCE), "{src:?} must pin the launch-only key");
         }
         let _ = std::fs::remove_dir_all(&dir);
     }

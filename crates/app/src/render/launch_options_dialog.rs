@@ -158,8 +158,9 @@ pub fn draw_launch_options(
     // The list is short now that it is filtered to this story's own archives —
     // five at the very most in the real library — but a folder can hold anything,
     // so it still scrolls; nothing else does.
-    // blank, interpreter, provenance, [picture resolution], checkbox, escape hatch
-    let tail: u16 = 5 + u16::from(st.scott_native_pictures);
+    // blank, interpreter, provenance, [picture resolution], colour source,
+    // game colours, checkbox, escape hatch (SQ-1532 added the two colour rows)
+    let tail: u16 = 7 + u16::from(st.scott_native_pictures);
     // The "N more above/below" markers cost rows too, and only exist when the
     // list actually scrolls — so budget for them only then, in two passes.
     let fixed = 1 + tail + caveat_lines; // + the "Artwork" heading
@@ -279,7 +280,26 @@ pub fn draw_launch_options(
         option_row(buf, st.candidates.len() + 2, &label, &mut rows, &mut y);
     }
 
-    let persist_idx = st.candidates.len() + 2 + usize::from(st.scott_native_pictures);
+    // Colour source and game colours (SQ-1532): always present, unlike the
+    // picture-resolution row above — locking shows the row FIXED/READ-ONLY
+    // rather than hiding it, per the confirmed design, so a CLI-set value is
+    // still visible and its provenance is said on screen.
+    let colour_source_idx = st.candidates.len() + 2 + usize::from(st.scott_native_pictures);
+    let cs_note = if st.colour_source_cli_locked { "   (fixed by --colour)" } else { "" };
+    let cs_label = format!(
+        "  Colour source   {}{}",
+        crate::launch_options::colour_source_label(st.colour_source),
+        cs_note,
+    );
+    option_row(buf, colour_source_idx, &cs_label, &mut rows, &mut y);
+
+    let game_colours_idx = colour_source_idx + 1;
+    let gc_note = if st.honor_game_colours_cli_locked { "   (fixed by --game-colours)" } else { "" };
+    let gc_label =
+        format!("  {} Game colours (honor the story's own){}", checkbox(st.honor_game_colours), gc_note);
+    option_row(buf, game_colours_idx, &gc_label, &mut rows, &mut y);
+
+    let persist_idx = game_colours_idx + 1;
     let persist = format!("  {} Save as this game's default", checkbox(st.persist));
     option_row(buf, persist_idx, &persist, &mut rows, &mut y);
     // The escape hatch, said on screen rather than left to the docs. The list
@@ -372,6 +392,46 @@ mod tests {
         let (text, _) = render(&st, 90, 24);
         assert!(text.contains("Interpreter   4 Amiga"), "{text:?}");
         assert!(text.contains("set here"), "provenance says explicit: {text:?}");
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// SQ-1532: the colour-source and game-colours rows always draw, and an
+    /// unlocked row carries no lock note.
+    #[test]
+    fn the_colour_rows_draw_with_no_lock_note_when_unlocked() {
+        let dir = tmp("colours-unlocked");
+        let story = dir.join("story.z6");
+        std::fs::write(&story, b"x").unwrap();
+        let st = LaunchOptionsState::new("Story", &story, None, None, Some(6), None)
+            .with_colours(Some(crate::config::ColourSource::Theme), false, true, false);
+        let (text, rects) = render(&st, 90, 24);
+        assert!(text.contains("Colour source   Theme"), "{text:?}");
+        assert!(text.contains("Game colours"), "{text:?}");
+        assert!(!text.contains("fixed by --colour"), "unlocked row carries no provenance note: {text:?}");
+        assert!(!text.contains("fixed by --game-colours"), "{text:?}");
+        let r = rects.expect("dialog renders at 90x24");
+        assert_eq!(r.rows.len(), st.row_count(), "one hit-rect per selectable row");
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// SQ-1532: a CLI-locked row is shown FIXED, not hidden — it still draws
+    /// (and is still a hit-rect, so the cursor can land on it, even though it
+    /// cannot be changed), and a visible provenance note says where the value
+    /// came from, per the confirmed design.
+    #[test]
+    fn a_cli_locked_row_still_draws_with_a_provenance_note() {
+        let dir = tmp("colours-locked");
+        let story = dir.join("story.z6");
+        std::fs::write(&story, b"x").unwrap();
+        let st = LaunchOptionsState::new("Story", &story, None, None, Some(6), None)
+            .with_colours(Some(crate::config::ColourSource::Machine), true, false, true);
+        let (text, rects) = render(&st, 90, 24);
+        assert!(text.contains("Colour source   Machine"), "the value still shows: {text:?}");
+        assert!(text.contains("fixed by --colour"), "provenance note: {text:?}");
+        assert!(text.contains("fixed by --game-colours"), "provenance note: {text:?}");
+        assert!(text.contains("[ ] Game colours"), "the checkbox still reflects its CLI-set value: {text:?}");
+        let r = rects.expect("dialog renders at 90x24");
+        assert_eq!(r.rows.len(), st.row_count(), "a locked row is still a row, not hidden");
         let _ = std::fs::remove_dir_all(&dir);
     }
 

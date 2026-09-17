@@ -80,6 +80,12 @@ pub struct PerGameConfig {
     /// `None` = no override, so the default (hi-res) decides. Meaningless for
     /// every other Scott story — a Blorb's pictures have no second resolution.
     pub scott_picture_resolution: Option<crate::graphics::ScottPictureResolution>,
+    /// Which of the three default-colour sources this story draws its page and
+    /// ink from — `--colour terminal|theme|machine` (SQ-1082), persisted per-game
+    /// from the launch-options dialog (SQ-1532). `None` = no override, so the
+    /// global `colour_source` decides; that is also what "Default" means in the
+    /// dialog's own row, which is why there is no fourth enum variant for it.
+    pub colour_source: Option<crate::config::ColourSource>,
 }
 
 impl PerGameConfig {
@@ -110,6 +116,7 @@ impl PerGameConfig {
         "scott_trs80_style",
         "scott_prehistoric_lamp",
         "scott_picture_resolution",
+        "colour_source",
     ];
 
     /// Read the sidecar. Every key absent when the file is missing or unparseable
@@ -147,6 +154,7 @@ impl PerGameConfig {
             scott_picture_resolution: s("scott_picture_resolution")
                 .as_deref()
                 .and_then(crate::graphics::ScottPictureResolution::from_key),
+            colour_source: s("colour_source").as_deref().and_then(crate::config::ColourSource::from_key),
         }
     }
 
@@ -188,6 +196,9 @@ impl PerGameConfig {
                 "scott_picture_resolution = {}\n",
                 toml::Value::String(v.key().to_string())
             ));
+        }
+        if let Some(v) = self.colour_source {
+            body.push_str(&format!("colour_source = {}\n", toml::Value::String(v.key().to_string())));
         }
         if body.is_empty() {
             return match std::fs::remove_file(&path) {
@@ -329,6 +340,13 @@ pub fn read_per_game_scott_picture_resolution(
     PerGameConfig::read(game_dir).scott_picture_resolution
 }
 
+/// Read the per-game `colour_source` override (SQ-1532). `None` = no override,
+/// so the global `colour_source` decides — which is also what "Default" means
+/// in the launch-options dialog's own row.
+pub fn read_per_game_colour_source(game_dir: &Path) -> Option<crate::config::ColourSource> {
+    PerGameConfig::read(game_dir).colour_source
+}
+
 /// Read the per-game `return_probe` override (SQ-0785). `None` = no override, so
 /// the global `return_probe` decides.
 ///
@@ -386,6 +404,33 @@ pub fn write_per_game_honor(game_dir: &Path, value: Option<bool>) -> std::io::Re
     edit(game_dir, |c| c.honor_game_colours = value)
 }
 
+/// [`write_per_game_honor`], guarded for the launch-options dialog's "Save as
+/// this game's default" checkbox (SQ-1532).
+///
+/// **The persistence-layer backstop.** CLI arguments are a one-time run
+/// override and must never be persisted, under any circumstance — the dialog's
+/// UI layer already keeps a CLI-locked row's live value pinned to its baseline,
+/// so `overrides()`/the checkbox never *asks* to write a CLI-sourced value, but
+/// this is the guard that holds even if something calls it anyway: `cli_locked`
+/// true refuses the write outright, whatever `value` is, and every other
+/// sibling key in the sidecar is left exactly as it was (a no-op `edit`, not a
+/// call that never happened, would still be safe here — but refusing before
+/// touching the file at all is the more honest shape of "refused").
+///
+/// Every other caller of `write_per_game_honor` (`/set-game-colours`, the
+/// reload path) is unaffected — this is a second, narrower entry point for one
+/// call site, not a change to the general one.
+pub fn write_per_game_honor_for_launch(
+    game_dir: &Path,
+    value: Option<bool>,
+    cli_locked: bool,
+) -> std::io::Result<()> {
+    if cli_locked {
+        return Ok(());
+    }
+    write_per_game_honor(game_dir, value)
+}
+
 /// Persist (or clear) the per-game `borderless_windows` override, preserving
 /// every sibling key (SQ-0341).
 pub fn write_per_game_borderless(game_dir: &Path, value: Option<bool>) -> std::io::Result<()> {
@@ -413,6 +458,33 @@ pub fn write_per_game_pictures(game_dir: &Path, value: Option<String>) -> std::i
 /// launch's own precedence.
 pub fn write_per_game_interpreter_number(game_dir: &Path, value: Option<u8>) -> std::io::Result<()> {
     edit(game_dir, |c| c.interpreter_number = value)
+}
+
+/// Persist (or clear) the per-game `colour_source` override — the
+/// launch-options dialog's "Save as this game's default" checkbox (SQ-1532),
+/// preserving every sibling key.
+///
+/// **Double-`Option`, and a CLI guard, deliberately.** The outer `Option`
+/// mirrors every other launch-options setter's convention (the caller decides
+/// whether this key is even touched — `None` is a no-op, exactly as never
+/// calling [`write_per_game_pictures`] leaves `pictures` alone); the inner
+/// `Option<ColourSource>` is the value itself, where `None` explicitly clears
+/// the override back to "Default" (inherit the global `colour_source`) rather
+/// than leaving whatever was there. `cli_locked` is the persistence-layer
+/// backstop (see [`write_per_game_honor_for_launch`]'s doc, which explains why
+/// it exists independently of the UI lock): CLI arguments are a one-time run
+/// override and must never be persisted, so a `true` here refuses the write
+/// outright, whatever `value` is.
+pub fn write_per_game_colour_source(
+    game_dir: &Path,
+    value: Option<Option<crate::config::ColourSource>>,
+    cli_locked: bool,
+) -> std::io::Result<()> {
+    if cli_locked {
+        return Ok(());
+    }
+    let Some(v) = value else { return Ok(()) };
+    edit(game_dir, |c| c.colour_source = v)
 }
 
 /// Persist (or clear) the per-game `v6_pixel_lock` override (SQ-0945),
@@ -525,6 +597,7 @@ mod tests {
             scott_trs80_style: Some(true),
             scott_prehistoric_lamp: Some(true),
             scott_picture_resolution: Some(crate::graphics::ScottPictureResolution::Original),
+            colour_source: Some(crate::config::ColourSource::Terminal),
         };
         every.write(&dir).unwrap();
         let text = std::fs::read_to_string(per_game_config_path(&dir)).unwrap();
@@ -773,6 +846,106 @@ mod tests {
         write_per_game_scott_prehistoric_lamp(&dir, None).unwrap();
         write_per_game_guidance(&dir, None).unwrap();
         assert!(!per_game_config_path(&dir).exists());
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// SQ-1532: `colour_source` round-trips, clears back to ABSENT ("Default" —
+    /// inherit the global `colour_source`, not "written at the default"), and
+    /// survives a sibling's whole-file rewrite, as every key here must.
+    #[test]
+    fn per_game_colour_source_roundtrips_and_coexists_with_others() {
+        let dir = tmp("coloursource");
+        assert_eq!(read_per_game_colour_source(&dir), None);
+
+        write_per_game_colour_source(&dir, Some(Some(crate::config::ColourSource::Terminal)), false)
+            .unwrap();
+        assert_eq!(read_per_game_colour_source(&dir), Some(crate::config::ColourSource::Terminal));
+        let body = std::fs::read_to_string(per_game_config_path(&dir)).unwrap();
+        assert!(body.contains("colour_source = \"terminal\""), "got {body:?}");
+
+        // A sibling write preserves it, and it preserves the sibling.
+        write_per_game_honor(&dir, Some(true)).unwrap();
+        assert_eq!(
+            read_per_game_colour_source(&dir),
+            Some(crate::config::ColourSource::Terminal),
+            "honor write kept colour_source"
+        );
+        assert_eq!(read_per_game_honor(&dir), Some(true));
+
+        // The outer `None` is a no-op: it must not touch — let alone clear —
+        // the key, unlike every OTHER write_per_game_* function's single Option.
+        write_per_game_colour_source(&dir, None, false).unwrap();
+        assert_eq!(
+            read_per_game_colour_source(&dir),
+            Some(crate::config::ColourSource::Terminal),
+            "an outer None must be a no-op, not a clear"
+        );
+
+        // The inner `None` explicitly clears back to "Default".
+        write_per_game_colour_source(&dir, Some(None), false).unwrap();
+        assert_eq!(read_per_game_colour_source(&dir), None);
+        assert_eq!(read_per_game_honor(&dir), Some(true), "clearing it kept the sibling");
+        write_per_game_honor(&dir, None).unwrap();
+        assert!(!per_game_config_path(&dir).exists());
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// SQ-1532: the persistence-layer backstop, independent of any dialog-level
+    /// test — CLI arguments are a one-time run override and must never be
+    /// persisted, under any circumstance, so calling the write path DIRECTLY
+    /// with a CLI-sourced value must refuse it, whatever the caller asks for.
+    #[test]
+    fn write_per_game_colour_source_refuses_a_cli_sourced_value() {
+        let dir = tmp("coloursource-cli-guard");
+        assert_eq!(read_per_game_colour_source(&dir), None);
+
+        // `cli_locked = true`: refused outright, sidecar never created.
+        write_per_game_colour_source(&dir, Some(Some(crate::config::ColourSource::Machine)), true)
+            .unwrap();
+        assert_eq!(read_per_game_colour_source(&dir), None, "a CLI-sourced value must not land");
+        assert!(!per_game_config_path(&dir).exists(), "refusing must not even create the file");
+
+        // Falsify: the same call with the guard OFF does write it, so the test
+        // above is proof the guard did something rather than the value being
+        // unwritable for some other reason.
+        write_per_game_colour_source(&dir, Some(Some(crate::config::ColourSource::Machine)), false)
+            .unwrap();
+        assert_eq!(read_per_game_colour_source(&dir), Some(crate::config::ColourSource::Machine));
+
+        // And the guard refuses a CHANGE too, not only a fresh write: an already
+        // -persisted value must not be overwritten by a CLI-sourced one either.
+        write_per_game_colour_source(&dir, Some(Some(crate::config::ColourSource::Terminal)), true)
+            .unwrap();
+        assert_eq!(
+            read_per_game_colour_source(&dir),
+            Some(crate::config::ColourSource::Machine),
+            "a locked call must not overwrite what was already there"
+        );
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// SQ-1532: the same backstop on `write_per_game_honor_for_launch`, the
+    /// launch-options dialog's own guarded entry point into `honor_game_colours`
+    /// — independent of `write_per_game_honor` itself, which every OTHER caller
+    /// (`/set-game-colours`, reload) still reaches unguarded, and rightly so:
+    /// only a launch-options commit needs to ask whether `--game-colours` decided
+    /// this row for the current run.
+    #[test]
+    fn write_per_game_honor_for_launch_refuses_a_cli_sourced_value() {
+        let dir = tmp("honor-cli-guard");
+        assert_eq!(read_per_game_honor(&dir), None);
+
+        write_per_game_honor_for_launch(&dir, Some(false), true).unwrap();
+        assert_eq!(read_per_game_honor(&dir), None, "a CLI-sourced value must not land");
+        assert!(!per_game_config_path(&dir).exists());
+
+        // Falsify: the guard OFF does write it.
+        write_per_game_honor_for_launch(&dir, Some(false), false).unwrap();
+        assert_eq!(read_per_game_honor(&dir), Some(false));
+
+        // And a locked call must not overwrite an already-persisted value either.
+        write_per_game_honor_for_launch(&dir, Some(true), true).unwrap();
+        assert_eq!(read_per_game_honor(&dir), Some(false), "locked call must not overwrite");
         let _ = std::fs::remove_dir_all(&dir);
     }
 }

@@ -19,6 +19,27 @@ Absolute URLs or no link.
 
 ---
 
+## Unreleased
+
+*This section is drained when a version is cut. README.md describes the
+RELEASED build; prose for a feature that is in `main` but not yet released
+goes into the README in place, at its normal destination, marked with the
+visible tag `*Next release:*`. `release.yml` refuses to cut a release
+while any such tag, or this Unreleased section, still exists.*
+
+### Added
+
+- **The launch-options dialog (Shift-Enter, or double right-click, on a story
+  in the picker) now has two more rows: a colour-source picker (Default,
+  Terminal, Theme, Machine) and a "game colours" checkbox for whether to
+  honor the story's own requested colours.** Both save per game, the same
+  way the picture archive and interpreter number already do. When you
+  launched with `--colour` or `--game-colours`, the matching row is shown
+  fixed, with a note saying so, instead of letting the dialog quietly
+  disagree with what you just typed.
+
+---
+
 ## v0.7.1 — 2026-09-17
 
 ### Changed

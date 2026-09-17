@@ -170,7 +170,7 @@ A few things worth doing in your first ten minutes. Everything else can wait.
 | **Enter** on a folder | A library sorted into folders is listed folder by folder; Enter opens one and **Backspace** returns up. |
 | **Tab** | Shows the info panel for the highlighted story. |
 | **Space** or right-click | Everything you can do to *this* story, in one little menu beside it — open it, launch options, fetch its metadata, get its hints, point it at an IFDB page. |
-| **o** | Launch options for this story — which artwork it draws and which machine it plays as (also in the **Space** menu). |
+| **o** | Launch options for this story — which artwork it draws, which machine it plays as, and where its colours come from (also in the **Space** menu). |
 | **?** | Every key the picker knows, on one screen. |
 
 **In the story**

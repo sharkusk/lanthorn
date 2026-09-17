@@ -1106,6 +1106,28 @@ fn open_launch_options(
         .scott_picture_resolution_override
         .or_else(|| app::styles::read_per_game_scott_picture_resolution(&game_dir))
         .unwrap_or_default();
+    // SQ-1532: the colour-source and game-colours rows. `cfg` here is the
+    // pristine launch config (`ctx.cfg` in `main.rs`), never mutated by a
+    // per-story boot — so `cfg.one_run.holds(...)` can only be true when the
+    // matching flag was actually typed on THIS process's command line, which
+    // is exactly the CLI-lock signal these two rows need. When locked, the row
+    // shows the CLI's own value (there is nothing else it could honestly show);
+    // when not, `colour_source` reads the sidecar verbatim (`None` = "Default",
+    // matching the dialog's own "no per-game override" meaning) and
+    // `honor_game_colours` reads the sidecar override or else the inherited
+    // global default.
+    let colour_source_cli_locked = cfg.one_run.holds(app::config::keys::COLOUR_SOURCE);
+    let inherited_colour_source = if colour_source_cli_locked {
+        Some(cfg.colour_source)
+    } else {
+        app::styles::read_per_game_colour_source(&game_dir)
+    };
+    let honor_game_colours_cli_locked = cfg.one_run.holds(app::config::keys::HONOR_GAME_COLOURS);
+    let inherited_honor_game_colours = if honor_game_colours_cli_locked {
+        cfg.honor_game_colours
+    } else {
+        app::styles::read_per_game_honor(&game_dir).unwrap_or(cfg.honor_game_colours)
+    };
     app::launch_options::LaunchOptionsState::new(
         &entry.title,
         &entry.path,
@@ -1116,6 +1138,12 @@ fn open_launch_options(
     )
     .on_disk_entry(entry.meta.disk_entry.as_deref())
     .with_scott_resolution(scott_native_pictures, inherited_resolution)
+    .with_colours(
+        inherited_colour_source,
+        colour_source_cli_locked,
+        inherited_honor_game_colours,
+        honor_game_colours_cli_locked,
+    )
 }
 
 /// Where one wheel notch over the picker goes.

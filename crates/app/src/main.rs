@@ -2069,6 +2069,12 @@ fn cli_overrides(ctx: &startup::LaunchCtx) -> app::launch_options::LaunchOverrid
         // No CLI flag for this (SQ-1473 added no `--scott-picture-resolution`);
         // a command-line launch inherits the sidecar/default exactly as before.
         scott_picture_resolution: None,
+        // No launch-options dialog on this path (a bare file or `--story` pick
+        // never shows it), so there is no session-only choice to carry — the
+        // per-game sidecar and `--colour`/`--game-colours` decide exactly as
+        // they did before SQ-1532.
+        colour_source: None,
+        honor_game_colours: None,
     }
 }
 

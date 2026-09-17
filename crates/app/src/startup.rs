@@ -1213,14 +1213,40 @@ pub(crate) fn boot_story(
     // user's explicit choice in force. The IFID is computed here (from the raw
     // bytes) and reused for the map dir / identity below.
     let ifid = compute_ifid(&story_bytes);
-    if let Some(v) =
-        app::styles::read_per_game_honor(&game_dir).filter(|_| cli.game_colours.is_none())
+    // SQ-1532: this launch's own choice (the dialog, un-persisted) outranks the
+    // sidecar, same as every other launch-options field (`pictures_override`
+    // etc. above) — `overrides.honor_game_colours` is `None` whenever the row
+    // was untouched OR CLI-locked, so folding it into the SAME `.filter` as the
+    // sidecar read below is safe: the two can never disagree about whether
+    // `--game-colours` decided this run.
+    if let Some(v) = overrides
+        .honor_game_colours
+        .or_else(|| app::styles::read_per_game_honor(&game_dir))
+        .filter(|_| cli.game_colours.is_none())
     {
         // The sidecar's key is this game's, not the global default's — pinned for
         // the same reason the garglk overlay above is (SQ-0807). `--game-colours`
         // outranks it, as above.
         cfg.honor_game_colours = v;
         cfg.one_run.pin(app::config::keys::HONOR_GAME_COLOURS, v);
+    }
+    // SQ-1532: same precedence, for which of the three default-colour sources
+    // this launch draws its page/ink from — this launch's own dialog choice,
+    // else this game's sidecar, else the global default; `--colour` on this
+    // launch outranks both (it already set `cfg.colour_source` in `resolve`,
+    // so leaving it untouched here IS "CLI wins"). `system_colours` is set
+    // alongside `Machine` exactly as `config::resolve`'s own `--colour machine`
+    // arm does: picking Machine here is the SQ-0928 opt-in, for this one game.
+    if let Some(v) = overrides
+        .colour_source
+        .or_else(|| app::styles::read_per_game_colour_source(&game_dir))
+        .filter(|_| cli.colour.is_none())
+    {
+        cfg.colour_source = v;
+        if v == app::config::ColourSource::Machine {
+            cfg.system_colours = true;
+            cfg.one_run.pin(app::config::keys::SYSTEM_COLOURS, true);
+        }
     }
     // SQ-0341: per-game borderless-windows override (default off → honor the Glk
     // border hint). Applies to Glulx layout from the first relayout at boot.

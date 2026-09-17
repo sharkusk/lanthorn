@@ -1067,3 +1067,53 @@ fn a_narrow_dialog_keeps_the_name_and_the_rendition_of_every_row() {
         }
     }
 }
+
+/// SQ-1532: `startup.rs::boot_story`'s precedence for the per-game
+/// `colour_source` sidecar key — this launch's own dialog choice, else the
+/// sidecar, else the global default; `--colour` on this launch outranks both.
+/// The exact expression is `overrides.colour_source.or_else(|| read_per_game_colour_source(&game_dir)).filter(|_| cli.colour.is_none())`,
+/// reproduced here rather than called: `boot_story` lives in the `lanthorn`
+/// BINARY crate (`crates/app/src/startup.rs`), not the `app` library this
+/// integration suite links against, so it is not reachable from a test file —
+/// the same reason `a_per_launch_interpreter_number_never_leaks_into_the_global_config`
+/// above models `write_config_at`'s guard by hand instead of calling
+/// `boot_story` for the interpreter-number case, and the shape
+/// `honor_game_colours`'s own per-game read already has at
+/// `startup.rs:~1194-1224` (`.filter(|_| cli.game_colours.is_none())`), which
+/// this mirrors for the second CLI flag SQ-1532 adds a sidecar key for.
+#[test]
+fn colour_source_sidecar_is_honored_unless_the_cli_names_one() {
+    let dir = tmp("colour-source-boot-precedence");
+    let game_dir = dir.join("game.save");
+    app::styles::write_per_game_colour_source(
+        &game_dir,
+        Some(Some(app::config::ColourSource::Terminal)),
+        false,
+    )
+    .unwrap();
+
+    // No dialog override, no `--colour`: the sidecar decides.
+    let no_cli: Option<app::config::ColourSource> = None;
+    let resolved = None::<app::config::ColourSource>
+        .or_else(|| app::styles::read_per_game_colour_source(&game_dir))
+        .filter(|_| no_cli.is_none());
+    assert_eq!(
+        resolved,
+        Some(app::config::ColourSource::Terminal),
+        "no CLI flag on this launch: the per-game sidecar's choice is honored"
+    );
+
+    // `--colour machine` on this launch: it outranks the sidecar entirely, even
+    // though nothing here touched the sidecar's own stored value.
+    let cli_colour = Some(app::config::ColourSource::Machine);
+    let resolved = None::<app::config::ColourSource>
+        .or_else(|| app::styles::read_per_game_colour_source(&game_dir))
+        .filter(|_| cli_colour.is_none());
+    assert_eq!(resolved, None, "--colour on this launch must outrank the sidecar entirely");
+    assert_eq!(
+        app::styles::read_per_game_colour_source(&game_dir),
+        Some(app::config::ColourSource::Terminal),
+        "and must not have touched the sidecar's own stored value either"
+    );
+    let _ = std::fs::remove_dir_all(&dir);
+}

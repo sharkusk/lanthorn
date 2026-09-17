@@ -56,6 +56,8 @@ use std::path::{Path, PathBuf};
 
 use blorb::infocom_pics::{Flavour, InfocomPics};
 
+use crate::config::ColourSource;
+
 // ── LaunchOverrides ───────────────────────────────────────────────────────────
 
 /// The boot-time overrides one launch carries, ahead of anything on disk.
@@ -79,6 +81,19 @@ pub struct LaunchOverrides {
     /// `scott_picture_resolution` key. Meaningless (and `None`) for every story
     /// that is not a C64 *Mysterious Adventures* release.
     pub scott_picture_resolution: Option<crate::graphics::ScottPictureResolution>,
+    /// A colour source named for THIS launch (SQ-1532) — a choice the
+    /// launch-options dialog made and the user did not persist. Outranks the
+    /// per-game sidecar's `colour_source` key, same as every other field here.
+    /// `None` here means "unchanged from what this story already inherits",
+    /// **not** "Default" — overriding *to* Default (clearing an inherited
+    /// explicit choice) cannot be expressed this way, exactly as
+    /// `interpreter_number` cannot; see
+    /// [`LaunchOptionsState::clears_inherited_colour_source`].
+    pub colour_source: Option<ColourSource>,
+    /// Whether to honour the game's own requested colours, for THIS launch
+    /// (SQ-1532) — a choice the launch-options dialog made and the user did not
+    /// persist. Outranks the per-game sidecar's `honor_game_colours` key.
+    pub honor_game_colours: Option<bool>,
 }
 
 impl LaunchOverrides {
@@ -88,6 +103,8 @@ impl LaunchOverrides {
         self.pictures.is_none()
             && self.interpreter_number.is_none()
             && self.scott_picture_resolution.is_none()
+            && self.colour_source.is_none()
+            && self.honor_game_colours.is_none()
     }
 }
 
@@ -703,6 +720,22 @@ pub fn interpreter_name(n: u8) -> &'static str {
 pub const INTERPRETER_CHOICES: [Option<u8>; 12] =
     [None, Some(1), Some(2), Some(3), Some(4), Some(5), Some(6), Some(7), Some(8), Some(9), Some(10), Some(11)];
 
+/// The colour-source row's four UI-facing choices, in cycling order (SQ-1532):
+/// `None` ("Default" — no per-game override) followed by the three
+/// [`ColourSource`] variants, `--colour`'s own order.
+pub const COLOUR_SOURCE_CHOICES: [Option<ColourSource>; 4] =
+    [None, Some(ColourSource::Terminal), Some(ColourSource::Theme), Some(ColourSource::Machine)];
+
+/// The colour-source row's label for one of [`COLOUR_SOURCE_CHOICES`].
+pub fn colour_source_label(v: Option<ColourSource>) -> &'static str {
+    match v {
+        None => "Default",
+        Some(ColourSource::Terminal) => "Terminal",
+        Some(ColourSource::Theme) => "Theme",
+        Some(ColourSource::Machine) => "Machine",
+    }
+}
+
 /// Resolve the interpreter number a launch would advertise, and say where it
 /// came from — the same precedence [`crate::interpreter::InterpreterProfile::resolve`]
 /// applies at boot, reported rather than applied.
@@ -761,7 +794,8 @@ pub fn derived_interpreter(
 /// Which row of the dialog the cursor is on. Art rows come first (index 0 is
 /// "no override"), then the interpreter row, then — only for a Scott entry
 /// with native C64 vector pictures (SQ-1473) — the picture-resolution row,
-/// then the persist checkbox.
+/// then the colour-source and game-colours rows (SQ-1532), then the persist
+/// checkbox.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Row {
     /// `0` = inherit (Blorb / disk image); `1..` indexes `candidates`.
@@ -769,6 +803,11 @@ pub enum Row {
     Interpreter,
     /// Only reachable when [`LaunchOptionsState::scott_native_pictures`] is set.
     ScottResolution,
+    /// Always present, unlike [`Row::ScottResolution`] — but not always
+    /// INTERACTIVE: see [`LaunchOptionsState::colour_source_cli_locked`].
+    ColourSource,
+    /// Always present; see [`LaunchOptionsState::honor_game_colours_cli_locked`].
+    GameColours,
     Persist,
 }
 
@@ -827,6 +866,32 @@ pub struct LaunchOptionsState {
     /// `scott_native_pictures` is false.
     pub scott_resolution: crate::graphics::ScottPictureResolution,
     pub baseline_scott_resolution: crate::graphics::ScottPictureResolution,
+    /// This launch's colour source (SQ-1532); `None` = "Default" (no per-game
+    /// override — inherit the global `colour_source`), matching the per-game
+    /// sidecar's own `Option<ColourSource>` shape exactly. Set — along with
+    /// every other field below — by [`LaunchOptionsState::with_colours`].
+    pub colour_source: Option<ColourSource>,
+    pub baseline_colour_source: Option<ColourSource>,
+    /// Was `--colour` passed on THIS launch (the process, not this one story)?
+    /// When true the row is shown fixed/read-only with a provenance note —
+    /// never hidden — and [`LaunchOptionsState::cycle`]/[`LaunchOptionsState::activate_row`]
+    /// refuse to change it, so `colour_source` can never drift from
+    /// `baseline_colour_source` for the life of this dialog. A CLI flag is a
+    /// one-time run override and must never be persisted (SQ-1532); this is the
+    /// UI-layer half of that rule — [`crate::styles::write_per_game_colour_source`]'s
+    /// own `cli_locked` guard is the backstop that holds even if this one is
+    /// somehow bypassed.
+    pub colour_source_cli_locked: bool,
+    /// This launch's effective `honor_game_colours` (SQ-1532) — whether the
+    /// game's own requested colours are obeyed at all. Unlike `colour_source`
+    /// this is a plain `bool`, because the row is a checkbox with no third
+    /// "Default" state to represent: the EFFECTIVE value (sidecar, else the
+    /// global default) is what the checkbox starts on.
+    pub honor_game_colours: bool,
+    pub baseline_honor_game_colours: bool,
+    /// Was `--game-colours` passed on THIS launch? Same rule as
+    /// `colour_source_cli_locked`, for this row.
+    pub honor_game_colours_cli_locked: bool,
 }
 
 /// Drop the candidate the "Automatic" row already names, so one archive is not
@@ -956,6 +1021,15 @@ impl LaunchOptionsState {
             scott_native_pictures: false,
             scott_resolution: crate::graphics::ScottPictureResolution::default(),
             baseline_scott_resolution: crate::graphics::ScottPictureResolution::default(),
+            // Neutral placeholders: every real caller sets these via
+            // `with_colours` immediately, exactly as `with_scott_resolution`
+            // overwrites the Scott fields above.
+            colour_source: None,
+            baseline_colour_source: None,
+            colour_source_cli_locked: false,
+            honor_game_colours: true,
+            baseline_honor_game_colours: true,
+            honor_game_colours_cli_locked: false,
         }
     }
 
@@ -974,6 +1048,35 @@ impl LaunchOptionsState {
         self.scott_native_pictures = native;
         self.scott_resolution = inherited;
         self.baseline_scott_resolution = inherited;
+        self
+    }
+
+    /// Seed the colour-source and game-colours rows (SQ-1532). A separate
+    /// builder call, like [`Self::with_scott_resolution`], so [`Self::new`]
+    /// stays the arguments every caller already passes.
+    ///
+    /// `colour_source`/`honor_game_colours` are the EFFECTIVE values in force
+    /// before the dialog opens — when the corresponding flag is locked, that is
+    /// the CLI's own value (there is nothing else it could honestly show); when
+    /// it is not, `colour_source` is the per-game sidecar's `Option<ColourSource>`
+    /// verbatim (`None` = "Default", no override stored) and `honor_game_colours`
+    /// is the sidecar override or else the global default. Both `*_cli_locked`
+    /// flags freeze the row: `cycle`/`activate_row` refuse to change it and
+    /// `overrides`/`persist_to` refuse to record or write a change even if
+    /// something else managed to.
+    pub fn with_colours(
+        mut self,
+        colour_source: Option<ColourSource>,
+        colour_source_cli_locked: bool,
+        honor_game_colours: bool,
+        honor_game_colours_cli_locked: bool,
+    ) -> LaunchOptionsState {
+        self.colour_source = colour_source;
+        self.baseline_colour_source = colour_source;
+        self.colour_source_cli_locked = colour_source_cli_locked;
+        self.honor_game_colours = honor_game_colours;
+        self.baseline_honor_game_colours = honor_game_colours;
+        self.honor_game_colours_cli_locked = honor_game_colours_cli_locked;
         self
     }
 
@@ -1026,10 +1129,11 @@ impl LaunchOptionsState {
     }
 
     /// Total selectable rows: one per art choice (plus "inherit"), the
-    /// interpreter row, the picture-resolution row when it exists, and the
+    /// interpreter row, the picture-resolution row when it exists, the
+    /// colour-source and game-colours rows (SQ-1532, always present), and the
     /// persist checkbox.
     pub fn row_count(&self) -> usize {
-        self.candidates.len() + 3 + self.resolution_row()
+        self.candidates.len() + 5 + self.resolution_row()
     }
 
     /// The cursor as a flat row index.
@@ -1038,7 +1142,9 @@ impl LaunchOptionsState {
             Row::Art(i) => i,
             Row::Interpreter => self.candidates.len() + 1,
             Row::ScottResolution => self.candidates.len() + 2,
-            Row::Persist => self.candidates.len() + 2 + self.resolution_row(),
+            Row::ColourSource => self.candidates.len() + 2 + self.resolution_row(),
+            Row::GameColours => self.candidates.len() + 3 + self.resolution_row(),
+            Row::Persist => self.candidates.len() + 4 + self.resolution_row(),
         }
     }
 
@@ -1051,6 +1157,10 @@ impl LaunchOptionsState {
             Row::Interpreter
         } else if self.scott_native_pictures && idx == n + 2 {
             Row::ScottResolution
+        } else if idx == n + 2 + self.resolution_row() {
+            Row::ColourSource
+        } else if idx == n + 3 + self.resolution_row() {
+            Row::GameColours
         } else {
             Row::Persist
         };
@@ -1060,6 +1170,11 @@ impl LaunchOptionsState {
     /// what the story already inherits. An untouched dialog produces
     /// [`LaunchOverrides::default`], so opening it and pressing Play is
     /// indistinguishable from launching normally.
+    ///
+    /// A CLI-locked row never contributes an override, whatever its fields
+    /// happen to hold — checked explicitly here rather than trusted to
+    /// `cycle`/`activate_row` alone, so this stays correct even if a locked
+    /// row's live value were ever set some other way (SQ-1532).
     pub fn overrides(&self) -> LaunchOverrides {
         LaunchOverrides {
             pictures: (self.art != self.baseline_art)
@@ -1070,6 +1185,13 @@ impl LaunchOptionsState {
                 .flatten(),
             scott_picture_resolution: (self.scott_resolution != self.baseline_scott_resolution)
                 .then_some(self.scott_resolution),
+            colour_source: (!self.colour_source_cli_locked
+                && self.colour_source != self.baseline_colour_source)
+                .then_some(self.colour_source)
+                .flatten(),
+            honor_game_colours: (!self.honor_game_colours_cli_locked
+                && self.honor_game_colours != self.baseline_honor_game_colours)
+                .then_some(self.honor_game_colours),
         }
     }
 
@@ -1084,6 +1206,14 @@ impl LaunchOptionsState {
     /// Same, for the interpreter number.
     pub fn clears_inherited_interpreter(&self) -> bool {
         self.interpreter.is_none() && self.baseline_interpreter.is_some()
+    }
+
+    /// Same, for the colour source (SQ-1532): selecting "Default" over a
+    /// sidecar that names an explicit source cannot be expressed as an
+    /// override either, for the identical reason. Never true while the row is
+    /// CLI-locked — a locked row cannot be moved to "Default" at all.
+    pub fn clears_inherited_colour_source(&self) -> bool {
+        self.colour_source.is_none() && self.baseline_colour_source.is_some()
     }
 
     /// Handle one keystroke.
@@ -1145,18 +1275,26 @@ impl LaunchOptionsState {
     }
 
     /// Space on the cursor row: select this archive, advance the interpreter by
-    /// one, flip the resolution, or flip the checkbox.
+    /// one, flip the resolution, cycle the colour source, flip the game-colours
+    /// checkbox, or flip the persist checkbox.
     fn activate_row(&mut self) {
         match self.cursor {
             Row::Art(i) => self.art = i,
             Row::Interpreter => self.cycle(1),
             Row::ScottResolution => self.cycle(1),
+            Row::ColourSource => self.cycle(1),
+            Row::GameColours => {
+                if !self.honor_game_colours_cli_locked {
+                    self.honor_game_colours = !self.honor_game_colours;
+                }
+            }
             Row::Persist => self.persist = !self.persist,
         }
     }
 
     /// Left/Right on the cursor row. Only rows with an ordered set of values
-    /// respond; an art row is a radio button, not a cycler.
+    /// respond; an art row is a radio button, not a cycler. A CLI-locked row
+    /// (SQ-1532) never changes, whichever key reaches it.
     fn cycle(&mut self, dir: isize) {
         match self.cursor {
             Row::Interpreter => {
@@ -1176,6 +1314,22 @@ impl LaunchOptionsState {
                         crate::graphics::ScottPictureResolution::HiRes
                     }
                 };
+            }
+            Row::ColourSource => {
+                if !self.colour_source_cli_locked {
+                    let cur = COLOUR_SOURCE_CHOICES
+                        .iter()
+                        .position(|c| *c == self.colour_source)
+                        .unwrap_or(0);
+                    let len = COLOUR_SOURCE_CHOICES.len();
+                    let next = (cur as isize + dir).rem_euclid(len as isize) as usize;
+                    self.colour_source = COLOUR_SOURCE_CHOICES[next];
+                }
+            }
+            Row::GameColours => {
+                if !self.honor_game_colours_cli_locked {
+                    self.honor_game_colours = !self.honor_game_colours;
+                }
             }
             Row::Persist => self.persist = !self.persist,
             Row::Art(_) => {}
@@ -1204,6 +1358,23 @@ impl LaunchOptionsState {
             crate::styles::write_per_game_scott_picture_resolution(
                 game_dir,
                 Some(self.scott_resolution),
+            )?;
+        }
+        // SQ-1532: both guarded writers refuse outright when the row is
+        // CLI-locked, whatever `Some(...)` says — the `if` here just avoids a
+        // needless touch of an unchanged key; it is not what makes this safe.
+        if self.colour_source != self.baseline_colour_source {
+            crate::styles::write_per_game_colour_source(
+                game_dir,
+                Some(self.colour_source),
+                self.colour_source_cli_locked,
+            )?;
+        }
+        if self.honor_game_colours != self.baseline_honor_game_colours {
+            crate::styles::write_per_game_honor_for_launch(
+                game_dir,
+                Some(self.honor_game_colours),
+                self.honor_game_colours_cli_locked,
             )?;
         }
         Ok(())
@@ -1519,8 +1690,9 @@ mod tests {
         let mut st = LaunchOptionsState::new("Story", &story, None, None, Some(6), None);
         let k = |c| KeyEvent::new(c, KeyModifiers::NONE);
 
-        // No candidates here, so rows are: Art(0), Interpreter, Persist.
-        assert_eq!(st.row_count(), 3);
+        // No candidates here, so rows are: Art(0), Interpreter, ColourSource,
+        // GameColours, Persist (SQ-1532 added the middle two, always present).
+        assert_eq!(st.row_count(), 5);
         assert_eq!(st.cursor, Row::Art(0));
         st.on_key(k(KeyCode::Down));
         assert_eq!(st.cursor, Row::Interpreter);
@@ -1533,6 +1705,10 @@ mod tests {
         st.on_key(k(KeyCode::Char(' ')));
         assert_eq!(st.interpreter, Some(1), "Space advances the interpreter row");
 
+        st.on_key(k(KeyCode::Down));
+        assert_eq!(st.cursor, Row::ColourSource);
+        st.on_key(k(KeyCode::Down));
+        assert_eq!(st.cursor, Row::GameColours);
         st.on_key(k(KeyCode::Down));
         assert_eq!(st.cursor, Row::Persist);
         assert!(!st.persist);
@@ -1580,5 +1756,231 @@ mod tests {
         let st2 = LaunchOptionsState::new("Zork Zero", &z0, Some("zork0.mg1"), None, Some(6), None);
         assert_eq!(st2.art, idx + 1);
         assert!(st2.overrides().is_empty());
+    }
+
+    fn colours_story(dir: &Path) -> PathBuf {
+        let story = dir.join("story.z6");
+        std::fs::write(&story, b"x").unwrap();
+        story
+    }
+
+    /// SQ-1532: the two new rows always exist (unlike [`Row::ScottResolution`]),
+    /// so `row_count`/`cursor_index`/`set_cursor_index` see them whether or not
+    /// either is locked — locking changes interactivity, never presence.
+    #[test]
+    fn the_colour_rows_are_always_present_locked_or_not() {
+        let dir = tmp("colours-present");
+        let story = colours_story(&dir);
+
+        let unlocked = LaunchOptionsState::new("Story", &story, None, None, Some(6), None)
+            .with_colours(None, false, true, false);
+        let locked = LaunchOptionsState::new("Story", &story, None, None, Some(6), None)
+            .with_colours(Some(ColourSource::Terminal), true, false, true);
+
+        // Same row count either way — locking is not hiding.
+        assert_eq!(unlocked.row_count(), locked.row_count());
+        let n = unlocked.candidates.len();
+        assert_eq!(unlocked.row_count(), n + 5);
+
+        for st in [&unlocked, &locked] {
+            let mut st = st.clone();
+            st.set_cursor_index(n + 2);
+            assert_eq!(st.cursor, Row::ColourSource);
+            st.set_cursor_index(n + 3);
+            assert_eq!(st.cursor, Row::GameColours);
+            st.set_cursor_index(n + 4);
+            assert_eq!(st.cursor, Row::Persist);
+            assert_eq!(st.cursor_index(), n + 4);
+        }
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// SQ-1532: Left/Right cycles the colour-source row through exactly the four
+    /// UI-facing choices the spec names, in that order — Default, Terminal,
+    /// Theme, Machine — and wraps.
+    #[test]
+    fn colour_source_cycles_through_default_terminal_theme_machine() {
+        let dir = tmp("colours-cycle");
+        let story = colours_story(&dir);
+        let mut st = LaunchOptionsState::new("Story", &story, None, None, Some(6), None)
+            .with_colours(None, false, true, false);
+        st.cursor = Row::ColourSource;
+        assert_eq!(st.colour_source, None, "starts at Default");
+
+        let want = [
+            Some(ColourSource::Terminal),
+            Some(ColourSource::Theme),
+            Some(ColourSource::Machine),
+            None, // wraps back to Default
+        ];
+        for w in want {
+            st.on_key(crossterm::event::KeyEvent::new(
+                crossterm::event::KeyCode::Right,
+                crossterm::event::KeyModifiers::NONE,
+            ));
+            assert_eq!(st.colour_source, w);
+        }
+        // Left reverses it.
+        st.on_key(crossterm::event::KeyEvent::new(
+            crossterm::event::KeyCode::Left,
+            crossterm::event::KeyModifiers::NONE,
+        ));
+        assert_eq!(st.colour_source, Some(ColourSource::Machine));
+
+        // Space also cycles it (the settings-screen rule: Space acts on the row).
+        st.on_key(crossterm::event::KeyEvent::new(
+            crossterm::event::KeyCode::Char(' '),
+            crossterm::event::KeyModifiers::NONE,
+        ));
+        assert_eq!(st.colour_source, None, "Space advances it too");
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// SQ-1532: the game-colours row is a plain checkbox — Space and Left/Right
+    /// both flip it, same as the persist checkbox.
+    #[test]
+    fn game_colours_row_is_a_checkbox() {
+        let dir = tmp("colours-checkbox");
+        let story = colours_story(&dir);
+        let mut st = LaunchOptionsState::new("Story", &story, None, None, Some(6), None)
+            .with_colours(None, false, true, false);
+        st.cursor = Row::GameColours;
+        assert!(st.honor_game_colours);
+        st.on_key(crossterm::event::KeyEvent::new(
+            crossterm::event::KeyCode::Char(' '),
+            crossterm::event::KeyModifiers::NONE,
+        ));
+        assert!(!st.honor_game_colours);
+        st.on_key(crossterm::event::KeyEvent::new(
+            crossterm::event::KeyCode::Right,
+            crossterm::event::KeyModifiers::NONE,
+        ));
+        assert!(st.honor_game_colours);
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// SQ-1532: a CLI-locked row cannot be moved by any key — Space, Left, nor
+    /// Right — so its live value can never diverge from its baseline for the
+    /// life of the dialog. This is the UI-layer half of "never persist a CLI
+    /// value"; the persistence-layer backstop is tested directly on
+    /// `styles::write_per_game_colour_source`/`write_per_game_honor_for_launch`.
+    #[test]
+    fn a_cli_locked_row_cannot_be_moved_by_any_key() {
+        let dir = tmp("colours-locked-keys");
+        let story = colours_story(&dir);
+        let mut st = LaunchOptionsState::new("Story", &story, None, None, Some(6), None)
+            .with_colours(Some(ColourSource::Terminal), true, true, true);
+        let k = |c| crossterm::event::KeyEvent::new(c, crossterm::event::KeyModifiers::NONE);
+
+        st.cursor = Row::ColourSource;
+        for key in
+            [crossterm::event::KeyCode::Left, crossterm::event::KeyCode::Right, crossterm::event::KeyCode::Char(' ')]
+        {
+            st.on_key(k(key));
+            assert_eq!(st.colour_source, Some(ColourSource::Terminal), "locked row must not move");
+        }
+
+        st.cursor = Row::GameColours;
+        for key in
+            [crossterm::event::KeyCode::Left, crossterm::event::KeyCode::Right, crossterm::event::KeyCode::Char(' ')]
+        {
+            st.on_key(k(key));
+            assert!(st.honor_game_colours, "locked row must not move");
+        }
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// SQ-1532: `overrides()` reports no change for a locked row even when its
+    /// live value is forced away from baseline some OTHER way than `on_key` —
+    /// the explicit `!*_cli_locked` guard inside `overrides()` itself, not only
+    /// `cycle`/`activate_row` refusing to move it.
+    #[test]
+    fn overrides_reports_no_change_for_a_locked_row_however_the_value_got_there() {
+        let dir = tmp("colours-overrides-locked");
+        let story = colours_story(&dir);
+        let mut st = LaunchOptionsState::new("Story", &story, None, None, Some(6), None)
+            .with_colours(Some(ColourSource::Terminal), true, true, true);
+        assert!(st.overrides().is_empty(), "untouched → no overrides");
+
+        // Bypass on_key entirely and poke the fields directly, simulating
+        // "attempted interaction" some other way than a keystroke.
+        st.colour_source = Some(ColourSource::Machine);
+        st.honor_game_colours = false;
+        let ov = st.overrides();
+        assert_eq!(ov.colour_source, None, "a locked row must never contribute an override");
+        assert_eq!(ov.honor_game_colours, None, "a locked row must never contribute an override");
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// SQ-1532: an unlocked row's genuine change DOES reach `overrides()` and
+    /// `persist_to()`, exactly like every other row — the lock only withholds
+    /// CLI-sourced rows, not ordinary ones.
+    #[test]
+    fn an_unlocked_change_reaches_overrides_and_persist_to() {
+        let dir = tmp("colours-unlocked-persist");
+        let story = colours_story(&dir);
+        let mut st = LaunchOptionsState::new("Story", &story, None, None, Some(6), None)
+            .with_colours(None, false, true, false);
+
+        st.colour_source = Some(ColourSource::Theme);
+        st.honor_game_colours = false;
+        let ov = st.overrides();
+        assert_eq!(ov.colour_source, Some(ColourSource::Theme));
+        assert_eq!(ov.honor_game_colours, Some(false));
+
+        let game_dir = dir.join("game");
+        st.persist_to(&game_dir).unwrap();
+        assert_eq!(
+            crate::styles::read_per_game_colour_source(&game_dir),
+            Some(ColourSource::Theme)
+        );
+        assert_eq!(crate::styles::read_per_game_honor(&game_dir), Some(false));
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// SQ-1532: the persistence-layer backstop holds even if `persist_to` is
+    /// called on a state whose lock flag is true but whose live value was
+    /// forced away from baseline anyway (bypassing `on_key`) — the sidecar must
+    /// still never see it, because the guard lives in the WRITE function, not
+    /// only in the state machine that normally protects it.
+    #[test]
+    fn persist_to_never_writes_a_locked_rows_value_however_it_was_forced() {
+        let dir = tmp("colours-persist-locked");
+        let story = colours_story(&dir);
+        let mut st = LaunchOptionsState::new("Story", &story, None, None, Some(6), None)
+            .with_colours(Some(ColourSource::Terminal), true, true, true);
+        // Force the live value away from baseline directly, as the previous
+        // test does — `persist_to`'s own `if changed` gate would otherwise skip
+        // calling the writer at all, which would prove nothing about the
+        // writer's own guard.
+        st.colour_source = Some(ColourSource::Machine);
+        st.honor_game_colours = false;
+
+        let game_dir = dir.join("game");
+        st.persist_to(&game_dir).unwrap();
+        assert_eq!(
+            crate::styles::read_per_game_colour_source(&game_dir),
+            None,
+            "a locked row's forced value must never reach the sidecar"
+        );
+        assert_eq!(crate::styles::read_per_game_honor(&game_dir), None);
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// SQ-1532: "Default" cannot be expressed as an override (there is no
+    /// "override with nothing"), same shape as `clears_inherited_art`/
+    /// `clears_inherited_interpreter` — and never true while locked, since a
+    /// locked row cannot reach "Default" at all.
+    #[test]
+    fn clears_inherited_colour_source_matches_the_existing_pattern() {
+        let dir = tmp("colours-clears");
+        let story = colours_story(&dir);
+        let mut st = LaunchOptionsState::new("Story", &story, None, None, Some(6), None)
+            .with_colours(Some(ColourSource::Terminal), false, true, false);
+        assert!(!st.clears_inherited_colour_source(), "untouched");
+        st.colour_source = None;
+        assert!(st.clears_inherited_colour_source());
+        assert_eq!(st.overrides().colour_source, None, "cannot be expressed as an override");
+        let _ = std::fs::remove_dir_all(&dir);
     }
 }
