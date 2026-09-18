@@ -6,7 +6,7 @@ All notable changes to lanthorn are recorded here.
 [`.github/workflows/release.yml`](.github/workflows/release.yml)). A tag whose
 name contains a hyphen — `v0.1.0-beta.1`, `v0.2.0-rc.1` — is published as a
 **pre-release**; a bare `vMAJOR.MINOR.PATCH` is a full release. The workspace
-version in `Cargo.toml` (currently `0.7.1`) versions every crate and every
+version in `Cargo.toml` (currently `0.7.2`) versions every crate and every
 binary's `--version` at once, and carries any pre-release suffix so a build
 identifies itself without reading its git hash.
 
@@ -19,13 +19,7 @@ Absolute URLs or no link.
 
 ---
 
-## Unreleased
-
-*This section is drained when a version is cut. README.md describes the
-RELEASED build; prose for a feature that is in `main` but not yet released
-goes into the README in place, at its normal destination, marked with the
-visible tag `*Next release:*`. `release.yml` refuses to cut a release
-while any such tag, or this Unreleased section, still exists.*
+## v0.7.2 — 2026-09-18
 
 ### Added
 
@@ -37,6 +31,24 @@ while any such tag, or this Unreleased section, still exists.*
   launched with `--colour` or `--game-colours`, the matching row is shown
   fixed, with a note saying so, instead of letting the dialog quietly
   disagree with what you just typed.
+
+### Changed
+
+- **Kitty terminal images now transfer over shared memory instead of being
+  encoded into the terminal's input stream**, cutting a chunky v6 composite
+  frame's transfer cost by roughly a megabyte. Terminals that can't use
+  shared memory (an SSH session, for one) are detected automatically and
+  fall back to the previous method.
+
+### Fixed
+
+- **`lanthorn-mapgen` now says *why* a room's name is missing instead of
+  leaving it blank.** Some Inform 7 games compute a room's name at
+  runtime (a rule, or text like "the \[colour\] door") rather than writing
+  it as fixed text — mapgen can't know what that resolves to without
+  playing the game, and now labels the room `(computed name)` instead of
+  showing nothing. Large multi-author games (Cragne Manor, for one) hit
+  this far more often than most.
 
 ---
 

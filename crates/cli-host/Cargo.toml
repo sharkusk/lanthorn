@@ -24,7 +24,7 @@ name = "cli_host"
 # took no external dependencies of its own until SQ-1488 (C64 crunched-program
 # depacking, `blorb::depack`'s `regenerator2000-core`), so this pulls that one
 # dependency along with it — every reader itself is still hand-rolled.
-blorb = { package = "lanthorn-blorb", path = "../blorb", version = "0.7.1" }
+blorb = { package = "lanthorn-blorb", path = "../blorb", version = "0.7.2" }
 crossterm = "0.29"
 
 # SQ-0909: `pin.rs` claims that a scroll region discards the lines that scroll out
