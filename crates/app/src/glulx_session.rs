@@ -949,7 +949,11 @@ impl GlulxSession {
         if !world.is_room(addr) {
             return None;
         }
-        world.printed_name(self.machine.mem(), self.parse_names()?, addr)
+        // `.into_constant()`: this caller only ever wanted "did we get a real
+        // static name", collapsing `PrintedName::Computed`/`Missing` back to
+        // `None` exactly as the pre-SQ-1534 bare `Option<String>` did — see
+        // `static_room_name_keeps_its_pre_sq1534_option_string_shape` below.
+        world.printed_name(self.machine.mem(), self.parse_names()?, addr).into_constant()
     }
 
     /// The one room this story statically calls `name`, or `None` (SQ-1303).
@@ -974,7 +978,9 @@ impl GlulxSession {
         let mem = self.machine.mem();
         let mut found = None;
         for &addr in world.rooms() {
-            let Some(printed) = world.printed_name(mem, names, addr) else { continue };
+            let Some(printed) = world.printed_name(mem, names, addr).into_constant() else {
+                continue;
+            };
             if !zvm::location::status_name_matches(name, &printed) {
                 continue;
             }
@@ -4626,6 +4632,77 @@ mod tests {
         );
         assert_eq!(subject.window_dump(), control.window_dump(), "still the same windows after it");
         assert_eq!(window_text(&subject), window_text(&control));
+    }
+
+    // ── SQ-1534: static_room_name's Option<String> shape is unchanged ──────────
+
+    /// `stories/cragne.gblorb`, or the fetched Archive fixture
+    /// (`scripts/fixtures.manifest`) when there is no local copy — `None` when
+    /// neither exists, and this skips vacuously without it.
+    ///
+    /// Cragne Manor, not Counterfeit Monkey: every one of CM's 100 rooms
+    /// happens to resolve to a constant name (see `crates/gvm/tests/i7_map.rs`'s
+    /// `counterfeit_monkey_hands_over_its_whole_map_without_a_turn_played`,
+    /// `named == 100`), so it cannot exercise the `PrintedName::Computed` case
+    /// this test exists to prove is still collapsed to `None`. Cragne Manor is a
+    /// 100+-author anthology and hits it on a real fraction of its rooms.
+    fn cragne_manor() -> Option<Vec<u8>> {
+        let local =
+            std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../stories/cragne.gblorb");
+        let p = if local.is_file() {
+            local
+        } else {
+            std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+                .join("tests/fixtures/stories/cragne.gblorb")
+        };
+        match std::fs::read(&p) {
+            Ok(b) => Some(b),
+            Err(_) => {
+                eprintln!("SKIP: gitignored story missing at {}", p.display());
+                None
+            }
+        }
+    }
+
+    /// SQ-1534 gave `gvm::i7map::I7World::printed_name` a three-way
+    /// [`gvm::i7map::PrintedName`] return in place of a bare `Option<String>`.
+    /// `static_room_name` only ever wanted "did we get a real static name",
+    /// and must keep exactly its old behaviour after the adapter:
+    /// `Some(_)` when — and only when — `printed_name` answers `Constant`,
+    /// `None` for everything else, including the routine-valued ("computed")
+    /// case that did not exist as a distinguishable outcome before this quest.
+    #[test]
+    fn static_room_name_keeps_its_pre_sq1534_option_string_shape() {
+        let Some(bytes) = cragne_manor() else { return };
+        let pict = blorb::Blorb::parse(bytes.clone()).ok();
+        let crate::hints::LoadedStory::Glulx(image) =
+            crate::hints::extract_story(bytes).expect("a readable container")
+        else {
+            panic!("Cragne Manor is a Glulx story");
+        };
+        let s = GlulxSession::new(image, 80, 30, true, false, false, (8, 16), pict, &[])
+            .expect("Cragne Manor boots");
+        let world = s.i7_world().expect("Cragne Manor has a compiled I7 map");
+        let names = s.parse_names().expect("Cragne Manor has an object table");
+
+        let mut saw_constant = false;
+        let mut saw_non_constant = false;
+        for &addr in world.rooms() {
+            let is_constant =
+                matches!(world.printed_name(s.machine.mem(), names, addr), gvm::i7map::PrintedName::Constant(_));
+            let got_some = s.static_room_name(addr).is_some();
+            assert_eq!(
+                got_some, is_constant,
+                "static_room_name({addr:#x}) must be Some(_) exactly when printed_name is Constant"
+            );
+            saw_constant |= is_constant;
+            saw_non_constant |= !is_constant;
+        }
+        assert!(saw_constant, "Cragne Manor must have at least one constant-named room to compare against");
+        assert!(
+            saw_non_constant,
+            "and at least one non-constant one, or this case cannot tell the two shapes apart"
+        );
     }
 
     // ── SQ-1305: the `room-global` sidecar carries the image it was written for ──

@@ -272,9 +272,15 @@ pub struct GeneratedMap {
 }
 
 impl GeneratedMap {
-    /// Rooms whose name the source could produce. A room the story names only
-    /// through a routine has an empty name here, which is a real answer and not
-    /// a failure — see [`gvm::i7map::I7World::printed_name`].
+    /// Rooms whose name the source could produce.
+    ///
+    /// On an Inform 7 source this is no longer a meaningful "how many rooms
+    /// are missing a name" count: SQ-1534 gives a room the reader cannot
+    /// resolve statically an honest placeholder label ("(computed name)" or
+    /// "(unnamed)", see [`gvm::i7map::PrintedName`]) rather than leaving it
+    /// blank, so every I7 room's label is non-empty here. A blank label can
+    /// still happen on the other engine paths (`zvm::objects::printed_name`,
+    /// the Inform 6-on-Glulx `gvm::world` reader), which this still counts.
     pub fn named_rooms(&self) -> usize {
         self.graph.rooms().filter(|r| !r.label().trim().is_empty()).count()
     }
@@ -1629,7 +1635,22 @@ fn i7_map(
     // a plain per-room, per-direction DATA table, not compiled branches, so
     // [`gvm::i7map::I7Exit`] has nothing shaped like a routine to begin with —
     // one cell is a room, a door, or absent (filtered out below), never code.
-    let name_of = |addr: u32| w.printed_name(mem, names, addr).unwrap_or_default();
+    //
+    // SQ-1534: a room whose `printed name` property the reader cannot resolve
+    // no longer maps to a blank label. `PrintedName::Computed` is a genuine I7
+    // feature — a rule or text substitution ("the \[colour\] door") that only
+    // running the story can resolve — hit far more on an anthology like Cragne
+    // Manor (18% of rooms) than on a single-author story like Counterfeit
+    // Monkey (well under 1%); `PrintedName::Missing` is a different fact, no
+    // name at all, folded in with the "has no printed name property" and
+    // "decoded to an empty string" cases. Naming *why* a room's name is
+    // unknown, rather than collapsing every reason into "", is the whole
+    // point (SQ-1534).
+    let name_of = |addr: u32| match w.printed_name(mem, names, addr) {
+        gvm::i7map::PrintedName::Constant(s) => s,
+        gvm::i7map::PrintedName::Computed => "(computed name)".to_string(),
+        gvm::i7map::PrintedName::Missing => "(unnamed)".to_string(),
+    };
 
     // The room set is the story's own: `Map_Storage` is indexed by room, so
     // `I7World::rooms()` IS the complete list and nothing has to be derived.

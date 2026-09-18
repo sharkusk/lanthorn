@@ -168,6 +168,46 @@ impl I7Exit {
     }
 }
 
+/// What [`I7World::printed_name`] found for one object's `printed name`
+/// property (SQ-1534).
+///
+/// The old shape was `Option<String>`, which collapsed three different facts
+/// into one bare `None`: a routine-valued property, no property at all, and a
+/// decoded-but-empty string. A caller reading `None` off a generated map has
+/// no way to say why a room came up blank, so this distinguishes the two
+/// reasons worth telling a player apart — "the story computes this at
+/// runtime" from "there is no name here at all" — while still folding the
+/// third (an empty string is a data-quality edge, not a knowable-but-unresolved
+/// case) into the latter.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum PrintedName {
+    /// A constant string: what the story prints, unconditionally.
+    Constant(String),
+    /// The property is there but holds a compiled ROUTINE — a rule, or a text
+    /// substitution such as `"the [colour] door"` — so only running the story
+    /// can say what it prints.
+    Computed,
+    /// This object carries no `printed name` property at all, or this story's
+    /// `printed name` property could not be identified in the first place (a
+    /// story too unusual for `PropIndex::printed_name_property`'s heuristic to
+    /// find a winner), or the property's value decoded to an empty string.
+    Missing,
+}
+
+impl PrintedName {
+    /// The constant text, when there is one — the pre-SQ-1534 `Option<String>`
+    /// shape, for a caller that only ever wanted "did we get a real static
+    /// name" and must keep behaving exactly as it did before this type existed
+    /// (`glulx_session.rs`'s live-play fallback, confirmed unchanged by its own
+    /// `static_room_name_keeps_its_pre_sq1534_option_string_shape` test).
+    pub fn into_constant(self) -> Option<String> {
+        match self {
+            PrintedName::Constant(s) => Some(s),
+            PrintedName::Computed | PrintedName::Missing => None,
+        }
+    }
+}
+
 impl I7World {
     /// Derive this story's map, or `None` if it is not an Inform 7 image this
     /// reader recognises (an Inform 6 story, or an I7 build old enough to
@@ -305,11 +345,18 @@ impl I7World {
     ///
     /// Measured on `CounterfeitMonkey-11.gblorb`, 2459 of 2480 objects carrying
     /// the property have a constant text; the other 21 are routines.
-    pub fn printed_name(&self, mem: &Memory, names: &ParseNames, obj: u32) -> Option<String> {
-        let prop = self.name_prop?;
-        let value = names
-            .property(mem, obj, prop)
-            .and_then(|(d, _)| mem.read32(d))?;
+    ///
+    /// See [`PrintedName`] for what a non-constant answer means and why it is
+    /// not collapsed into a bare `None` (SQ-1534): Cragne Manor, a 100+-author
+    /// anthology, hits the routine case on 18% of its rooms where a
+    /// single-author story like Counterfeit Monkey hits it on under 1%, and a
+    /// blank room on a generated map reads as a bug rather than as the
+    /// documented limit of a reader that never runs the VM.
+    pub fn printed_name(&self, mem: &Memory, names: &ParseNames, obj: u32) -> PrintedName {
+        let Some(prop) = self.name_prop else { return PrintedName::Missing };
+        let Some(value) = names.property(mem, obj, prop).and_then(|(d, _)| mem.read32(d)) else {
+            return PrintedName::Missing;
+        };
         text_value(mem, value)
     }
 
@@ -360,23 +407,40 @@ fn compass_of(mem: &Memory, names: &ParseNames, dir_obj: u32) -> Option<Compass>
 /// explains at length why there is no authoritative bound to use instead.
 const MAX_DOOR_PROP: u16 = 512;
 
+/// Classify what `a` points at: a Glulx string object (bytes `0xE0`/`E1`/`E2`,
+/// the encoding tag every string starts with) decodes to [`PrintedName::Constant`];
+/// anything else this reader CAN read — in practice a compiled function's own
+/// header (`0xC0`/`0xC1`) — is [`PrintedName::Computed`], because the module's
+/// two-shape story (see [`I7World::printed_name`]) leaves nothing else a text
+/// property legitimately holds. An unreadable address is [`PrintedName::Missing`]
+/// rather than guessed at, since exclusion is not confirmation.
+fn classify_text(mem: &Memory, a: u32) -> PrintedName {
+    match mem.read8(a) {
+        Some(0xe0) | Some(0xe1) | Some(0xe2) => {
+            crate::disasm::string_text(mem, mem.decode_table(), a, None)
+                .filter(|s| !s.is_empty())
+                .map(PrintedName::Constant)
+                .unwrap_or(PrintedName::Missing)
+        }
+        Some(_) => PrintedName::Computed,
+        None => PrintedName::Missing,
+    }
+}
+
 /// Read a text-valued property's value. See [`I7World::printed_name`] for the
 /// two shapes.
-fn text_value(mem: &Memory, value: u32) -> Option<String> {
-    let direct = |a: u32| {
-        matches!(mem.read8(a), Some(0xe0) | Some(0xe1) | Some(0xe2))
-            .then(|| crate::disasm::string_text(mem, mem.decode_table(), a, None))
-            .flatten()
-            .filter(|s| !s.is_empty())
-    };
+fn text_value(mem: &Memory, value: u32) -> PrintedName {
     // `value` is whatever a property held — an address, a small integer, or
     // `0xffffffff`. Every step past it is checked: an overflow here is a
     // panic in a debug build and a silent wrap in a release one, which is the
     // worst possible split for a reader that runs over arbitrary story data.
     if value >= mem.ramstart() {
-        return direct(mem.read32(value.checked_add(4)?)?);
+        return match value.checked_add(4).and_then(|a| mem.read32(a)) {
+            Some(addr) => classify_text(mem, addr),
+            None => PrintedName::Missing,
+        };
     }
-    direct(value)
+    classify_text(mem, value)
 }
 
 /// Every object's property table, read once. Building this is the only walk of
@@ -563,7 +627,7 @@ impl PropIndex {
                 let Some(words) = self.words.get(&obj) else {
                     continue;
                 };
-                let Some(text) = text_value(mem, v) else {
+                let Some(text) = text_value(mem, v).into_constant() else {
                     continue;
                 };
                 if text.len() > 64 {

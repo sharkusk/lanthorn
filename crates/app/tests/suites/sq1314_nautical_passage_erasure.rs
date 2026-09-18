@@ -148,7 +148,7 @@ fn world() -> Option<(Memory, ParseNames, I7World)> {
 
 /// Every passage the yacht rooms declare, read off the compiled map.
 fn yacht_passages(mem: &Memory, names: &ParseNames, w: &I7World) -> Vec<Passage> {
-    let named = |addr: u32| w.printed_name(mem, names, addr);
+    let named = |addr: u32| w.printed_name(mem, names, addr).into_constant();
     let mut out = Vec::new();
     for &room in w.rooms() {
         let Some(from) = named(room) else { continue };
@@ -377,7 +377,7 @@ fn walking_the_yacht_with_the_ships_own_words_leaves_every_passage_drawn() {
 fn room_addr(w: &I7World, mem: &Memory, names: &ParseNames, name: &str) -> u32 {
     *w.rooms()
         .iter()
-        .find(|&&r| w.printed_name(mem, names, r).as_deref() == Some(name))
+        .find(|&&r| w.printed_name(mem, names, r).into_constant().as_deref() == Some(name))
         .unwrap_or_else(|| panic!("{name:?} is one of Counterfeit Monkey's rooms"))
 }
 

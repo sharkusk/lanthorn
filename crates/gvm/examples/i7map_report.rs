@@ -1,6 +1,6 @@
 //! SQ-1303 measurement driver: what `gvm::i7map` recovers from a story file
 //! alone, with no turn played. `cargo run -p lanthorn-gvm --example i7map_report -- <story>`
-use gvm::i7map::{I7Exit, I7World};
+use gvm::i7map::{I7Exit, I7World, PrintedName};
 use gvm::memory::Memory;
 use gvm::objects::ParseNames;
 
@@ -51,7 +51,7 @@ fn main() {
         let named = w
             .rooms()
             .iter()
-            .filter(|&&r| w.printed_name(&mem, &pn, r).is_some())
+            .filter(|&&r| matches!(w.printed_name(&mem, &pn, r), PrintedName::Constant(_)))
             .count();
         let mut exits = 0;
         let mut resolved = 0;

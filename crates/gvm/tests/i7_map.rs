@@ -14,7 +14,7 @@
 
 use std::path::PathBuf;
 
-use gvm::i7map::{I7Exit, I7World};
+use gvm::i7map::{I7Exit, I7World, PrintedName};
 use gvm::memory::Memory;
 use gvm::objects::ParseNames;
 use gvm::world::Compass;
@@ -78,10 +78,10 @@ fn exits_of(mem: &Memory, pn: &ParseNames, w: &I7World, room: u32) -> Vec<(Strin
         .map(|(c, d, e)| {
             let dir = c
                 .map(|c| format!("{c:?}"))
-                .unwrap_or_else(|| w.printed_name(mem, pn, d).unwrap_or_default());
+                .unwrap_or_else(|| w.printed_name(mem, pn, d).into_constant().unwrap_or_default());
             let to = match e {
                 I7Exit::Room(x) | I7Exit::ThroughDoor { to: x, .. } => {
-                    w.printed_name(mem, pn, x).unwrap_or_default()
+                    w.printed_name(mem, pn, x).into_constant().unwrap_or_default()
                 }
                 I7Exit::Door(x) => format!("unresolved door {x:#x}"),
             };
@@ -116,7 +116,7 @@ fn counterfeit_monkey_hands_over_its_whole_map_without_a_turn_played() {
     let dirs: Vec<String> = w
         .directions()
         .iter()
-        .filter_map(|&d| w.printed_name(&mem, &pn, d))
+        .filter_map(|&d| w.printed_name(&mem, &pn, d).into_constant())
         .collect();
     assert_eq!(
         dirs,
@@ -149,7 +149,7 @@ fn counterfeit_monkey_hands_over_its_whole_map_without_a_turn_played() {
     let named = w
         .rooms()
         .iter()
-        .filter(|&&r| w.printed_name(&mem, &pn, r).is_some())
+        .filter(|&&r| matches!(w.printed_name(&mem, &pn, r), PrintedName::Constant(_)))
         .count();
     assert_eq!(named, 100);
     assert_eq!(pn.short_name(&mem, w.rooms()[0]).as_deref(), Some(""));
@@ -160,7 +160,7 @@ fn counterfeit_monkey_hands_over_its_whole_map_without_a_turn_played() {
     // The first row of `Map_Storage`, including a door the reader resolves
     // through its `found_in` sides rather than by calling `door_to()`.
     let fair = w.rooms()[0];
-    assert_eq!(w.printed_name(&mem, &pn, fair).as_deref(), Some("Fair"));
+    assert_eq!(w.printed_name(&mem, &pn, fair).into_constant().as_deref(), Some("Fair"));
     assert_eq!(
         exits_of(&mem, &pn, &w, fair),
         [
@@ -190,7 +190,7 @@ fn every_room_the_played_counterfeit_monkey_map_reached_is_here_by_name() {
     let names: Vec<String> = w
         .rooms()
         .iter()
-        .filter_map(|&r| w.printed_name(&mem, &pn, r))
+        .filter_map(|&r| w.printed_name(&mem, &pn, r).into_constant())
         .collect();
 
     // A sample of the played dump (94 rooms over seven sessions); the full
@@ -254,7 +254,7 @@ fn the_wizard_sniffer_map_is_not_word_aligned() {
 
     let mountain = w.rooms()[0];
     assert_eq!(
-        w.printed_name(&mem, &pn, mountain).as_deref(),
+        w.printed_name(&mem, &pn, mountain).into_constant().as_deref(),
         Some("Atop a Mountain")
     );
     assert_eq!(
@@ -286,7 +286,7 @@ fn the_scheme_is_unchanged_from_six_l_thirty_eight_through_inform_ten() {
     let named = w
         .rooms()
         .iter()
-        .filter(|&&r| w.printed_name(&mem, &pn, r).is_some())
+        .filter(|&&r| matches!(w.printed_name(&mem, &pn, r), PrintedName::Constant(_)))
         .count();
     assert_eq!(named, 51);
 }
@@ -405,7 +405,7 @@ fn a_map_cell_rewritten_in_ram_is_seen_by_the_next_ask() {
     let find = |mem: &Memory, name: &str| -> u32 {
         *w.rooms()
             .iter()
-            .find(|&&r| w.printed_name(mem, &pn, r).as_deref() == Some(name))
+            .find(|&&r| w.printed_name(mem, &pn, r).into_constant().as_deref() == Some(name))
             .unwrap_or_else(|| panic!("{name} is one of this story's rooms"))
     };
     let sigil = find(&mem, "Sigil Street");
@@ -457,4 +457,61 @@ fn a_direction_this_story_does_not_have_has_no_column() {
     let named: usize = Compass::ALL.into_iter().filter_map(|c| w.compass_column(c)).count();
     assert_eq!(named, 12, "twelve of the twenty columns are compass points");
     assert_eq!(w.directions().len(), 20);
+}
+
+/// Direct pin of [`PrintedName`]'s three-way distinction (SQ-1534): a
+/// `printed name` property is a constant string, a compiled ROUTINE (the
+/// property is there but only running the story can say what it prints — an
+/// I7 rule or a text substitution), or absent outright. `w.rooms()` alone
+/// cannot exercise all three on this story — every one of CM's 100 rooms
+/// resolves to a constant (`counterfeit_monkey_hands_over_its_whole_map_without_a_turn_played`
+/// already asserts `named == 100`) — so this walks every object
+/// `ParseNames::objects()` knows, which is where CM's topic-list and
+/// internal-rule objects live.
+///
+/// Measured directly against this fixture (not assumed from the module
+/// header's older, differently-scoped count): of every object, 2290 answer
+/// with a constant, 21 with a routine, 183 with neither.
+#[test]
+fn counterfeit_monkey_distinguishes_constant_computed_and_missing_names() {
+    let Some((mem, pn, w)) = world("CounterfeitMonkey-11.gblorb") else {
+        return;
+    };
+    let mut constant = 0usize;
+    let mut computed = 0usize;
+    let mut missing = 0usize;
+    for obj in pn.objects() {
+        match w.printed_name(&mem, &pn, obj) {
+            PrintedName::Constant(_) => constant += 1,
+            PrintedName::Computed => computed += 1,
+            PrintedName::Missing => missing += 1,
+        }
+    }
+    assert_eq!(
+        (constant, computed, missing),
+        (2290, 21, 183),
+        "constant/computed/missing split over every object CM declares"
+    );
+    assert_eq!(constant + computed + missing, pn.objects().count());
+
+    // A specific specimen of each, so a regression that shuffles the totals
+    // without changing what a single, known object classifies as is still
+    // caught. Addresses are this exact compile's (release 11, serial
+    // 230220), like `w.map_storage()`'s own pinned address above.
+    assert_eq!(
+        w.printed_name(&mem, &pn, 0x542133),
+        PrintedName::Computed,
+        "a topic-list object (\"buy the goggles\", one of CM's quip topics) computes its printed name"
+    );
+    assert_eq!(
+        w.printed_name(&mem, &pn, 0x53f973),
+        PrintedName::Missing,
+        "an internal object with no dictionary words and no printed name property at all"
+    );
+    let fair = w.rooms()[0];
+    assert_eq!(
+        w.printed_name(&mem, &pn, fair),
+        PrintedName::Constant("Fair".to_string()),
+        "an ordinary room still resolves to its constant text"
+    );
 }

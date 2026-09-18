@@ -441,6 +441,82 @@ fn counterfeit_monkey_layout_places_every_room_in_its_own_cell() {
 }
 
 // ---------------------------------------------------------------------------
+// Real-game: Inform 7 (Cragne Manor) — SQ-1534 honest computed-name labelling
+// ---------------------------------------------------------------------------
+
+/// SQ-1534: Cragne Manor is a 100+-author anthology, and a real fraction of its
+/// rooms name themselves through an I7 rule or a text substitution rather than
+/// a constant string — [`gvm::i7map::I7World::printed_name`] never runs the VM,
+/// so it cannot resolve those, and before this fix `i7_map()`'s
+/// `unwrap_or_default()` turned every one of them into a blank label,
+/// indistinguishable on the map from an actual bug. They now carry the honest
+/// "(computed name)" placeholder instead — see [`gvm::i7map::PrintedName`].
+///
+/// `cragne.gblorb` is pinned in `scripts/fixtures.manifest` (SQ-1015) and
+/// fetched by `crates/app/tests/fixtures/stories/`, so — unlike the Counterfeit
+/// Monkey release-11 case above — `fixture_path` reaches it on CI too, not only
+/// with a local `stories/`.
+#[test]
+fn cragne_manor_labels_computed_room_names_instead_of_leaving_them_blank() {
+    let path = fixture_path("cragne.gblorb");
+    if !path.is_file() {
+        eprintln!("SKIP: cragne.gblorb absent (stories/ and fetched fixtures)");
+        return;
+    }
+    let map = mapgen::generate(&path, true).expect("Cragne Manor must map");
+    assert_eq!(map.source, SourceKind::I7World, "Cragne Manor is an Inform 7 build");
+    assert_eq!(map.story.release, Some(10), "Cragne Manor release 10");
+    assert_eq!(map.story.serial.as_deref(), Some("181208"));
+
+    let labels = names(&map);
+    assert_eq!(labels.len(), 130, "Cragne Manor's room count");
+
+    // No label may be blank — that is exactly the bug this fix closes.
+    let blank: Vec<_> = map.graph.rooms().filter(|r| r.label().trim().is_empty()).map(|r| r.id).collect();
+    assert!(blank.is_empty(), "no room may render with a blank label, got blank ids {blank:?}");
+
+    // The exact split, measured directly off this fixture rather than assumed
+    // from the SQ-1534 investigation's own number (independently re-checked,
+    // per this quest's brief, rather than trusted).
+    let computed = labels.iter().filter(|n| n.as_str() == "(computed name)").count();
+    let unnamed = labels.iter().filter(|n| n.as_str() == "(unnamed)").count();
+    assert_eq!(
+        computed, 29,
+        "rooms whose printed name is a compiled routine (an I7 rule or text substitution): {labels:?}"
+    );
+    assert_eq!(unnamed, 0, "no room in Cragne Manor carries no printed-name property at all");
+    assert_eq!(
+        labels.len() - computed - unnamed,
+        101,
+        "the remaining rooms must still resolve to their real constant name"
+    );
+
+    // A specific, addressed specimen, not just a count: the room this
+    // compile's `Map_Storage` puts north of "Upstairs Hall, north end (Jason
+    // Love)" is one whose printed name is computed.
+    let jason_loves_hall_north = map
+        .engine_refs
+        .iter()
+        .find(|(_, r)| matches!(r, mapgen::EngineRef::GlulxAddr(0x0064_8a6e)))
+        .map(|(&id, _)| id)
+        .expect("the specific room at 0x648a6e must exist on this exact compile");
+    assert_eq!(
+        map.graph.room(jason_loves_hall_north).map(mapper::graph::Room::label),
+        Some("(computed name)"),
+        "this specific room's printed name is a routine, not a blank"
+    );
+    assert!(
+        has_edge(
+            &map,
+            "Upstairs Hall, north end (Jason Love)",
+            mapper::direction::Direction::N,
+            "(computed name)"
+        ),
+        "the north passage out of Jason Love's hall leads to a computed-name room"
+    );
+}
+
+// ---------------------------------------------------------------------------
 // Real-game: ZIL (Zork I) and the Inform 6 library on Glulx (Adventure)
 // ---------------------------------------------------------------------------
 
