@@ -767,10 +767,14 @@ mod poll_picker_requery_tests {
     /// trip (its fields are private outside `ratatui-image`), which is exactly
     /// why `game_picker_query_answered` is a plain `AppState` bool rather than
     /// something derived from the picker itself — see that field's doc.
+    // `Picker::set_font_size` was a fork-only addition (SQ-0992); upstream has
+    // no setter for an existing `Picker`, only the deprecated `from_fontsize`
+    // constructor — fine here, since these tests only need a `Picker` at a
+    // chosen font size, not a live capability-queried one (SQ-1510).
+    #[allow(deprecated)]
     fn answered_state(font: (u16, u16)) -> AppState {
         let mut state = AppState::default();
-        let mut p = Picker::halfblocks();
-        p.set_font_size(FontSize::new(font.0, font.1));
+        let p = Picker::from_fontsize(FontSize::new(font.0, font.1));
         state.game_picker = Some(p);
         state.game_picker_query_answered = true;
         state
@@ -820,13 +824,12 @@ mod poll_picker_requery_tests {
     /// `game_picker` and asks for a redraw. FALSIFY by hard-coding this fn to
     /// always `return false` after the swap and watch `font_of` stay stale.
     #[test]
+    #[allow(deprecated)]
     fn a_settled_font_change_swaps_the_picker_and_redraws() {
         let mut state = answered_state((10, 20));
         let mut dirty = Some(Instant::now() - std::time::Duration::from_millis(200));
         let redraw = poll_picker_requery(&mut state, &mut dirty, || {
-            let mut p = Picker::halfblocks();
-            p.set_font_size(FontSize::new(7, 15));
-            Some(p)
+            Some(Picker::from_fontsize(FontSize::new(7, 15)))
         });
         assert!(redraw, "a font-size change must ask for a redraw");
         assert_eq!((7, 15), font_of(&state));
@@ -840,6 +843,7 @@ mod poll_picker_requery_tests {
     /// until the events stop. FALSIFY by removing the `due()` gate (always
     /// query) and watch `calls` climb past 1 during the burst loop below.
     #[test]
+    #[allow(deprecated)]
     fn a_resize_burst_queries_at_most_once() {
         let mut state = answered_state((10, 20));
         let calls = Cell::new(0u32);
@@ -861,9 +865,7 @@ mod poll_picker_requery_tests {
         dirty = Some(Instant::now() - std::time::Duration::from_millis(200));
         let redraw = poll_picker_requery(&mut state, &mut dirty, || {
             calls.set(calls.get() + 1);
-            let mut p = Picker::halfblocks();
-            p.set_font_size(FontSize::new(7, 15));
-            Some(p)
+            Some(Picker::from_fontsize(FontSize::new(7, 15)))
         });
         assert!(redraw);
         assert_eq!(calls.get(), 1, "settling a burst costs exactly one requery");
@@ -906,20 +908,15 @@ mod poll_picker_requery_tests {
     /// assignment) and watch `cover_picker`'s font stay at its stale (10, 20)
     /// below.
     #[test]
+    #[allow(deprecated)]
     fn requery_picker_if_settled_drives_a_bare_option_with_no_appstate() {
-        let mut cover_picker = Some({
-            let mut p = Picker::halfblocks();
-            p.set_font_size(FontSize::new(10, 20));
-            p
-        });
+        let mut cover_picker = Some(Picker::from_fontsize(FontSize::new(10, 20)));
         let calls = Cell::new(0u32);
         let mut dirty = Some(Instant::now() - std::time::Duration::from_millis(200));
 
         let changed = requery_picker_if_settled(&mut cover_picker, true, &mut dirty, || {
             calls.set(calls.get() + 1);
-            let mut p = Picker::halfblocks();
-            p.set_font_size(FontSize::new(7, 15));
-            Some(p)
+            Some(Picker::from_fontsize(FontSize::new(7, 15)))
         });
 
         assert!(changed, "a settled requery finding a different cell reports true");

@@ -1072,10 +1072,10 @@ pub fn window_wire(picker: &Picker) -> WindowWire {
 /// exactly that reason — see [`v6_pad_to_cells`]), but produces the same
 /// pixels: a `Resize::Fit`/`Nearest` resample at 1:1 is an identity.
 ///
-/// The shared-memory pid mirrors `Picker`'s own rule (`picker_ui::query_options`
-/// passes `std::process::id()` as `kitty_shared_memory_object` only when
-/// probing; `Picker` retains it only when the terminal answered `t=s`) rather
-/// than reading a field the crate does not expose.
+/// Upstream 12.0.0-rc.0's `Kitty::new` takes `smo` as a plain `bool` — the
+/// shared-memory object's name is generated inside the crate now
+/// (`generate_shm_name`, a random 16-byte name under the macOS 31-byte limit),
+/// so there is no pid to thread through any more (SQ-1510).
 fn kitty_protocol_with_id(
     picker: &Picker,
     image: image::DynamicImage,
@@ -1092,7 +1092,7 @@ fn kitty_protocol_with_id(
         id,
         picker.tmux_detected(),
         kitty_compression(picker),
-        kitty_shared_memory(picker).then(std::process::id),
+        kitty_shared_memory(picker),
     )?))
 }
 
@@ -4318,29 +4318,28 @@ fn reseat_kitty_placement(
     suffix: &str,
 ) -> (Option<u32>, UploadBytes) {
     let mut id = None;
-    // The image data rides on the row that carries it, ahead of that row's own
-    // escapes — `row.prefix`. Measured here because this is the ONE funnel every
-    // `ratatui-image` upload passes through (SQ-1005).
+    // The image data rides on the placement's very first cell, ahead of that
+    // cell's own placeholder — `anchor.prefix`. Measured here because this is
+    // the ONE funnel every `ratatui-image` upload passes through (SQ-1005).
     let mut bytes = UploadBytes::default();
     let mut prefix = (!prefix.is_empty()).then_some(prefix);
     // The last cell this re-seat writes — where a `suffix` delete goes, so it is
     // emitted AFTER every byte of the placement it supersedes (SQ-0817).
     let mut last: Option<(u16, u16)> = None;
     for y in area.top()..area.bottom() {
-        let Some(symbol) = buf.cell((area.left(), y)).map(|c| c.symbol().to_string()) else { continue };
-        let Some(row) = parse_placement_row(&symbol) else { continue };
+        let Some(anchor) = parse_placement_anchor(buf, area.left(), y) else { continue };
         // The prefix is only ever consumed on a row we could also NAME, so the
         // caller's "did this carry my deletes?" question is answered by the id
         // coming back — never half-answered.
-        let this_id = placement_id(row.fg, row.extra_d);
+        let this_id = placement_id(anchor.fg, anchor.extra_d);
         id = id.or(this_id);
-        bytes.add(measure_transmit(row.prefix));
-        let width = row.cells.min(area.width);
+        bytes.add(measure_transmit(&anchor.prefix));
+        let width = placement_row_width(buf, area, y).min(area.width);
         let head = match this_id.and(prefix.take()) {
-            Some(p) => format!("{p}{}", row.prefix),
-            None => row.prefix.to_string(),
+            Some(p) => format!("{p}{}", anchor.prefix),
+            None => anchor.prefix.clone(),
         };
-        kitty_place_row(buf, (area.left(), y), width, row.fg, (row.row_d, row.extra_d), Some(&head));
+        kitty_place_row(buf, (area.left(), y), width, anchor.fg, (anchor.row_d, anchor.extra_d), Some(&head));
         if width > 0 {
             last = Some((area.left() + width - 1, y));
         }
@@ -4380,11 +4379,23 @@ fn placement_id(fg: Color, extra_d: char) -> Option<u32> {
     Some(u32::from_be_bytes([u8::try_from(hi).ok()?, r, g, b]))
 }
 
-/// One `ratatui-image` placeholder row, read back off the cell it was written to.
-struct PlacementRow<'a> {
-    /// Everything before the row's own escapes — the image upload, when this is
-    /// the row that carries it. Passed through untouched.
-    prefix: &'a str,
+/// The leftmost cell of one row of a `ratatui-image` kitty placement, read back
+/// off the buffer it was rendered into.
+///
+/// Upstream 12.0.0-rc.0 draws a placement into REAL per-cell buffer cells — one
+/// placeholder character per cell, with the id colour set as a proper `Style`
+/// foreground (`cell.fg`) — rather than the fork's single anchor cell crammed
+/// with the whole row's placeholder text plus a hand-rolled cursor-save/restore
+/// escape dance (SQ-1510). Only a row's leftmost cell (`x == 0` in the crate's
+/// own `render()`) carries the row/column/id-extra diacritics, and only the
+/// placement's very first cell overall carries the transmit escape (the
+/// crate's `AtomicBool`-gated `make_transmit()` fires once for the whole
+/// image, not once per row).
+struct PlacementAnchor {
+    /// Whatever rode ahead of the placeholder character in this cell — the
+    /// crate's own transmit escape on the placement's first cell, empty
+    /// everywhere else.
+    prefix: String,
     /// The id's low 24 bits, as the foreground the protocol chose.
     fg: Color,
     /// The image row and id-high-byte diacritics, verbatim: the row index is the
@@ -4392,31 +4403,28 @@ struct PlacementRow<'a> {
     /// the only part of the id the foreground cannot carry.
     row_d: char,
     extra_d: char,
-    /// Placeholder cells in the row.
-    cells: u16,
 }
 
-fn parse_placement_row(symbol: &str) -> Option<PlacementRow<'_>> {
+fn parse_placement_anchor(buf: &Buffer, x: u16, y: u16) -> Option<PlacementAnchor> {
+    let cell = buf.cell((x, y))?;
+    let symbol = cell.symbol();
     let at = symbol.find('\u{10EEEE}')?;
-    let (head, tail) = symbol.split_at(at);
-    // `ESC[38;2;r;g;bm` immediately before the first placeholder is the id colour.
-    let sgr = head.rfind("\x1b[38;2;")?;
-    let rgb = head.get(sgr + 7..)?.strip_suffix('m')?;
-    let mut parts = rgb.split(';');
-    let mut byte = || parts.next()?.parse::<u8>().ok();
-    let fg = Color::Rgb(byte()?, byte()?, byte()?);
-    if parts.next().is_some() {
-        return None;
-    }
-    // The protocol's own cursor-save sits between the upload and the id colour.
-    let prefix = &head[..head[..sgr].rfind("\x1b[s")?];
-
+    let (prefix, tail) = symbol.split_at(at);
     let mut diacritics = tail.chars().skip(1).take_while(|c| KITTY_DIACRITICS.contains(c));
     let row_d = diacritics.next()?;
     let _col_d = diacritics.next()?;
     let extra_d = diacritics.next()?;
-    let cells = u16::try_from(tail.chars().filter(|&c| c == '\u{10EEEE}').count()).ok()?;
-    Some(PlacementRow { prefix, fg, row_d, extra_d, cells })
+    Some(PlacementAnchor { prefix: prefix.to_string(), fg: cell.fg, row_d, extra_d })
+}
+
+/// How many of row `y`'s cells, starting at `area.left()`, carry a placeholder —
+/// the crate clamps a placement to its own image size, which can fall short of
+/// `area.width` (SQ-1510: each cell is real now, so this is a scan rather than
+/// counting characters crammed into one string).
+fn placement_row_width(buf: &Buffer, area: Rect, y: u16) -> u16 {
+    (area.left()..area.right())
+        .take_while(|&x| buf.cell((x, y)).is_some_and(|c| c.symbol().contains('\u{10EEEE}')))
+        .count() as u16
 }
 
 /// SQ-0824: the resampler picks its filter by direction, so a pane smaller than the

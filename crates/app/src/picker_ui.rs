@@ -885,9 +885,29 @@ fn cover_query_options(
     let probe_shm = shm == app::config::KittySharedMemory::Auto;
     ratatui_image::picker::cap_parser::QueryStdioOptions {
         kitty_compression: true,
-        kitty_shared_memory_object: probe_shm.then(std::process::id),
+        kitty_shared_memory_object: kitty_shm_probe_name(probe_shm),
         ..Default::default()
     }
+}
+
+/// The crate names its own probe object now (SQ-1510:
+/// `QueryStdioOptions::probe_kitty_smo`, a random 128-bit filename under
+/// macOS's 31-byte limit) — this used to hand over `std::process::id()`
+/// (the fork's shape) but there is no longer a pid to build a name from.
+/// `probe_kitty_smo` is `cfg(not(windows))` upstream, since POSIX shared
+/// memory has no Windows leg at all, so `probe_shm` is unconditionally
+/// declined there — matching what `Parser::query`'s own
+/// `#[cfg(not(windows))]` gate already does with the field.
+#[cfg(not(windows))]
+fn kitty_shm_probe_name(probe_shm: bool) -> Option<String> {
+    probe_shm
+        .then(ratatui_image::picker::cap_parser::QueryStdioOptions::probe_kitty_smo)
+        .flatten()
+}
+
+#[cfg(windows)]
+fn kitty_shm_probe_name(_probe_shm: bool) -> Option<String> {
+    None
 }
 
 /// Build the ratatui-image picker for cover art per the CLI mode. `Auto`
@@ -4517,10 +4537,19 @@ mod tests {
         use app::config::KittySharedMemory as K;
 
         let auto = super::cover_query_options(K::Auto);
-        assert_eq!(
-            auto.kitty_shared_memory_object,
-            Some(std::process::id()),
+        // SQ-1510: the object's name is minted by `ratatui-image` itself now
+        // (`QueryStdioOptions::probe_kitty_smo`, a random filename), not built
+        // from our pid, and that constructor has no Windows leg upstream —
+        // POSIX shared memory doesn't exist there — so `auto` declines too.
+        #[cfg(not(windows))]
+        assert!(
+            auto.kitty_shared_memory_object.is_some(),
             "auto asks, and names the object it would hand over"
+        );
+        #[cfg(windows)]
+        assert_eq!(
+            auto.kitty_shared_memory_object, None,
+            "shared memory has no Windows leg upstream, so auto declines too"
         );
 
         let off = super::cover_query_options(K::Off);

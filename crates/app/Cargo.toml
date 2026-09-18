@@ -110,7 +110,7 @@ blorb = { package = "lanthorn-blorb", path = "../blorb", version = "0.7.1" }
 audio = { package = "lanthorn-audio", path = "../audio", version = "0.7.1" }
 ratatui = { version = "0.30", features = ["crossterm_0_29"] }
 crossterm = "0.29"
-ratatui-image = { version = "11.0.6", default-features = false }
+ratatui-image = { version = "12.0.0-rc.0", default-features = false }
 # gif: IFDB and the IFComp archive serve some covers as GIF; without the
 # decoder those fetches were dropped as "does not decode" (13 of 29 in one
 # curated import, two of them IFDB's own).

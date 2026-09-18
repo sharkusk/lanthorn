@@ -34,40 +34,14 @@ rust-version = "1.98"
 [profile.dev]
 debug = "line-tables-only"
 
-# `lanthorn-shm` on the fork: upstream master (v11.0.8) plus the three things
-# lanthorn needs that no release carries yet. Master itself already holds two of
-# ours — the u16 wrap fix (PR 189) and kitty `o=z` compression detection
-# (PR 190) — so the pin is no longer about them; it exists for what is still in
-# review:
-#
-#   * kitty shared memory transmission, `t=s` (upstream PR 198, benjajaja's) —
-#     the pixels are handed over in a POSIX shared memory object instead of
-#     base64'd into the terminal's input stream. Worth roughly a megabyte a
-#     frame on a v6 raster composite.
-#   * two platform fixes to it (ours): a shared memory name over 31 bytes is
-#     refused on macOS (`PSHMNAMLEN`), and `write(2)` on a shared memory object
-#     answers `ENXIO` there — so `t=s` transmitted nothing at all on the
-#     platform this is mostly developed on.
-#   * `Capability::KittySharedMemory` and `kitty_shared_memory_probe` (ours,
-#     PR onto 198) — ASK the terminal before handing it an object it may not be
-#     able to open. Same shape and same reason as the `o=z` probe: a terminal
-#     on the other end of an ssh connection cannot open our shared memory, and
-#     a transmission it refuses is invisible rather than slow.
-#
-# Two earlier additions on the same branch, still unreleased:
-#
-#   * `Picker::set_font_size` (SQ-0992) — a mid-session font change must not
-#     rebuild the picker, which would drop the queried capability list.
-#   * `Picker::new_protocol_with_id` and a NAMED virtual placement (`p=1`,
-#     SQ-0996) — a kitty placement writes its image id into every cell it
-#     covers, so re-encoding changed art under a freshly drawn random id
-#     repaints the whole rect. The caller is the only one who knows two encodes
-#     are the same thing changing.
-#
-# REMOVE THIS once a release carrying all of them exists: delete the stanza and
-# bump the version in crates/app/Cargo.toml.
+# SQ-1510: lanthorn depended on a personal fork of ratatui-image
+# (sharkusk/ratatui-image, branch lanthorn-shm) for kitty shared-memory
+# transmission (`t=s`), two macOS platform fixes to it, and a capability
+# probe. All of that is upstream and published now — see
+# crates/app/Cargo.toml's ratatui-image entry. `12.0.0-rc.0` is a
+# pre-release: watch for a stable 12.0.0 and drop the `-rc.0` pin once it
+# ships (SQ-1533).
 [patch.crates-io]
-ratatui-image = { git = "https://github.com/sharkusk/ratatui-image", branch = "lanthorn-shm" }
 
 # SQ-0774: the emitted-stream oracle's dependency (`crates/app/tests/pty_stream/oracle.rs`,
 # dev-dependency only), on a fork carrying our fix for

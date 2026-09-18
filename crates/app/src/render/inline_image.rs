@@ -651,7 +651,12 @@ mod tests {
         assert_eq!(r.cache.len(), 2);
     }
 
+    // `Picker::set_font_size` was a fork-only addition (SQ-0992); upstream has
+    // no setter for an existing `Picker`, only the deprecated `from_fontsize`
+    // constructor — fine here, since these tests only need a `Picker` at a
+    // chosen font size, not a live capability-queried one (SQ-1510).
     #[test]
+    #[allow(deprecated)]
     fn a_font_size_change_re_resamples_instead_of_serving_the_old_cell() {
         // SQ-1003. Both caches are keyed in CELLS, and the cell's pixel size is
         // what decides the resample — so a font-size change that leaves `cols`
@@ -670,8 +675,7 @@ mod tests {
         };
         let (cols, rows) = (4u16, 2u16);
         let band = crate::render::transcript::ImageBand { image: img, cols, rows, row: 0, x_off: 0 };
-        let mut picker = Picker::halfblocks();
-        picker.set_font_size(ratatui_image::FontSize::new(8, 16));
+        let mut picker = Picker::from_fontsize(ratatui_image::FontSize::new(8, 16));
         let mut buf = Buffer::empty(Rect::new(0, 0, cols + 2, rows + 2));
         let mut r = InlineImageRender::default();
         r.render_row(&picker, &band, Rect::new(0, 0, cols, 1), None, false, &mut buf);
@@ -679,7 +683,7 @@ mod tests {
         assert_eq!((small.width(), small.height()), (32, 32), "fitted to the 8x16 cell");
 
         // The same band, the same cell COUNT, a bigger cell.
-        picker.set_font_size(ratatui_image::FontSize::new(16, 32));
+        picker = Picker::from_fontsize(ratatui_image::FontSize::new(16, 32));
         r.render_row(&picker, &band, Rect::new(0, 0, cols, 1), None, false, &mut buf);
         assert_eq!(r.fitted.len(), 2, "the new cell size is a new fit, not a hit on the old one");
         let big = r
@@ -702,6 +706,7 @@ mod tests {
     /// Falsified by calling `retain_live` with the OLD signature (ptr-only): it
     /// would keep both variants — this asserts only the CURRENT one survives.
     #[test]
+    #[allow(deprecated)]
     fn retain_live_drops_the_stale_cell_size_variant_after_a_flip() {
         let px = image::RgbaImage::new(32, 32);
         let img = crate::inline_image::InlineImage {
@@ -713,15 +718,14 @@ mod tests {
         let ptr = std::sync::Arc::as_ptr(&img.pixels) as usize;
         let (cols, rows) = (4u16, 2u16);
         let band = crate::render::transcript::ImageBand { image: img, cols, rows, row: 0, x_off: 0 };
-        let mut picker = Picker::halfblocks();
-        picker.set_font_size(ratatui_image::FontSize::new(8, 16));
+        let mut picker = Picker::from_fontsize(ratatui_image::FontSize::new(8, 16));
         let mut buf = Buffer::empty(Rect::new(0, 0, cols + 2, rows + 2));
         let mut r = InlineImageRender::default();
 
         // Render once at the small cell, then flip to a bigger one and render
         // again — same live image, two variants now sitting in both caches.
         r.render_row(&picker, &band, Rect::new(0, 0, cols, 1), None, false, &mut buf);
-        picker.set_font_size(ratatui_image::FontSize::new(16, 32));
+        picker = Picker::from_fontsize(ratatui_image::FontSize::new(16, 32));
         r.render_row(&picker, &band, Rect::new(0, 0, cols, 1), None, false, &mut buf);
         assert_eq!(r.cache.len(), 2, "both cell-size variants are cached going in");
         assert_eq!(r.fitted.len(), 2, "and both fitted resamples");
