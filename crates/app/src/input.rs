@@ -1475,13 +1475,13 @@ fn hotkey_dialog_key_to_action(state: &AppState, key: KeyEvent) -> KeyResolve {
     if let KeyCode::Char(c) = key.code {
         if !key.modifiers.contains(KeyModifiers::CONTROL) && !key.modifiers.contains(KeyModifiers::ALT) {
             return match state.hotkeys.leader_command(c) {
-                Some(cmd) => {
-                    let name = cmd.split_whitespace().next().unwrap_or("");
-                    let ctx = crate::slash::find_command(name)
-                        .map(|c| c.context)
-                        .unwrap_or(Context::Global);
-                    KeyResolve::Command(cmd.to_string(), ctx)
-                }
+                // Gate against the LIVE context (SQ-1536), not the bound
+                // command's own declared context — the same fix as SQ-1535's
+                // palette dispatch, and the same bug shape: self-gating a
+                // command against its own `spec.context` trivially passes
+                // `parse_in_context`'s Browser check no matter where this
+                // dialog was opened from.
+                Some(cmd) => KeyResolve::Command(cmd.to_string(), live_slash_context(state)),
                 None => KeyResolve::Action(Action::CloseHotkeyDialog),
             };
         }
@@ -7014,6 +7014,53 @@ mod tests {
         assert!(matches!(key_to_action(&s, key(KeyCode::Char('r'))), Action::RenameRoom));
         // toggle-inventory-panel fires too (SQ-0446 gave 'i' to inventory).
         assert!(matches!(key_to_action(&s, key(KeyCode::Char('i'))), Action::ToggleInventory));
+    }
+
+    #[test]
+    fn hotkey_leader_letter_self_gate_trivially_passes_the_bug_this_fix_closes() {
+        // Mirrors `spec_context_self_gate_trivially_passes_the_bug_this_fix_closes`
+        // above, for the hotkey-dialog leader-letter path (SQ-1536): nothing
+        // stops a user from binding a Context::Browser-only registry command
+        // (e.g. fetch-story) to a leader letter in `[hotkeys]` — that's a
+        // separate, larger feature (config-time validation) this quest doesn't
+        // add. Gating its dispatch against its OWN declared context always
+        // "succeeds" for the same reason SQ-1535's palette bug did: it is
+        // definitionally the same value on both sides of the comparison.
+        let spec = crate::slash::find_command("fetch-story").expect("fetch-story is in the registry");
+        assert_eq!(spec.context, Context::Browser);
+        let outcome = crate::slash::parse_in_context("fetch-story", '/', spec.context);
+        assert!(
+            matches!(outcome, crate::slash::SlashOutcome::Browser(_)),
+            "self-gating with the command's own context trivially passes: {outcome:?}"
+        );
+    }
+
+    #[test]
+    fn hotkey_leader_letter_dispatches_with_live_context_not_the_commands_own() {
+        // The fix (SQ-1536): `hotkey_dialog_key_to_action` now resolves the
+        // dispatch context via `live_slash_context(state)`, matching what
+        // SQ-1535 already did for the palette's two dispatch sites, instead of
+        // trusting the bound command's own `spec.context`.
+        let mut s = AppState::default(); // Focus::Game, no tidy_anim.
+        s.overlays.hotkey_dialog = true;
+        s.hotkeys.groups = vec![("Test".to_string(), vec![('x', "fetch-story".to_string(), None)])];
+
+        let resolved = key_to_command(&s, key(KeyCode::Char('x')));
+        let (cmd, ctx) = match resolved {
+            KeyResolve::Command(cmd, ctx) => (cmd, ctx),
+            other => panic!("expected a Command, got {other:?}"),
+        };
+        assert_eq!(cmd, "fetch-story");
+        assert_ne!(ctx, Context::Browser, "must gate against the live context, not fetch-story's own");
+        assert_eq!(ctx, live_slash_context(&s));
+
+        // And dispatching through parse_in_context with the resolved context
+        // now correctly rejects it, where the self-gated context above did not.
+        let outcome = crate::slash::parse_in_context(&cmd, '/', ctx);
+        assert!(
+            matches!(outcome, crate::slash::SlashOutcome::Error(_)),
+            "expected the browser gate to reject fetch-story dispatched from the hotkey dialog while playing, got {outcome:?}"
+        );
     }
 
     #[test]
