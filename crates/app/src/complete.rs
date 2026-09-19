@@ -203,13 +203,16 @@ pub struct PaletteCandidate {
 
 /// Rank every registry command by fuzzy-matching its name against `query`.
 ///
-/// Non-matching commands are dropped. Results are sorted best-first, ties broken
-/// alphabetically by command name so the order is stable. An empty query returns
-/// every command in registry order (scores are all neutral).
+/// Non-matching commands are dropped, and so are the story browser's
+/// (`Context::Browser`) — the palette only exists while a game is running, so a
+/// browser-only command has nothing to act on there and dispatching one is a
+/// dead end (SQ-1535). Uses [`crate::slash::non_browser_commands`], the same
+/// filter Tab autocomplete's `slash_names` uses, so the two surfaces cannot
+/// drift apart. Results are sorted best-first, ties broken alphabetically by
+/// command name so the order is stable. An empty query returns every
+/// non-browser command in registry order (scores are all neutral).
 pub fn palette_candidates(query: &str) -> Vec<PaletteCandidate> {
-    let mut out: Vec<PaletteCandidate> = crate::slash::COMMANDS
-        .iter()
-        .enumerate()
+    let mut out: Vec<PaletteCandidate> = crate::slash::non_browser_commands()
         .filter_map(|(i, spec)| {
             fuzzy_match(query, spec.name).map(|m| PaletteCandidate {
                 cmd_index: i,
@@ -444,8 +447,16 @@ mod tests {
 
     #[test]
     fn palette_candidates_empty_query_returns_all() {
+        // Every command EXCEPT the story browser's (SQ-1535) — the palette only
+        // exists while a game is running, so a browser-only command is never a
+        // candidate there.
         let cands = palette_candidates("");
-        assert_eq!(cands.len(), crate::slash::COMMANDS.len());
+        let expected = crate::slash::COMMANDS
+            .iter()
+            .filter(|c| c.context != crate::keymap::Context::Browser)
+            .count();
+        assert_eq!(cands.len(), expected);
+        assert!(cands.len() < crate::slash::COMMANDS.len(), "the browser's commands must be excluded");
     }
 
     #[test]
@@ -453,5 +464,48 @@ mod tests {
         let cands = palette_candidates("quit");
         assert!(cands.iter().all(|c| fuzzy_match("quit", crate::slash::COMMANDS[c.cmd_index].name).is_some()));
         assert!(cands.iter().any(|c| crate::slash::COMMANDS[c.cmd_index].name == "quit"));
+    }
+
+    // ── SQ-1535: the palette must not surface story-browser-only commands ──────
+
+    #[test]
+    fn palette_candidates_excludes_browser_only_commands() {
+        // fetch-story and sort-library are Context::Browser (Category::Library):
+        // they belong to the pre-game story browser, which has no command line and
+        // no AppState — dispatching one from the in-game palette was a dead end
+        // (SQ-1535). A query that would otherwise match them by name must return
+        // nothing.
+        assert!(
+            palette_candidates("fetch-story").is_empty(),
+            "fetch-story is Context::Browser and must not appear in the in-game palette"
+        );
+        assert!(
+            palette_candidates("sort-library").is_empty(),
+            "sort-library is Context::Browser and must not appear in the in-game palette"
+        );
+
+        // Sanity: a Context::Global command matching the same style of query still
+        // works, so this isn't accidentally filtering everything.
+        assert!(
+            !palette_candidates("zoom-map").is_empty(),
+            "zoom-map is Context::Global and should still be offered"
+        );
+    }
+
+    #[test]
+    fn palette_candidates_never_includes_a_browser_context_spec() {
+        // Broader guard: no candidate the palette returns, for any query in this
+        // suite, ever resolves to a Context::Browser command.
+        for query in ["", "story", "fetch", "sort", "quit", "browser"] {
+            for c in palette_candidates(query) {
+                let spec = &crate::slash::COMMANDS[c.cmd_index];
+                assert_ne!(
+                    spec.context,
+                    crate::keymap::Context::Browser,
+                    "palette_candidates({query:?}) returned browser-only command {:?}",
+                    spec.name
+                );
+            }
+        }
     }
 }

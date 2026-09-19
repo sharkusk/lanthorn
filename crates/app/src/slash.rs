@@ -825,16 +825,27 @@ pub fn parse_in_context(body: &str, prefix: char, ctx: Context) -> SlashOutcome 
 
 // ── slash_names ───────────────────────────────────────────────────────────────
 
+/// Registry commands available outside the story browser, paired with their
+/// index into [`COMMANDS`].
+///
+/// The story browser's commands (`Context::Browser`) are left out: that
+/// surface has no command line, so completing or offering one there is
+/// impossible, and offering it anywhere else would surface a command the
+/// game then refuses (SQ-0796). [`slash_names`] (Tab autocomplete) and
+/// `complete::palette_candidates` (the in-game command palette, SQ-1535) both
+/// build on this rather than filtering `COMMANDS` themselves, so the two
+/// surfaces cannot drift apart on which commands they exclude.
+pub fn non_browser_commands() -> impl Iterator<Item = (usize, &'static CommandSpec)> {
+    COMMANDS.iter().enumerate().filter(|(_, c)| c.context != Context::Browser)
+}
+
 /// All known slash-command names (for Tab autocomplete).
 ///
 /// Returns the registry command names, minus the story browser's: that surface
 /// has no command line, so completing a name there is impossible and offering it
 /// here would complete a command the game then refuses (SQ-0796).
 pub fn slash_names() -> Vec<String> {
-    COMMANDS.iter()
-        .filter(|c| c.context != Context::Browser)
-        .map(|c| c.name.to_string())
-        .collect()
+    non_browser_commands().map(|(_, c)| c.name.to_string()).collect()
 }
 
 // ── help_text / help_for_command ──────────────────────────────────────────────

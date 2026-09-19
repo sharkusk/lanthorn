@@ -1490,6 +1490,29 @@ fn hotkey_dialog_key_to_action(state: &AppState, key: KeyEvent) -> KeyResolve {
     KeyResolve::Action(Action::CloseHotkeyDialog)
 }
 
+/// The `Context` slash dispatch should gate against right now, given the
+/// game's live focus and sub-mode — the same determination `key_to_command`
+/// already makes per keystroke (the `tidy_anim` check above, and the
+/// `Focus::Game`/`Focus::Map` match below). The command palette's two dispatch
+/// sites (the row-click in `main.rs` and `palette_key_to_command`'s Enter
+/// handling below) use this rather than the picked candidate's own
+/// `spec.context`, which trivially satisfies `parse_in_context`'s gate instead
+/// of tripping it: a command's own declared context says nothing about which
+/// world is actually live, so a Browser-only candidate reaching this call
+/// (SQ-1535) would otherwise parse successfully no matter where the palette
+/// was opened. The primary fix keeps a Browser command out of the palette's
+/// candidate list at all (`complete::palette_candidates`); this is the
+/// defense-in-depth half.
+pub fn live_slash_context(state: &AppState) -> Context {
+    if state.tidy_anim.is_some() {
+        Context::Anim
+    } else if state.focus == Focus::Map {
+        Context::Map
+    } else {
+        Context::Global
+    }
+}
+
 // ── Internal: command-palette key routing ─────────────────────────────────────
 
 /// Route a key while the command palette is open (SQ-0419). Typing edits the
@@ -1516,7 +1539,7 @@ fn palette_key_to_command(state: &AppState, key: KeyEvent) -> KeyResolve {
             match cands.get(palette.scroll.selected) {
                 Some(cand) => {
                     let spec = &crate::slash::COMMANDS[cand.cmd_index];
-                    KeyResolve::Command(palette.command_line(spec.name), spec.context)
+                    KeyResolve::Command(palette.command_line(spec.name), live_slash_context(state))
                 }
                 None => KeyResolve::Action(Action::PaletteClose),
             }
@@ -6779,8 +6802,9 @@ mod tests {
         // Down/Up (and Shift-Tab as Up) cycle the selection with wrap.
         let mut s = AppState::default();
         s.overlays.palette = Some(crate::state::PaletteState::new(false));
-        // Empty query → the whole registry is the candidate list.
-        let n = crate::slash::COMMANDS.len();
+        // Empty query → every non-browser-only command is the candidate list
+        // (SQ-1535: the story browser's commands never reach the in-game palette).
+        let n = crate::complete::palette_candidates("").len();
         // Down moves to index 1.
         apply_action(key_to_action(&s, key(KeyCode::Down)), &mut s, &mut Mapper::default());
         assert_eq!(s.overlays.palette.as_ref().unwrap().scroll.selected, 1);
@@ -6827,6 +6851,57 @@ mod tests {
             other => panic!("expected an Action outcome, got {other:?}"),
         }
         assert_ne!(s.show_alignment, before, "the toggle command mutated state end-to-end");
+    }
+
+    // ── SQ-1535: dispatch-time hardening (defense in depth) ───────────────────
+    //
+    // `complete::palette_candidates` already keeps a Context::Browser command out
+    // of the palette's candidate list, so neither dispatch site should be able to
+    // reach one via the palette any more. This is the independent regression
+    // guard for the OTHER half of the fix: both dispatch sites used to gate a
+    // picked command against its OWN `spec.context` rather than the game's live
+    // context, which trivially self-satisfies `parse_in_context`'s Browser gate
+    // (Context::Browser == Context::Browser is always true) instead of tripping
+    // it. `live_slash_context` fixes that by gating against the live context
+    // instead — demonstrated here directly, independent of the candidate filter.
+    #[test]
+    fn spec_context_self_gate_trivially_passes_the_bug_this_fix_closes() {
+        // fetch-story is Context::Browser. Gating its dispatch against its OWN
+        // declared context (the bug) always "succeeds", because it is
+        // definitionally the same value on both sides of the comparison.
+        let spec = crate::slash::find_command("fetch-story").expect("fetch-story is in the registry");
+        assert_eq!(spec.context, Context::Browser);
+        let outcome = crate::slash::parse_in_context("fetch-story", '/', spec.context);
+        assert!(
+            matches!(outcome, crate::slash::SlashOutcome::Browser(_)),
+            "self-gating with the command's own context trivially passes: {outcome:?}"
+        );
+    }
+
+    #[test]
+    fn live_slash_context_rejects_a_browser_only_command_while_playing() {
+        // The fix: both palette dispatch sites now gate against
+        // `live_slash_context(state)`, not the picked command's own context.
+        // While playing (any focus, no tidy-anim) that is never Context::Browser,
+        // so the same fetch-story dispatch the previous test showed trivially
+        // passing is correctly rejected here.
+        let s = AppState::default(); // Focus::Game, no tidy_anim.
+        let live = live_slash_context(&s);
+        assert_ne!(live, Context::Browser);
+        let outcome = crate::slash::parse_in_context("fetch-story", '/', live);
+        assert!(
+            matches!(outcome, crate::slash::SlashOutcome::Error(_)),
+            "expected the browser gate to reject fetch-story under the live context, got {outcome:?}"
+        );
+
+        // And in Map focus / during tidy-anim, still never Browser.
+        let mut m = AppState::default();
+        m.focus = Focus::Map;
+        assert_eq!(live_slash_context(&m), Context::Map);
+        assert!(matches!(
+            crate::slash::parse_in_context("fetch-story", '/', live_slash_context(&m)),
+            crate::slash::SlashOutcome::Error(_)
+        ));
     }
 
     #[test]
