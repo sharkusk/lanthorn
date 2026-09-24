@@ -2099,7 +2099,7 @@ pub fn open_command_band(state: &mut AppState, mapper: &mut Mapper, open: bool) 
         }
         let mut band = crate::state::CommandBandState::new(
             verbs,
-            state.config.command_band.resolve_quick(),
+            state.config.command_band.resolve_quick_for(&state.game_dir),
         );
         // The band opens reading whatever is ALREADY on the prompt (SQ-0676): its
         // phrase state follows the typed line, so a half-typed `take ` must light

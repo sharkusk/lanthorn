@@ -86,6 +86,15 @@ pub struct PerGameConfig {
     /// global `colour_source` decides; that is also what "Default" means in the
     /// dialog's own row, which is why there is no fourth enum variant for it.
     pub colour_source: Option<crate::config::ColourSource>,
+    /// This story's own one-click quick-action row (SQ-1552), overriding the
+    /// global `[command_panel] quick`. `None` = no override, so the global list
+    /// decides (and, if that is empty too, the built-in row —
+    /// [`crate::config::CommandBandConfig::resolve_quick_for`]); `Some([])`
+    /// reads the same as no override, matching the global list's own "empty
+    /// means built-in" rule. The TUI has no UI for setting this key; it exists
+    /// so an embedding host can let a player edit quick words per story and
+    /// have the choice actually persist.
+    pub quick: Option<Vec<String>>,
 }
 
 impl PerGameConfig {
@@ -117,6 +126,7 @@ impl PerGameConfig {
         "scott_prehistoric_lamp",
         "scott_picture_resolution",
         "colour_source",
+        "quick",
     ];
 
     /// Read the sidecar. Every key absent when the file is missing or unparseable
@@ -132,6 +142,11 @@ impl PerGameConfig {
         let s = |k: &str| {
             v.get(k).and_then(|x| x.as_str()).map(str::trim).filter(|x| !x.is_empty())
                 .map(str::to_string)
+        };
+        let list = |k: &str| {
+            v.get(k)
+                .and_then(|x| x.as_array())
+                .map(|a| a.iter().filter_map(|x| x.as_str().map(str::to_string)).collect())
         };
         PerGameConfig {
             honor_game_colours: b("honor_game_colours"),
@@ -155,6 +170,7 @@ impl PerGameConfig {
                 .as_deref()
                 .and_then(crate::graphics::ScottPictureResolution::from_key),
             colour_source: s("colour_source").as_deref().and_then(crate::config::ColourSource::from_key),
+            quick: list("quick"),
         }
     }
 
@@ -199,6 +215,10 @@ impl PerGameConfig {
         }
         if let Some(v) = self.colour_source {
             body.push_str(&format!("colour_source = {}\n", toml::Value::String(v.key().to_string())));
+        }
+        if let Some(v) = &self.quick {
+            let arr = toml::Value::Array(v.iter().cloned().map(toml::Value::String).collect());
+            body.push_str(&format!("quick = {arr}\n"));
         }
         if body.is_empty() {
             return match std::fs::remove_file(&path) {
@@ -356,6 +376,13 @@ pub fn read_per_game_colour_source(game_dir: &Path) -> Option<crate::config::Col
 /// enough that a player may want it on for the first and off for the second.
 pub fn read_per_game_return_probe(game_dir: &Path) -> Option<bool> {
     PerGameConfig::read(game_dir).return_probe
+}
+
+/// Read the per-game `quick` override (SQ-1552). `None` = no override, so the
+/// global `[command_panel] quick` decides (and, if that is empty too, the
+/// built-in row) — see [`crate::config::CommandBandConfig::resolve_quick_for`].
+pub fn read_per_game_quick(game_dir: &Path) -> Option<Vec<String>> {
+    PerGameConfig::read(game_dir).quick
 }
 
 /// Persist (or clear) the per-game `return_probe` override, preserving every
@@ -516,6 +543,12 @@ pub fn write_per_game_panel(
     edit(game_dir, |c| c.panel = value)
 }
 
+/// Persist (or clear) the per-game `quick` override (SQ-1552), preserving
+/// every sibling key. `None` clears it back to inheriting the global list.
+pub fn write_per_game_quick(game_dir: &Path, value: Option<Vec<String>>) -> std::io::Result<()> {
+    edit(game_dir, |c| c.quick = value)
+}
+
 #[cfg(all(test, feature = "t-persist"))]
 mod tests {
     use super::*;
@@ -598,6 +631,7 @@ mod tests {
             scott_prehistoric_lamp: Some(true),
             scott_picture_resolution: Some(crate::graphics::ScottPictureResolution::Original),
             colour_source: Some(crate::config::ColourSource::Terminal),
+            quick: Some(vec!["n".to_string(), "s".to_string()]),
         };
         every.write(&dir).unwrap();
         let text = std::fs::read_to_string(per_game_config_path(&dir)).unwrap();
@@ -650,6 +684,46 @@ mod tests {
         }
         write_per_game_panel(&dir, None).unwrap();
         write_per_game_pictures(&dir, None).unwrap();
+        assert!(!per_game_config_path(&dir).exists());
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// The per-game quick-word override round-trips through
+    /// [`PerGameConfig::write`] alongside sibling keys, without dropping the
+    /// list or corrupting anything else in the shared sidecar (SQ-1552).
+    #[test]
+    fn per_game_quick_roundtrips_and_coexists_with_other_keys() {
+        let dir = tmp("quick");
+        assert_eq!(read_per_game_quick(&dir), None);
+
+        write_per_game_quick(&dir, Some(vec!["n".to_string(), "s".to_string(), "look".to_string()]))
+            .unwrap();
+        assert_eq!(
+            read_per_game_quick(&dir),
+            Some(vec!["n".to_string(), "s".to_string(), "look".to_string()])
+        );
+
+        // A sibling key written afterward must PRESERVE quick (shared sidecar,
+        // read-modify-write).
+        write_per_game_guidance(&dir, Some(false)).unwrap();
+        assert_eq!(read_per_game_guidance(&dir), Some(false));
+        assert_eq!(
+            read_per_game_quick(&dir),
+            Some(vec!["n".to_string(), "s".to_string(), "look".to_string()]),
+            "writing a sibling key must not drop quick"
+        );
+
+        // Overwriting quick must PRESERVE the sibling.
+        write_per_game_quick(&dir, Some(vec!["xyzzy".to_string()])).unwrap();
+        assert_eq!(read_per_game_quick(&dir), Some(vec!["xyzzy".to_string()]));
+        assert_eq!(read_per_game_guidance(&dir), Some(false), "quick write kept guidance");
+
+        // Clearing quick keeps guidance; clearing the last key removes the
+        // sidecar entirely.
+        write_per_game_quick(&dir, None).unwrap();
+        assert_eq!(read_per_game_quick(&dir), None);
+        assert_eq!(read_per_game_guidance(&dir), Some(false), "quick clear kept guidance");
+        write_per_game_guidance(&dir, None).unwrap();
         assert!(!per_game_config_path(&dir).exists());
         let _ = std::fs::remove_dir_all(&dir);
     }

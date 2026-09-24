@@ -167,6 +167,24 @@ fn an_unknown_word_is_answered_with_what_the_story_knows() {
     assert_eq!(assists(&s), vec!["this story knows — lanter"]);
 }
 
+/// SQ-1552: a headless host reads the structured half off `state.assist_offer`
+/// instead of re-deriving the unknown word and the fill command by parsing
+/// the text — the kind, the word, and (per pick) the command a click on it
+/// should put in the input box.
+#[test]
+fn the_dictionary_offer_carries_a_structured_offer_with_the_fill_command() {
+    let mut s = after("I don't know the word \"lanturn\".");
+    app::vocab::offer_vocabulary(&mut s, &PocketStory, "take lanturn", true);
+    let offer = s.assist_offer.clone().expect("a vocabulary offer was pushed");
+    assert_eq!(offer.kind, app::assist::OfferKind::VocabularyOffer);
+    assert_eq!(offer.word.as_deref(), Some("lanturn"));
+    assert_eq!(
+        offer.picks,
+        vec![app::assist::OfferPick { word: "lanter".to_string(), command: "take lanter".to_string() }],
+        "the unknown word in the typed command is replaced by the pick, nothing else"
+    );
+}
+
 /// One line, in lanthorn's own words, and never in the parser's brackets or the
 /// story's second person — the register, checked at the one place that writes it.
 #[test]

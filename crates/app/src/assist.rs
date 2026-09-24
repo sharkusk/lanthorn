@@ -207,6 +207,57 @@ impl AssistTone {
     }
 }
 
+/// What kind of thing an assist line is saying (SQ-1552) — what a headless
+/// host needs in order to build UI for one (clickable offered words) rather
+/// than re-derive it by parsing [`Assist::text`], matching [`LEAD_DICTIONARY`]
+/// / a `preamble` prefix and repeating the `knows` check a vocabulary offer
+/// already did.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum OfferKind {
+    /// The once-per-session introduction (see [`preamble`]).
+    Intro,
+    /// A vocabulary offer this story's dictionary alone supports — the
+    /// `this story knows — …` line.
+    VocabularyOffer,
+    /// A vocabulary offer the shadow probe watched work, from where the
+    /// player is standing — the `try instead — …` line.
+    VettedOffer,
+    /// A caution before an irreversible move.
+    Caution,
+    /// Anything else the light says (a completion, a pointer at the hints,
+    /// …) — no unknown word and no offered replacements.
+    Other,
+}
+
+/// One of an offer's candidate words, paired with the command a click on it
+/// should put in the input box: the unknown word replaced by this pick, the
+/// rest of what the player typed left exactly as it was (SQ-1552).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct OfferPick {
+    /// The candidate word or phrase itself, as named in the assist's text.
+    pub word: String,
+    /// The full command a click on [`Self::word`] should fill the input
+    /// with.
+    pub command: String,
+}
+
+/// The structured half of an assist line (SQ-1552): everything a host needs
+/// to build UI for it without parsing [`Assist::text`]. Optional on every
+/// [`Assist`] via [`Assist::with_offer`]; [`Assist::offer`] always hands one
+/// back, synthesising a bare `Other`/`Caution` tag from the tone when the
+/// caller attached none, so a host never has to treat "no offer" as a special
+/// case.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Offer {
+    pub kind: OfferKind,
+    /// The word the player typed that this story's dictionary does not have.
+    /// `None` for anything that isn't a vocabulary offer.
+    pub word: Option<String>,
+    /// The offered replacements, in the order named in the text. Empty for
+    /// anything that isn't a vocabulary offer.
+    pub picks: Vec<OfferPick>,
+}
+
 /// One thing lanthorn has to say to the player, with the weight it carries.
 ///
 /// The text and the tone are one subject, so they travel together rather than as
@@ -218,17 +269,26 @@ impl AssistTone {
 pub struct Assist {
     text: String,
     tone: AssistTone,
+    offer: Option<Offer>,
 }
 
 impl Assist {
     /// The ordinary light: vocabulary, completions, where the hints are.
     pub fn help(text: impl Into<String>) -> Self {
-        Self { text: text.into(), tone: AssistTone::Help }
+        Self { text: text.into(), tone: AssistTone::Help, offer: None }
     }
 
     /// A consequence worth knowing before it happens.
     pub fn caution(text: impl Into<String>) -> Self {
-        Self { text: text.into(), tone: AssistTone::Caution }
+        Self { text: text.into(), tone: AssistTone::Caution, offer: None }
+    }
+
+    /// Attach the structured half of this line (SQ-1552) — what a vocabulary
+    /// offer's caller ([`crate::vocab`]) hands over alongside the text it
+    /// already built.
+    pub fn with_offer(mut self, offer: Offer) -> Self {
+        self.offer = Some(offer);
+        self
     }
 
     pub fn tone(&self) -> AssistTone {
@@ -238,6 +298,22 @@ impl Assist {
     /// The text, as the caller supplied it.
     pub fn text(&self) -> &str {
         &self.text
+    }
+
+    /// The structured half of this line (SQ-1552). Always returns one: a
+    /// caller that never attached an [`Offer`] gets a bare tag derived from
+    /// the tone (`Caution`, or `Other` for a plain help line) with no word
+    /// and no picks, so a host can read `.kind` / `.picks` uniformly rather
+    /// than matching on `Option`.
+    pub fn offer(&self) -> Offer {
+        self.offer.clone().unwrap_or_else(|| Offer {
+            kind: match self.tone {
+                AssistTone::Help => OfferKind::Other,
+                AssistTone::Caution => OfferKind::Caution,
+            },
+            word: None,
+            picks: Vec::new(),
+        })
     }
 
     /// The transcript lines this assist becomes: the first as written — the mark
@@ -272,6 +348,35 @@ mod tests {
     #[test]
     fn the_two_tones_draw_from_different_selectors() {
         assert_ne!(AssistTone::Help.selector(), AssistTone::Caution.selector());
+    }
+
+    /// A caller that never attaches an [`Offer`] still gets one back — a bare
+    /// tag derived from the tone, with no word and no picks (SQ-1552) — so a
+    /// host reading `.offer()` never has to special-case "nothing attached".
+    #[test]
+    fn an_assist_with_no_attached_offer_synthesizes_a_bare_one_from_its_tone() {
+        let help = Assist::help("nothing to rewind yet.").offer();
+        assert_eq!(help.kind, OfferKind::Other);
+        assert_eq!(help.word, None);
+        assert!(help.picks.is_empty());
+
+        let caution = Assist::caution("that cannot be undone.").offer();
+        assert_eq!(caution.kind, OfferKind::Caution);
+        assert_eq!(caution.word, None);
+        assert!(caution.picks.is_empty());
+    }
+
+    /// A caller that DOES attach one gets exactly that back, not the
+    /// tone-derived default.
+    #[test]
+    fn with_offer_is_what_offer_reports_back() {
+        let offer = Offer {
+            kind: OfferKind::VocabularyOffer,
+            word: Some("lanturn".to_string()),
+            picks: vec![OfferPick { word: "light".to_string(), command: "light lanturn".to_string() }],
+        };
+        let a = Assist::help("this story knows — light").with_offer(offer.clone());
+        assert_eq!(a.offer(), offer);
     }
 
     /// The screen's mark cannot travel in a file, so the words go back on there —

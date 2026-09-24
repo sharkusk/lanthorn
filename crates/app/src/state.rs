@@ -2600,6 +2600,14 @@ pub struct AppState {
     /// persisted: a restore into a fresh run should introduce the voice again,
     /// because the player of that run may never have seen it.
     pub assist_preamble_shown: bool,
+    /// The structured half of the last assist [`push_assist`](Self::push_assist)
+    /// pushed, if guidance is on (SQ-1552) — what a headless host needs to build
+    /// UI for it (clickable offered words) without re-deriving the shape by
+    /// parsing the transcript text. Reset to `None` at the head of every turn
+    /// ([`Self::begin_turn`]), the same way [`Self::reveal`] is: an answer about
+    /// one moment, stale the moment the next one starts. Session state, never
+    /// persisted, for the same reason.
+    pub assist_offer: Option<crate::assist::Offer>,
     /// The story's own vocabulary, and which unknown words this session has
     /// already answered (SQ-1041). Read from the engine the first time an offer
     /// is considered and cached — the tables are static — and deliberately not
@@ -3698,6 +3706,7 @@ impl Default for AppState {
             transcript: Vec::new(),
             transcript_kinds: Vec::new(),
             assist_preamble_shown: false,
+            assist_offer: None,
             vocab: crate::vocab::VocabState::default(),
             reveal: None,
             probe: crate::probe::ShadowProbe::default(),
@@ -5329,6 +5338,10 @@ impl AppState {
         // the words on screen would otherwise stay lit against a world that had
         // moved on.
         self.reveal = None;
+        // Same reasoning, for the same shape of fact (SQ-1552): the structured
+        // offer describes the assist line the PREVIOUS turn printed, and a new
+        // turn starting is what makes it stale.
+        self.assist_offer = None;
     }
 
     pub fn push_assist(&mut self, assist: &crate::assist::Assist) {
@@ -5348,6 +5361,11 @@ impl AppState {
         for line in assist.lines() {
             self.push_transcript_internal_styled(&line, TranscriptKind::Assist, style);
         }
+        // The structured half of THIS line (SQ-1552), overwriting whatever the
+        // intro block above may have implied — the intro carries no offer of its
+        // own, and what a host wants after driving a turn is what the turn's own
+        // assist said, not the once-per-session chrome above it.
+        self.assist_offer = Some(assist.offer());
     }
 
     /// Surface an app-internal `[…]` bracketed notice as a top-right toast

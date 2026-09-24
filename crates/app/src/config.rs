@@ -890,6 +890,19 @@ impl CommandBandConfig {
             self.quick.clone()
         }
     }
+
+    /// [`Self::resolve_quick`], but letting this ONE story's own override
+    /// (SQ-1552) win over the global list when it set a non-empty one —
+    /// exactly the precedence every other per-game setting follows: per-game,
+    /// else global, else the built-in default. The TUI has no UI for setting
+    /// the override; this is the read side of the data path a headless host
+    /// uses to give a player per-game quick words that actually persist.
+    pub fn resolve_quick_for(&self, game_dir: &std::path::Path) -> Vec<String> {
+        match crate::styles::read_per_game_quick(game_dir) {
+            Some(q) if !q.is_empty() => q,
+            _ => self.resolve_quick(),
+        }
+    }
 }
 
 // ── Config ────────────────────────────────────────────────────────────────────
@@ -3063,6 +3076,38 @@ mod tests {
         assert_eq!(cfg.command_band.height, 10);
         assert!(cfg.command_band.auto_open);
         assert_eq!(cfg.command_band.resolve_quick(), vec!["n".to_string(), "s".to_string()]);
+    }
+
+    /// A per-game `quick` override wins over the global list for the game that
+    /// set it, and only that game — a story with no sidecar of its own still
+    /// gets the global/built-in list (SQ-1552).
+    #[test]
+    fn resolve_quick_for_prefers_the_per_game_override_for_that_game_only() {
+        let dir = crate::scratch_dir("cmdband-quick-for");
+        let other = crate::scratch_dir("cmdband-quick-for-other");
+        let mut cfg = CommandBandConfig::default();
+        cfg.quick = vec!["n".to_string(), "s".to_string()];
+
+        // No sidecar for either dir yet: both fall back to the global list.
+        assert_eq!(cfg.resolve_quick_for(&dir), vec!["n".to_string(), "s".to_string()]);
+        assert_eq!(cfg.resolve_quick_for(&other), vec!["n".to_string(), "s".to_string()]);
+
+        // Set an override for `dir` only.
+        crate::styles::write_per_game_quick(&dir, Some(vec!["xyzzy".to_string()])).unwrap();
+        assert_eq!(cfg.resolve_quick_for(&dir), vec!["xyzzy".to_string()], "this game's override wins");
+        assert_eq!(
+            cfg.resolve_quick_for(&other),
+            vec!["n".to_string(), "s".to_string()],
+            "a different game is unaffected"
+        );
+
+        // An explicit empty override reads the same as no override.
+        crate::styles::write_per_game_quick(&dir, Some(Vec::new())).unwrap();
+        assert_eq!(cfg.resolve_quick_for(&dir), vec!["n".to_string(), "s".to_string()]);
+
+        crate::styles::write_per_game_quick(&dir, None).unwrap();
+        let _ = std::fs::remove_dir_all(&dir);
+        let _ = std::fs::remove_dir_all(&other);
     }
 
     /// `verbs` REPLACES the whole column; `extra_verbs` is additive. Both keep

@@ -97,7 +97,7 @@ pub fn refresh_band_data(state: &mut AppState, session: &dyn crate::engine::Engi
     let had_band = state.overlays.command_band.is_some();
     if !had_band {
         let (table, _warnings) = state.config.resolve_band_verbs();
-        let quick = state.config.command_band.resolve_quick();
+        let quick = state.config.command_band.resolve_quick_for(&state.game_dir);
         let mut band = crate::state::CommandBandState::new(table, quick);
         band.sync_from_input(&state.input.value);
         state.overlays.command_band = Some(band);

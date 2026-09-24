@@ -209,6 +209,24 @@ fn a_suggestion_that_works_here_is_shown_as_a_recommendation() {
     assert_eq!(p.assists(), vec!["try instead — light"]);
 }
 
+/// SQ-1552: the same canonical case, but reading the structured offer off
+/// `state.assist_offer` — the VETTED kind, the unknown word `illuminate`, and
+/// a fill command with `illuminate` replaced by `light` and nothing else
+/// disturbed.
+#[test]
+fn the_vetted_offer_carries_the_word_and_a_correct_fill_command() {
+    let Some(mut p) = Play::zork1() else { return };
+    p.walk(TO_THE_LAMP);
+    p.turn("illuminate lamp");
+    let offer = p.state.assist_offer.clone().expect("a vetted offer was pushed");
+    assert_eq!(offer.kind, app::assist::OfferKind::VettedOffer);
+    assert_eq!(offer.word.as_deref(), Some("illuminate"));
+    assert_eq!(
+        offer.picks,
+        vec![app::assist::OfferPick { word: "light".to_string(), command: "light lamp".to_string() }]
+    );
+}
+
 /// Both halves in one session, which is the shape a player actually meets: the
 /// suggestion is refused at the door, and the SAME word is offered five rooms
 /// later. A dropped offer must therefore not spend the word's one-per-session

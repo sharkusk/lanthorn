@@ -1178,13 +1178,50 @@ impl VocabState {
 
 /// Split a typed command the way a parser would: words, lowercased, with the
 /// punctuation a player sprinkles on stripped off.
-fn words_of(cmd: &str) -> Vec<String> {
+///
+/// `pub` (SQ-1552) so a headless host building a structured offer's fill
+/// commands by hand — rather than reading [`crate::assist::Offer`] off the
+/// assist lanthorn already pushed — does not have to reimplement this
+/// tokenisation to find the word an offer is about.
+pub fn words_of(cmd: &str) -> Vec<String> {
     cmd.split(|c: char| c.is_whitespace() || c == ',' || c == '.' || c == ';')
         .map(|w| {
             w.trim_matches(|c: char| !c.is_alphanumeric() && c != '-' && c != '\'').to_lowercase()
         })
         .filter(|w| !w.is_empty())
         .collect()
+}
+
+/// The command a click on `pick` should put in the input box (SQ-1552):
+/// `words` with the word at `at` — the one this story's dictionary rejected —
+/// replaced by `pick`, rejoined with spaces. The same construction
+/// [`vetting_plan`] uses to build the candidate it sends the shadow probe, so
+/// an offer's fill and what was actually vetted can never say different
+/// things about what "picking this word" means.
+fn substitute_word(words: &[String], at: usize, pick: &str) -> String {
+    let mut w = words.to_vec();
+    w[at] = pick.to_string();
+    w.join(" ")
+}
+
+/// Build the structured half of a vocabulary offer (SQ-1552): the unknown
+/// word, and each candidate paired with the command a click on it should
+/// fill the input with (via [`substitute_word`]).
+fn build_offer(
+    kind: crate::assist::OfferKind,
+    word: &str,
+    words: &[String],
+    at: usize,
+    picks: &[String],
+) -> crate::assist::Offer {
+    crate::assist::Offer {
+        kind,
+        word: Some(word.to_string()),
+        picks: picks
+            .iter()
+            .map(|p| crate::assist::OfferPick { word: p.clone(), command: substitute_word(words, at, p) })
+            .collect(),
+    }
 }
 
 // ── The vetting, and the claim it earns ─────────────────────────────────────
@@ -1400,6 +1437,13 @@ pub struct PendingOffer {
     /// How many commands were sent. A run that came back shorter left the tail
     /// unjudged, and a partly-vetted offer cannot make the vetted claim.
     commands: usize,
+    /// The typed command's words, tokenised the way [`words_of`] left them.
+    /// Kept so the answer, once it arrives, can say what a click on each
+    /// surviving pick should fill the input with ([`build_offer`], SQ-1552) —
+    /// the same words [`vetting_plan`] built the candidates from.
+    words: Vec<String>,
+    /// Which of `words` was the unknown one.
+    at: usize,
 }
 
 /// Lay out the commands that would vet `picks`, and the plan for reading the
@@ -1531,8 +1575,10 @@ fn judge(run: &crate::probe::ProbeRun, offer: &PendingOffer) -> Option<Vec<Strin
 /// What one call to [`offer_vocabulary`] decided.
 enum Outcome {
     /// Say this now: nothing was asked of the shadow, so the claim is the modest
-    /// one the dictionary alone supports.
-    Now(String),
+    /// one the dictionary alone supports. Carries the structured offer
+    /// alongside the text (SQ-1552) — built once, here, from the same
+    /// `words`/`at`/`picks` the text was.
+    Now(String, crate::assist::Offer),
     /// The shadow was asked. Nothing is said until [`poll_vocabulary_offer`]
     /// collects the answer — or drops it, if the player has moved on.
     Asked(PendingOffer),
@@ -1634,13 +1680,17 @@ pub fn offer_vocabulary(state: &mut AppState, engine: &dyn Engine, cmd: &str, pr
                     picks: picks.clone(),
                     plan,
                     commands: cmds.len(),
+                    words: words.clone(),
+                    at,
                 })
             });
         Some(match asked {
             Some(pending) => Outcome::Asked(pending),
             None => {
                 vocab.mark_offered(word);
-                Outcome::Now(format!("{LEAD_DICTIONARY}{}", picks.join(" · ")))
+                let offer =
+                    build_offer(crate::assist::OfferKind::VocabularyOffer, word, &words, at, &picks);
+                Outcome::Now(format!("{LEAD_DICTIONARY}{}", picks.join(" · ")), offer)
             }
         })
     })();
@@ -1649,7 +1699,9 @@ pub fn offer_vocabulary(state: &mut AppState, engine: &dyn Engine, cmd: &str, pr
     state.transcript = prose;
 
     match outcome {
-        Some(Outcome::Now(line)) => state.push_assist(&crate::assist::Assist::help(line)),
+        Some(Outcome::Now(line, offer)) => {
+            state.push_assist(&crate::assist::Assist::help(line).with_offer(offer))
+        }
         Some(Outcome::Asked(pending)) => state.vocab_pending = Some(pending),
         None => {}
     }
@@ -1751,9 +1803,9 @@ fn deliver(state: &mut AppState, answer: crate::probe::Answer) -> bool {
         return false; // stale — the player typed again
     }
     let vetted = answer.run.as_ref().and_then(|run| judge(run, &pending));
-    let (picks, lead) = match vetted {
-        Some(kept) => (kept, LEAD_VETTED),
-        None => (pending.picks, LEAD_DICTIONARY),
+    let (picks, lead, kind) = match vetted {
+        Some(kept) => (kept, LEAD_VETTED, crate::assist::OfferKind::VettedOffer),
+        None => (pending.picks, LEAD_DICTIONARY, crate::assist::OfferKind::VocabularyOffer),
     };
     // Vetting can empty the list, and then there is nothing to recommend.
     if picks.is_empty() {
@@ -1761,7 +1813,10 @@ fn deliver(state: &mut AppState, answer: crate::probe::Answer) -> bool {
     }
     state.vocab.mark_offered(&pending.word);
     let before = state.transcript.len();
-    state.push_assist(&crate::assist::Assist::help(format!("{lead}{}", picks.join(" · "))));
+    let offer = build_offer(kind, &pending.word, &pending.words, pending.at, &picks);
+    state.push_assist(
+        &crate::assist::Assist::help(format!("{lead}{}", picks.join(" · "))).with_offer(offer),
+    );
     state.transcript.len() != before
 }
 
@@ -2396,6 +2451,8 @@ mod tests {
             picks: vec!["examine".into(), "describe".into(), "watch".into()],
             plan: vec![(3, Some((1, 2)), None), (6, Some((4, 5)), None), (9, Some((7, 8)), None)],
             commands: 10,
+            words: vec!["inspect".to_string(), "hinged".to_string()],
+            at: 0,
         };
         assert_eq!(
             judge(&run, &offer),
