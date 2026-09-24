@@ -86,27 +86,19 @@ fn recenter_on_room(state: &mut AppState, mapper: &Mapper, rid: mapper::graph::R
 }
 
 /// Whether the game echoed the just-submitted command itself at the start of its
-/// turn output (e.g. CounterfeitMonkey prints the command back in bold). Compared
-/// case-insensitively against the leading non-whitespace text, and only when the
-/// echo ends at a boundary (so `go` doesn't match a response starting `gospel`),
-/// so we don't add a second, redundant echo. An empty command never matches.
+/// turn output (e.g. CounterfeitMonkey prints the command back in bold). A genuine
+/// self-echo repeats the WHOLE command as its own first line — compared
+/// case-insensitively — not merely a leading word: `north` from West of House
+/// prints the room heading "North of House", which starts with "north" but is
+/// not an echo of it, and treating it as one swallowed the player's typed command
+/// from the transcript entirely (SQ-1546). An empty command never matches.
 pub fn game_echoes_command(transcript: &str, cmd: &str) -> bool {
     let cmd = cmd.trim();
     if cmd.is_empty() {
         return false;
     }
-    let mut head = transcript.trim_start().chars();
-    for cc in cmd.chars() {
-        match head.next() {
-            Some(hc) if hc.eq_ignore_ascii_case(&cc) => {}
-            _ => return false,
-        }
-    }
-    // The command must be followed by a boundary, not more word characters.
-    match head.next() {
-        None => true,
-        Some(c) => !c.is_alphanumeric(),
-    }
+    let first_line = transcript.trim_start().split('\n').next().unwrap_or("");
+    first_line.trim_end().eq_ignore_ascii_case(cmd)
 }
 
 /// Format a Unix timestamp (seconds since epoch) as an RFC3339 UTC string.

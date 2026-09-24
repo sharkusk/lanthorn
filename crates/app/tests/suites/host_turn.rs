@@ -139,6 +139,62 @@ fn a_scripted_zork_walk_builds_the_transcript_the_map_and_the_death_watch() {
     let _ = std::fs::remove_dir_all(&home);
 }
 
+/// SQ-1546: `north` from West of House prints the room heading "North of House",
+/// which STARTS WITH the command word "north" but is not the game echoing the
+/// command back — `game_echoes_command` used to treat any output starting with
+/// the command as a self-echo, so the host wrongly suppressed its own echo and
+/// the typed command never appeared in the transcript at all. It must still show
+/// up (appended onto the game's inline `>` prompt line, since Zork I is not a
+/// self-echoing game): "the command echo line is present" per the quest's
+/// acceptance criteria.
+#[test]
+fn a_room_heading_starting_with_the_command_word_does_not_swallow_the_echo() {
+    let story = fixture_path("zork1-r88-s840726.z3");
+    if !story.is_file() {
+        eprintln!("SKIP: {} absent", story.display());
+        return;
+    }
+    let home = app::scratch_dir("host-turn-echo");
+    let mut b = boot(story, &home);
+    let mut tidy = 0u32;
+    // Premise: the boot's own intro text is the last transcript line, ending in
+    // the game's inline `>` prompt, so the echo will be appended onto it.
+    assert!(b.state.last_transcript_line_is_story(), "premise: the intro ends on the game's own prompt line");
+    let prompt_idx = b.state.transcript.len() - 1;
+    let prompt_before = b.state.transcript[prompt_idx].clone();
+    assert!(
+        !prompt_before.to_lowercase().contains("north"),
+        "premise: the prompt line carries no 'north' yet: {prompt_before:?}"
+    );
+
+    let out = command(&mut b, "north", &mut tidy);
+    assert!(!out.quit);
+
+    // The command echo must land as the command appended verbatim onto the
+    // prompt line — exactly what `append_to_last_transcript_line` does when
+    // `game_echoes_command` correctly says Zork I did NOT self-echo. Under the
+    // old too-loose heuristic, `game_echoes_command` wrongly said the room
+    // heading (which merely starts with "north") WAS a self-echo, so the host
+    // added nothing of its own here, and the game's first output line — the
+    // room heading — got merged onto this same prompt line instead, producing
+    // ">North of House" with no distinct command echo at all.
+    let prompt_after = b.state.transcript[prompt_idx].clone();
+    assert_eq!(
+        prompt_after,
+        format!("{prompt_before}north"),
+        "the prompt line must carry exactly the typed command appended to it, \
+         not the game's room-heading output merged onto it"
+    );
+    // And the room heading is its OWN transcript line, not folded into the prompt.
+    assert_eq!(
+        b.state.transcript.get(prompt_idx + 1).map(String::as_str),
+        Some("North of House"),
+        "the room heading follows as its own line: {:?}",
+        b.state.transcript
+    );
+    let _ = std::fs::remove_dir_all(&home);
+}
+
 // ── Sound: a recording sink, and a finish routine reported back ────────────────
 
 #[derive(Debug, Clone, PartialEq)]

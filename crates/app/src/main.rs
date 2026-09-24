@@ -5055,6 +5055,12 @@ mod tests {
         assert!(!game_echoes_command("anything", ""), "empty command never matches");
         // Boundary: a command must not match a longer word it is a prefix of.
         assert!(!game_echoes_command("gospel music plays.", "go"));
+        // SQ-1546: a room heading that merely STARTS WITH the command word (Zork
+        // I's "North of House" after `north`) is not a self-echo — only a first
+        // line that IS the command, not one that merely begins with it, counts.
+        assert!(!game_echoes_command("North of House\nYou are facing the north side of a white house.", "north"));
+        // Trailing whitespace before the newline still counts as a genuine echo.
+        assert!(game_echoes_command("look  \nA room.", "look"), "trailing whitespace on the echoed line is ok");
     }
 
     #[test]
