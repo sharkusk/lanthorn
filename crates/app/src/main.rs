@@ -2127,12 +2127,13 @@ fn run_event_loop(boot: startup::BootResult, launched_from_library: bool) -> Run
         app::render::inventory_dock::refresh_inventory_click_words(&mut state, &*session);
         needs_redraw |= loop_tick::expire_sound_and_settle_dock(&mut state);
         // One collector for the shared shadow, routing each answer to whoever
-        // asked for it (SQ-1124, SQ-0785): a vocabulary offer lands above the
-        // prompt like any other assist and drops silently if the player has typed
-        // again, while a return-path answer goes on the map whenever it arrives —
-        // it is a fact about the world, not about this turn. The same call hands
-        // the return search its next question.
-        needs_redraw |= loop_tick::poll_shadow_answers(&mut state, &mut mapper, &mut bg_tidy_counter);
+        // asked for it (SQ-1124, SQ-0785, SQ-1548): a vocabulary offer lands above
+        // the prompt like any other assist and drops silently if the player has
+        // typed again, while a return-path answer goes on the map whenever it
+        // arrives — it is a fact about the world, not about this turn. The same
+        // call hands the return search its next question. Lives in the library
+        // now (`host::probe::poll`) so a headless host collects these too.
+        needs_redraw |= app::host::probe::poll(&mut state, &mut mapper, &mut bg_tidy_counter);
 
         // Draw — unless we're mid-drain of an input burst (skip_draw), in which
         // case the deferred redraw happens once the queue empties. last_panes and

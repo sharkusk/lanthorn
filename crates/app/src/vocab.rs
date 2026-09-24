@@ -1683,11 +1683,11 @@ pub fn poll_vocabulary_offer(state: &mut AppState) -> bool {
 /// True when `token` answers a question THIS consumer asked.
 ///
 /// The shadow is shared — [`crate::return_probe`] asks it too (SQ-0785) — and it
-/// hands back one answer at a time with no idea who wanted it. So the event
-/// loop's single collector routes by token
-/// (`loop_tick::poll_shadow_answers`) rather than letting each consumer
-/// poll in turn: a consumer that polls and finds an answer it does not own has
-/// already taken it off the channel, and the one that did want it never sees it.
+/// hands back one answer at a time with no idea who wanted it. So a single
+/// collector routes by token ([`crate::host::probe::poll`], SQ-1548) rather than
+/// letting each consumer poll in turn: a consumer that polls and finds an
+/// answer it does not own has already taken it off the channel, and the one
+/// that did want it never sees it.
 pub fn owns(state: &AppState, token: u64) -> bool {
     state.vocab_pending.as_ref().is_some_and(|p| p.token == token)
 }

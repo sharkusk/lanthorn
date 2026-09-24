@@ -26,6 +26,7 @@ pub mod boot;
 pub mod clock;
 pub mod ingame_io;
 pub mod persist;
+pub mod probe;
 pub mod reset;
 pub mod screen;
 pub mod sound;

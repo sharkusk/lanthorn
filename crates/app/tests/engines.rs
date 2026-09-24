@@ -19,6 +19,8 @@ mod sq1462_hint_echo_contrast;
 
 #[path = "suites/host_boot.rs"]
 mod host_boot;
+#[path = "suites/host_probe.rs"]
+mod host_probe;
 #[path = "suites/host_session.rs"]
 mod host_session;
 #[path = "suites/host_turn.rs"]

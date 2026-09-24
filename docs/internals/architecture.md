@@ -203,6 +203,16 @@ caller of it: there is one copy of each rule.
   `pending_file_prompt` / `answer_file_prompt` answer the game's own
   SAVE/RESTORE/`create_by_prompt` with a name or a cancel, for a host that draws
   none of the dialogs. `tests/suites/host_session.rs` covers each.
+- **Shadow-probe answers** (`host::probe::poll`, SQ-1548) — `host::turn` arms the
+  vocabulary offer, return-probe and random-exit probes every turn, but nothing
+  collects their answers on its own; `poll` is the single collector that routes
+  each one by token (see "The second consumer: the return probe" below) and
+  hands the return search its next question. The TUI calls it once per loop
+  pass exactly where its own `loop_tick::poll_shadow_answers` used to; a
+  headless host calls it on its own tick. Not time-driven — `ShadowProbe::poll`
+  is a nonblocking channel read, so there is no deadline to fold into
+  `host::clock::next_deadline`. `tests/suites/host_probe.rs` covers a vetted
+  offer and a return-probe map edge through the host alone.
 
 ## Three engines, one renderer — and Glk only for Glulx
 
@@ -710,10 +720,12 @@ follows from that.
   and the layer suggestion. `ProbedPassage` carries the three facts as one value
   and deliberately cannot name the outbound passage, which is how reciprocity is
   made unwriteable rather than merely unwritten.
-- **Two consumers, one channel, one collector.** `ShadowProbe::poll` takes
+- **Three consumers, one channel, one collector.** `ShadowProbe::poll` takes
   whatever has arrived without knowing who wanted it, so a consumer polling for
-  itself would sometimes take the other's answer off the channel and drop it.
-  `loop_tick::poll_shadow_answers` collects once and routes by token.
+  itself would sometimes take another's answer off the channel and drop it.
+  `host::probe::poll` (SQ-1548; the TUI's `loop_tick::poll_shadow_answers`
+  before it) collects once and routes by token, so a headless host gets the
+  vetted vocabulary offer and the return-probe / random-exit map edges too.
 
 Measured per attempt, worker time, debug build: Zork I **0.7 ms**, Coloratura
 **4.3 ms**, Counterfeit Monkey **343 ms**. In play the priority order usually
