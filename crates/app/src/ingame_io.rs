@@ -12,7 +12,7 @@ use app::state::{AppState, SavesState};
 use mapper::mapper::Mapper;
 use ratatui::layout::Rect;
 
-use crate::engine_helpers::zvm_session_opt;
+use app::engine_helpers::zvm_session_opt;
 use crate::{combined_saves, turn};
 
 /// Resolve the confirm-delete dialog for the selected save. `confirmed` deletes
@@ -112,11 +112,11 @@ pub(crate) fn handle_save_as(
     // `Meta::trigger` is what records which convention they follow.
     let trigger = if ingame { SaveTrigger::Ingame } else { SaveTrigger::HostState };
     let save = app::persist_files::game_save_bytes(&*session, trigger);
-    let (location, score) = crate::engine_helpers::save_summary(&*session, state);
+    let (location, score) = app::engine_helpers::save_summary(&*session, state);
     // SQ-0588: the display list travels with every host save, not just the
     // auto-save paths — an archive written without it restores art that can never
     // be recoloured.
-    let (v6_pics, v6_display, v6_ground, v6_diags) = crate::engine_helpers::v6_save_payload(&mut *session);
+    let (v6_pics, v6_display, v6_ground, v6_diags) = app::engine_helpers::v6_save_payload(&mut *session);
     for d in &v6_diags { state.note_v6_save(d); }
     let result = save_named(dir, ifid, &buf, trigger, mapper, &save, zvm_session_opt(&*session).map(|z| &z.machine.screen), &v6_pics, v6_display.as_ref(), v6_ground.as_deref(), session.aux_data(), state.turns, location, score, &app::archive::SessionRecord::of(state));
     match result {
@@ -573,7 +573,7 @@ mod tests {
 
     #[test]
     fn host_load_dispatches_on_the_trigger_not_the_extension() {
-        use crate::engine_helpers::{restore_from_file, RestoreOutcome};
+        use app::engine_helpers::{restore_from_file, RestoreOutcome};
 
         let dir = temp_dir("host-load");
         let mut mapper = mapper_with_room();

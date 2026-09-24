@@ -76,12 +76,14 @@ pub mod debug_panel;
 /// still reaches it.
 pub use cli_host::disk_set;
 pub mod engine;
+pub mod engine_helpers;
 pub mod native_font;
 pub mod garglk_ini;
 pub mod glk_backend;
 pub mod glulx_debug;
 pub mod glulx_roomlock;
 pub mod glulx_session;
+pub mod host;
 pub mod graphics;
 pub mod inline_image;
 pub mod inventory;

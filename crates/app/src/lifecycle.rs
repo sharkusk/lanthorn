@@ -9,7 +9,7 @@ use mapper::mapper::Mapper;
 use app::engine::Engine;
 use app::state::AppState;
 
-use crate::engine_helpers::zvm_session_opt;
+use app::engine_helpers::zvm_session_opt;
 use crate::format_rfc3339;
 
 /// Save on exit ONLY when auto_save is enabled. With auto_save off (the default),
@@ -45,7 +45,7 @@ pub(crate) fn exit_auto_save(
     // this one and overwrite the exit save with a stale turn, or the two
     // could interleave onto the file. See `archive_worker::ArchiveWorker::flush`.
     state.archive_worker.flush();
-    let (location, score) = crate::engine_helpers::save_summary(session, state);
+    let (location, score) = app::engine_helpers::save_summary(session, state);
     let exit_meta = app::archive::Meta {
         format_version: app::archive::CURRENT_FORMAT_VERSION,
         ifid: Some(ifid.to_string()),
@@ -61,7 +61,7 @@ pub(crate) fn exit_auto_save(
         score,
         trigger: app::archive::SaveTrigger::HostState,
     };
-    let (v6_pics, v6_display, v6_ground, v6_diags) = crate::engine_helpers::v6_save_payload(session);
+    let (v6_pics, v6_display, v6_ground, v6_diags) = app::engine_helpers::v6_save_payload(session);
     for d in &v6_diags { state.note_v6_save(d); }
     match app::archive::save_archive_meta_pics(arc_file, mapper, &session.save_state(), zvm_session_opt(session).map(|z| &z.machine.screen), session.aux_data(), exit_meta, &app::archive::SessionRecord::of(state), &v6_pics, v6_display.as_ref(), v6_ground.as_deref()) {
         Ok(()) => {
@@ -153,7 +153,7 @@ pub(crate) fn quit_dialog_save(
     // See the matching comment in `exit_auto_save` (SQ-1184): this writes the
     // same path a background per-turn auto-save may still be catching up on.
     state.archive_worker.flush();
-    let (location, score) = crate::engine_helpers::save_summary(session, state);
+    let (location, score) = app::engine_helpers::save_summary(session, state);
     let meta = app::archive::Meta {
         format_version: app::archive::CURRENT_FORMAT_VERSION,
         ifid: Some(ifid.to_string()),
@@ -169,7 +169,7 @@ pub(crate) fn quit_dialog_save(
         score,
         trigger: app::archive::SaveTrigger::HostState,
     };
-    let (v6_pics, v6_display, v6_ground, v6_diags) = crate::engine_helpers::v6_save_payload(session);
+    let (v6_pics, v6_display, v6_ground, v6_diags) = app::engine_helpers::v6_save_payload(session);
     for d in &v6_diags { state.note_v6_save(d); }
     match app::archive::save_archive_meta_pics(arc_file, mapper, &session.save_state(), zvm_session_opt(session).map(|z| &z.machine.screen), session.aux_data(), meta, &app::archive::SessionRecord::of(state), &v6_pics, v6_display.as_ref(), v6_ground.as_deref()) {
         Ok(()) => None,

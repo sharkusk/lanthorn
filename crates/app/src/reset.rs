@@ -10,8 +10,8 @@ use app::session::{apply_turn, GameSession, TurnResult};
 use app::state::AppState;
 use mapper::mapper::Mapper;
 
-use crate::engine_helpers::zvm_session_mut;
-use crate::resolve_pict_blorb;
+use app::engine_helpers::zvm_session_mut;
+use app::host::resolve_pict_blorb;
 
 pub(crate) fn reset_game(
     session: &mut dyn Engine,
@@ -468,7 +468,7 @@ mod tests {
         .expect("Beyond Zork boots off the DOS medium");
         let mut engine: Box<dyn app::engine::Engine> = Box::new(s);
         assert_eq!(
-            crate::engine_helpers::zvm_session_mut(&mut *engine).machine.mem.read_byte(0x1e),
+            app::engine_helpers::zvm_session_mut(&mut *engine).machine.mem.read_byte(0x1e),
             6,
             "launch: header $1E is the IBM PC",
         );
@@ -479,7 +479,7 @@ mod tests {
             std::path::Path::new(""), false, false,
         );
         assert_eq!(
-            crate::engine_helpers::zvm_session_mut(&mut *engine).machine.mem.read_byte(0x1e),
+            app::engine_helpers::zvm_session_mut(&mut *engine).machine.mem.read_byte(0x1e),
             6,
             "restart: and so is it after @restart — not zvm's DECSystem-20 fallback",
         );

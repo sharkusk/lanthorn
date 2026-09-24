@@ -143,6 +143,28 @@ load-bearing rather than incidental, so the guard comes in two flavours and
 
 [`HostMode`]: ../../crates/cli-host/src/mode.rs
 
+## The session host: the rules without the terminal
+
+Booting a story, applying a turn, firing a game clock and saving a resume point
+are rules about the GAME, not about the terminal — and a host that is not a
+terminal (a GUI, a network server, a mobile binding) needs exactly the same ones.
+They used to live in the binary's own modules (`startup.rs`, `turn.rs`, …),
+written against `ratatui` and `crossterm`, so nothing else could reach them
+without copying them. `app::host` is where they live now, and the TUI is one
+caller of it: there is one copy of each rule.
+
+- **Boot** (`host::boot_story`, SQ-1537) — mount, profile, palette, per-game
+  overrides, engine construction, resume archive, banner and seed turn, returning
+  a `BootedStory` (engine, `Mapper`, seeded `AppState`, paths). What only a
+  terminal can answer — the image-protocol picker, the OSC 10/11 colours, the
+  terminal size — arrives as `TerminalFacts`, which a headless host leaves at its
+  default; the lines the TUI prints before the alternate screen, and its loading
+  spinner, go through `BootHooks`; a failure is a `BootError`, not a process exit.
+  `startup::boot_story` probes the terminal, calls it, and then does the
+  terminal-only half (raw mode, the alternate screen, the `Terminal`, the
+  keep-it prompt for a fetched story, printing a story that quit at boot).
+  `tests/suites/host_boot.rs` boots all three engines with no terminal.
+
 ## Three engines, one renderer — and Glk only for Glulx
 
 All three VMs implement one `Engine` trait whose `screen()` returns an

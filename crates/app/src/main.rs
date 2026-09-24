@@ -45,7 +45,6 @@ use app::render::hintbar::{hint_bar, ANIM_HINTS, GAME_HINTS};
 use app::slash;
 use app::state::{AppState, FbMode, FileBrowserState, Focus, Layout, SavesState};
 
-mod engine_helpers;
 mod ingame_io;
 mod lifecycle;
 mod loop_tick;
@@ -62,7 +61,7 @@ use crate::ingame_io::{
     resolve_ingame_dialog,
 };
 use crate::reset::reset_game;
-use crate::engine_helpers::{
+use app::engine_helpers::{
     apply_archive_state, engine_supports_save, engine_tag, glulx_session_opt_mut, restore_error_msg,
     restore_from_file, zvm_session_mut, zvm_session_opt, zvm_session_opt_mut, RestoreOutcome,
 };
@@ -1661,20 +1660,6 @@ fn abbreviate_home(p: &std::path::Path) -> String {
 /// the first prompt; without this the normal terminal sits frozen and looks hung.
 fn loading_line(name: &str, bytes: usize, frame: char) -> String {
     format!("lanthorn: loading {name} ({:.1} MB) {frame}", bytes as f64 / 1_048_576.0)
-}
-
-/// Format the startup line naming the PRNG seed this launch handed the engine
-/// (SQ-0811). `pinned` is whether it came from the `random_seed` config key.
-///
-/// The unpinned line says how to keep the run, because a fresh seed is the whole
-/// point of the default and a player who has just had a remarkable game has no
-/// other way to ask for it again.
-fn random_seed_line(seed: u32, pinned: bool) -> String {
-    if pinned {
-        format!("random seed {seed} (pinned by random_seed in config.toml)")
-    } else {
-        format!("random seed {seed} (set random_seed = {seed} to replay this run)")
-    }
 }
 
 /// Clear the terminal, and tell the graphics cache that it just lost every image
@@ -4127,7 +4112,7 @@ fn run_event_loop(boot: startup::BootResult, launched_from_library: bool) -> Run
             Action::SaveGame => {
                 // Dead post-unification: keys now route through SlashOutcome::Save. Retained as a no-cost match arm.
                 // Bundle map + game into a single .lanthorn archive, with turn metadata.
-                let (location, score) = crate::engine_helpers::save_summary(&*session, &state);
+                let (location, score) = app::engine_helpers::save_summary(&*session, &state);
                 let meta = app::archive::Meta {
                     format_version: app::archive::CURRENT_FORMAT_VERSION,
                     ifid: Some(ifid.clone()),
@@ -4150,7 +4135,7 @@ fn run_event_loop(boot: startup::BootResult, launched_from_library: bool) -> Run
                 // v6 graphics canvases ride along (Lane P): empty for non-v6
                 // sessions, so the archive layout is unchanged for them.
                 let (v6_pics, v6_display, v6_ground, v6_diags) =
-                    crate::engine_helpers::v6_save_payload(&mut *session);
+                    app::engine_helpers::v6_save_payload(&mut *session);
                 for d in &v6_diags { state.note_v6_save(d); }
                 match app::archive::save_archive_meta_pics(&arc_file, &mapper, &session.save_state(), zvm_session_opt(&*session).map(|z| &z.machine.screen), session.aux_data(), meta, &app::archive::SessionRecord::of(&state), &v6_pics, v6_display.as_ref(), v6_ground.as_deref()) {
                     Ok(()) => {
@@ -4177,9 +4162,9 @@ fn run_event_loop(boot: startup::BootResult, launched_from_library: bool) -> Run
                                     if let Some(z) = zvm_session_opt_mut(&mut *session) { app::session::restore_screen(z, scr); }
                                 }
                                 // v6 graphics canvases (Lane P): no-op for non-v6 archives.
-                                crate::engine_helpers::apply_v6_pictures(&mut *session, &ac);
+                                app::engine_helpers::apply_v6_pictures(&mut *session, &ac);
                                 // Hand Glulx back the room it was saved in (SQ-0523); no-op for zvm.
-                                engine_helpers::seed_resumed_location(&mut *session, &ac.meta);
+                                app::engine_helpers::seed_resumed_location(&mut *session, &ac.meta);
                                 if state.config.aux_storage != app::config::AuxStorage::Global {
                                     session.set_aux_data(ac.aux.clone());
                                 }
@@ -4330,7 +4315,7 @@ fn run_event_loop(boot: startup::BootResult, launched_from_library: bool) -> Run
                                 // the attempt: `resume_restore` reports a refused
                                 // save only as the game's own "Failed.", and the
                                 // guard only ever widens the declared screen.
-                                engine_helpers::note_bare_quetzal_width(&mut *session);
+                                app::engine_helpers::note_bare_quetzal_width(&mut *session);
                             }
                             state.push_notice(&format!("[Game restored from {}]", entry_name));
                             session.resume_restore(Some(&bytes))
@@ -4633,30 +4618,6 @@ fn run_event_loop(boot: startup::BootResult, launched_from_library: bool) -> Run
 // re-seed the mapper with the start room.  When `clear_map` is true, the
 // accumulated map is wiped first (same effect as `/reset map`) so only the
 // start room remains after the re-seed.
-
-/// Resolve the Pict/graphics blorb for a story the same way at launch and
-/// restart — the Glulx and Scott arms of both, where the Z-machine arm builds a
-/// [`app::graphics::PictSource`] instead.
-///
-/// **Through `graphics::resource_blorb`, not `blorb::resolve_resource_blorb`**
-/// (SQ-1085), so the two arms resolve from the same tiers. The bare `blorb`
-/// call knows the filesystem: a self-blorb, a same-stem sidecar, a directory
-/// scan. It does not know about the ZIP a player downloaded the game in — so a
-/// zipped `.gblorb` ran with no pictures and no sounds at all, which is the
-/// worse half of the same defect, since Glulx is the engine whose games most
-/// often ARE one big resource-carrying Blorb.
-///
-/// Nothing else moves: the extra tier only fires when `story_path` is a zip,
-/// and the build-mismatch refusal `graphics::resource_blorb` adds is inert here
-/// — it needs a story mounted off a release disk image with an identifiable
-/// build, which no Glulx or Scott game is.
-fn resolve_pict_blorb(story_path: &std::path::Path, images: bool) -> Option<blorb::Blorb> {
-    if images {
-        app::graphics::resource_blorb(story_path).found.map(|(b, _)| b)
-    } else {
-        None
-    }
-}
 
 // ── Utilities ─────────────────────────────────────────────────────────────────
 
@@ -5578,12 +5539,12 @@ mod tests {
         std::fs::write(&blorb_path, build_sidecar_blorb(&png_bytes())).expect("write sidecar");
 
         assert!(
-            super::resolve_pict_blorb(&ulx_path, true).is_some(),
+            app::host::resolve_pict_blorb(&ulx_path, true).is_some(),
             "sidecar .blorb next to a bare .ulx must resolve (regression: the old \
              bytes-only logic returned None for a non-self-contained story)"
         );
         assert!(
-            super::resolve_pict_blorb(&ulx_path, false).is_none(),
+            app::host::resolve_pict_blorb(&ulx_path, false).is_none(),
             "images disabled must resolve to None regardless of sidecar"
         );
 
@@ -5594,7 +5555,7 @@ mod tests {
         let lone_ulx = no_sidecar_dir.join("lone.ulx");
         std::fs::write(&lone_ulx, &ulx_bytes).expect("write lone.ulx");
         assert!(
-            super::resolve_pict_blorb(&lone_ulx, true).is_none(),
+            app::host::resolve_pict_blorb(&lone_ulx, true).is_none(),
             "no sidecar present must resolve to None"
         );
 
@@ -5682,11 +5643,11 @@ mod tests {
             "the zipped .ulx must load as Glulx",
         );
         // …and the session is handed the artwork that came with it.
-        let blorb = super::resolve_pict_blorb(&zip_path, true)
+        let blorb = app::host::resolve_pict_blorb(&zip_path, true)
             .expect("the Blorb inside the zip must reach the Glulx session");
         assert_eq!(blorb.resources().len(), 1, "its one Pict is indexed");
         assert!(
-            super::resolve_pict_blorb(&zip_path, false).is_none(),
+            app::host::resolve_pict_blorb(&zip_path, false).is_none(),
             "images disabled still resolves to None",
         );
 
@@ -6341,11 +6302,11 @@ mod tests {
     /// (SQ-0811).
     #[test]
     fn the_seed_line_tells_an_unpinned_run_how_to_keep_itself() {
-        let line = super::random_seed_line(20250811, false);
+        let line = app::host::random_seed_line(20250811, false);
         assert!(line.contains("20250811"), "names the seed: {line}");
         assert!(line.contains("random_seed = 20250811"), "spells the config key: {line}");
 
-        let pinned = super::random_seed_line(20250811, true);
+        let pinned = app::host::random_seed_line(20250811, true);
         assert!(pinned.contains("20250811"), "names the seed: {pinned}");
         assert!(pinned.contains("config.toml"), "says where it came from: {pinned}");
     }

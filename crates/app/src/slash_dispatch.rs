@@ -14,7 +14,7 @@ use app::state::{AppState, ExitTarget, Focus, SavesState, TranscriptFilter, Tran
 use mapper::mapper::Mapper;
 use ratatui::layout::Rect;
 
-use crate::engine_helpers::{apply_archive_state, restore_from_file, zvm_session_opt, RestoreOutcome};
+use app::engine_helpers::{apply_archive_state, restore_from_file, zvm_session_opt, RestoreOutcome};
 use crate::reset::reset_game;
 use crate::{
     combined_saves, format_rfc3339, handle_map_export, open_hints, reobserve_location,
@@ -359,9 +359,9 @@ pub(crate) fn dispatch_slash_outcome(
                 // reports "saved" must not race a background write for an
                 // earlier turn onto the same file.
                 state.archive_worker.flush();
-                let (v6_pics, v6_display, v6_ground, v6_diags) = crate::engine_helpers::v6_save_payload(&mut *session);
+                let (v6_pics, v6_display, v6_ground, v6_diags) = app::engine_helpers::v6_save_payload(&mut *session);
                 for d in &v6_diags { state.note_v6_save(d); }
-                let (location, score) = crate::engine_helpers::save_summary(&*session, state);
+                let (location, score) = app::engine_helpers::save_summary(&*session, state);
                 let meta = app::archive::Meta {
                     format_version: app::archive::CURRENT_FORMAT_VERSION,
                     ifid: Some(ifid.to_string()),
@@ -1087,9 +1087,9 @@ pub(crate) fn write_named_save(
 ) -> Result<String, String> {
     // SQ-0588: the display list travels with every host save — an archive
     // written without it restores art that can never be recoloured.
-    let (v6_pics, v6_display, v6_ground, v6_diags) = crate::engine_helpers::v6_save_payload(session);
+    let (v6_pics, v6_display, v6_ground, v6_diags) = app::engine_helpers::v6_save_payload(session);
     for d in &v6_diags { state.note_v6_save(d); }
-    let (location, score) = crate::engine_helpers::save_summary(&*session, state);
+    let (location, score) = app::engine_helpers::save_summary(&*session, state);
     save_named(
         game_dir, ifid, name, app::archive::SaveTrigger::HostState, mapper, &session.save_state(),
         zvm_session_opt(&*session).map(|z| &z.machine.screen), &v6_pics, v6_display.as_ref(),

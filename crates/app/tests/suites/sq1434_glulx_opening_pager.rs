@@ -264,10 +264,12 @@ fn magpie_still_pages_when_the_prologue_really_does_overflow() {
 /// asks that the once names `opening_baseline`.
 #[test]
 fn the_startup_arm_uses_the_opening_baseline() {
+    // The opening-banner arm moved with the rest of the story boot into the
+    // library's `host::boot` (SQ-1537), which the TUI's `startup.rs` calls.
     let src = std::fs::read_to_string(
-        std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("src/startup.rs"),
+        std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("src/host/boot.rs"),
     )
-    .expect("startup.rs is in this crate");
+    .expect("host/boot.rs is in this crate");
     let arms: Vec<&str> = src
         .match_indices("state.pager.arm(")
         .map(|(i, _)| src[i..].lines().next().unwrap_or_default())
@@ -275,7 +277,7 @@ fn the_startup_arm_uses_the_opening_baseline() {
     assert_eq!(
         arms.len(),
         1,
-        "startup.rs should arm the opening-banner pager exactly once; found {arms:?}"
+        "host/boot.rs should arm the opening-banner pager exactly once; found {arms:?}"
     );
     assert!(
         arms[0].contains("opening_baseline"),

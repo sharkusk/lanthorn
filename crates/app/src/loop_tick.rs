@@ -467,7 +467,7 @@ pub(crate) fn poll_tidy_jobs(
 /// `next_deadline`, which is what keeps the poll waking in time and the keyboard
 /// live all the way through. Returns `true` when a frame actually advanced.
 pub(crate) fn poll_picture_pacing(state: &mut AppState, session: &mut dyn Engine) -> bool {
-    let Some(gs) = crate::engine_helpers::zvm_session_opt_mut(session) else {
+    let Some(gs) = app::engine_helpers::zvm_session_opt_mut(session) else {
         // Not a Z-machine engine: no sequence can be in flight, so make sure a
         // stale deadline from a previous session cannot linger.
         state.picture_pace_next = None;
@@ -510,7 +510,7 @@ pub(crate) fn poll_picture_pacing(state: &mut AppState, session: &mut dyn Engine
 /// Returns `true` when frames were dropped (the screen jumps to the final state).
 pub(crate) fn settle_picture_pacing(state: &mut AppState, session: &mut dyn Engine) -> bool {
     state.picture_pace_next = None;
-    crate::engine_helpers::zvm_session_opt_mut(session)
+    app::engine_helpers::zvm_session_opt_mut(session)
         .is_some_and(|gs| gs.settle_paced_pictures())
 }
 
@@ -531,7 +531,7 @@ pub(crate) fn refresh_engine_input(
     // not strand the noun at the prompt. Either way the game has just consumed or
     // cancelled the previous line, so its answer is authoritative and replaces
     // whatever the app was showing. (SQ-0562, SQ-0565)
-    if let Some(text) = crate::engine_helpers::glulx_session_opt_mut(session)
+    if let Some(text) = app::engine_helpers::glulx_session_opt_mut(session)
         .and_then(|gs| gs.take_line_seed())
     {
         if state.input.value != text {
@@ -546,7 +546,7 @@ pub(crate) fn refresh_engine_input(
     // and preserves what it finds there, so a stale buffer made every later button
     // re-insert the FIRST verb — text the player may have already deleted. Written
     // after the seed above so a fresh prefill lands in the buffer too. (SQ-0565)
-    if let Some(gs) = crate::engine_helpers::glulx_session_opt_mut(session) {
+    if let Some(gs) = app::engine_helpers::glulx_session_opt_mut(session) {
         gs.sync_line_input(&state.input.value);
     }
 
@@ -560,7 +560,7 @@ pub(crate) fn refresh_engine_input(
     // in sync afterwards: the whole displayed line is handed back to
     // `Machine::supply_line` as one string when the player submits.
     if let Some(text) =
-        crate::engine_helpers::zvm_session_opt_mut(session).and_then(|gs| gs.take_line_seed())
+        app::engine_helpers::zvm_session_opt_mut(session).and_then(|gs| gs.take_line_seed())
     {
         state.input.clear();
         state.input.insert_str(&text);
@@ -586,7 +586,7 @@ pub(crate) fn refresh_engine_input(
     // this is a no-op for the vast majority of games (regression guard). Timed
     // input is a Z-machine-only concept (ZMSD): `zvm_session_opt` is `None` for
     // a Glulx engine, so the timer never arms there.
-    let timer_interval = crate::engine_helpers::zvm_session_opt(session)
+    let timer_interval = app::engine_helpers::zvm_session_opt(session)
         .and_then(|s| s.pending_timeout())
         .map(|(t, _)| Duration::from_millis(t as u64 * 100));
     let should_arm = state.config.honor_timed_input
@@ -604,7 +604,7 @@ pub(crate) fn refresh_engine_input(
     // when a Glulx game has requested a timer interval and no overlay covers
     // the pane; uses the same arm-once semantics (`next_input_deadline`) so the
     // deadline holds steady until it fires (the fire path below re-arms fresh).
-    let glk_timer_interval = crate::engine_helpers::glulx_session_opt(session).and_then(|s| s.timer_interval());
+    let glk_timer_interval = app::engine_helpers::glulx_session_opt(session).and_then(|s| s.timer_interval());
     let should_arm_glk_timer = !state.any_overlay_open() && glk_timer_interval.is_some();
     state.glulx_timer_next_fire = crate::turn::next_input_deadline(
         state.glulx_timer_next_fire,

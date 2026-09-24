@@ -12,12 +12,13 @@ use ratatui::layout::Rect;
 
 use app::archive::load_archive;
 use app::engine::Engine;
+use app::host::{flush_screen_trace, flush_v6_trace};
 use app::tidy::{cleanup_overlaps_layer_silent, tidy_layer_silent};
 use app::session::{apply_turn, TurnResult};
 use app::state::{AppState, SoundPulse, TidyJob, TidyKind, TranscriptKind};
 use app::storage::default_state_path;
 
-use crate::engine_helpers::{restore_error_msg, zvm_session_opt, zvm_session_opt_mut};
+use app::engine_helpers::{restore_error_msg, zvm_session_opt, zvm_session_opt_mut};
 use crate::ingame_io::{open_filename_modal, open_ingame_saves};
 use crate::{
     format_rfc3339, game_echoes_command, map_pane_dims, reobserve_location, should_bg_tidy,
@@ -168,7 +169,7 @@ pub(crate) fn finish_command_turn(
     // back the rooms mapped during the learning window; re-key them so they are
     // the same nodes afterwards instead of duplicates the player walks back into.
     // Empty on every other turn, and always empty for the Z-machine.
-    if let Some(g) = crate::engine_helpers::glulx_session_opt_mut(&mut *session) {
+    if let Some(g) = app::engine_helpers::glulx_session_opt_mut(&mut *session) {
         for (name, addr) in g.take_room_remap() {
             let old_id = app::roomid::synthetic_room_id(&name);
             let new_id = app::roomid::glulx_room_id(addr);
@@ -335,7 +336,7 @@ pub(crate) fn finish_command_turn(
     // and raise the game-over dialog (the final message stays in the transcript
     // behind it). Every other engine keeps exiting on a clean quit.
     // (`should_exit` was computed above, before bookkeeping — see there.)
-    let is_scott = crate::engine_helpers::engine_tag(session) == "scott";
+    let is_scott = app::engine_helpers::engine_tag(session) == "scott";
 
     // SQ-0439: the map may have something to say about the move just made — that a set of rooms
     // wants a layer of its own. Deliberately at the END of the turn and never mid-one: the two
@@ -555,7 +556,7 @@ fn post_turn_bookkeeping(
     // race the exit path's clearing write — a background write that lands
     // AFTER it would silently put the resume point right back.
     if state.config.auto_save && !state.game_ended {
-        let (location, score) = crate::engine_helpers::save_summary(session, state);
+        let (location, score) = app::engine_helpers::save_summary(session, state);
         let meta = app::archive::Meta {
             format_version: app::archive::CURRENT_FORMAT_VERSION,
             ifid: Some(ifid.to_string()),
@@ -574,7 +575,7 @@ fn post_turn_bookkeeping(
         // v6 graphics canvases ride along so a resumed v6 story's pictures redraw
         // (SQ-0516); empty for non-v6 sessions, leaving the archive layout unchanged.
         // Must run here, on the main thread: it needs `&mut dyn Engine`.
-        let (v6_pics, v6_display, v6_ground, v6_diags) = crate::engine_helpers::v6_save_payload(session);
+        let (v6_pics, v6_display, v6_ground, v6_diags) = app::engine_helpers::v6_save_payload(session);
         for d in &v6_diags { state.note_v6_save(d); }
         // The same turn snapshot history and the return probe read (SQ-1178):
         // the word refreshers and inventory tracking above read through
@@ -594,29 +595,6 @@ fn post_turn_bookkeeping(
             ground: v6_ground,
         };
         state.archive_worker.enqueue(job);
-    }
-}
-
-/// Drain the engine's `screen` trace and, when `on`, append it to trace.log.
-/// Always drains (so the buffer never grows while the section is off between a
-/// runtime toggle). (trace feature)
-pub(crate) fn flush_screen_trace(user_dir: &std::path::Path, session: &mut dyn Engine, on: bool) {
-    let lines = session.take_screen_trace();
-    if on {
-        app::trace::write(user_dir, app::trace::Section::Screen, &lines);
-    }
-}
-
-/// When `on` and the story is v6, append this turn's `v6` window/picture-canvas
-/// state snapshot to trace.log. Unlike `flush_screen_trace`, there is no buffer
-/// to drain — the snapshot reads live state directly — so this is skipped
-/// entirely (no snapshot built) when the section is off. (trace feature)
-pub(crate) fn flush_v6_trace(user_dir: &std::path::Path, session: &mut dyn Engine, on: bool) {
-    if !on {
-        return;
-    }
-    if let Some(lines) = session.v6_snapshot() {
-        app::trace::write(user_dir, app::trace::Section::V6, &lines);
     }
 }
 
@@ -773,18 +751,18 @@ pub(crate) fn apply_launch_resume(
                 // archived palette when there is one (SQ-0588), else from canvas
                 // PNGs. Ahead of the map move below, which consumes `ac` in part.
                 // No-op for non-v6 archives and for Glulx (SQ-0516).
-                crate::engine_helpers::apply_v6_pictures(&mut *session, &ac);
+                app::engine_helpers::apply_v6_pictures(&mut *session, &ac);
                 *mapper = ac.mapper;
                 // Restore the turn counter from the same archive the map came from.
                 // The launch-resume stash omits it, so without this the count would
                 // reset to 0 on resume (SQ-0260) — mirrors the interactive restore.
                 state.turns = ac.meta.turns;
                 // Hand Glulx back the room it was saved in (SQ-0523); no-op for zvm.
-                crate::engine_helpers::seed_resumed_location(&mut *session, &ac.meta);
+                app::engine_helpers::seed_resumed_location(&mut *session, &ac.meta);
                 resumed_images = ac.transcript_images;
                 restore_degradation = Some(app::archive::RestoreDegradation::from_format_version(
                     ac.meta.format_version,
-                    crate::engine_helpers::is_v6_session(&*session),
+                    app::engine_helpers::is_v6_session(&*session),
                 ));
             }
             // Reinstate the saved screen too (mirrors the auto-load path, zvm-only),
@@ -815,7 +793,7 @@ pub(crate) fn apply_launch_resume(
             // After `state.transcript = lines` above, not before: this line must
             // survive as the last one on screen (SQ-1410).
             if let Some(degradation) = restore_degradation {
-                crate::engine_helpers::push_restore_degradation_notice(state, degradation);
+                app::engine_helpers::push_restore_degradation_notice(state, degradation);
             }
         }
         Err(e) => {

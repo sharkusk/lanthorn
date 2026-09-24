@@ -787,10 +787,12 @@ fn the_raster_composite_and_the_floats_take_the_same_page_as_the_ring() {
 #[test]
 fn the_cards_pair_is_settled_before_the_story_loads() {
     let root = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../..");
-    let startup = std::fs::read_to_string(root.join("crates/app/src/startup.rs"))
-        .expect("startup.rs is in the tree");
+    // The story boot moved into the library's `host::boot` (SQ-1537); the TUI's
+    // `startup.rs` calls it rather than repeating it.
+    let startup = std::fs::read_to_string(root.join("crates/app/src/host/boot.rs"))
+        .expect("host/boot.rs is in the tree");
     let at = |needle: &str| {
-        startup.find(needle).unwrap_or_else(|| panic!("startup.rs no longer contains {needle:?}"))
+        startup.find(needle).unwrap_or_else(|| panic!("host/boot.rs no longer contains {needle:?}"))
     };
     let picts = at("let mut picts = ");
     let decide = at("picts.two_colour_card_screen(&cfg)");
@@ -851,9 +853,9 @@ fn the_cards_pair_is_settled_before_the_story_loads() {
         callers.join("\n"),
     );
     assert!(
-        production.iter().any(|c| c.contains("startup.rs"))
+        production.iter().any(|c| c.contains("host/boot.rs"))
             && production.iter().any(|c| c.contains("reset.rs")),
-        "…and they are `startup.rs` and `reset.rs`. Found:\n{}",
+        "…and they are `host/boot.rs` and `reset.rs`. Found:\n{}",
         callers.join("\n"),
     );
 

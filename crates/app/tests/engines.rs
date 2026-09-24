@@ -17,6 +17,9 @@ mod fixture_paths;
 #[path = "suites/sq1462_hint_echo_contrast.rs"]
 mod sq1462_hint_echo_contrast;
 
+#[path = "suites/host_boot.rs"]
+mod host_boot;
+
 #[path = "suites/adf_disk_image.rs"]
 mod adf_disk_image;
 #[path = "suites/apple_disk_set_release.rs"]
