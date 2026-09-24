@@ -2693,11 +2693,17 @@ pub(crate) fn v6_game_page(
     story: Option<&crate::engine::PositionedWindow>,
     state: &AppState,
 ) -> Option<image::Rgba<u8>> {
-    state
-        .config
-        .honor_game_colours
-        .then(|| crate::render::v6_layout::story_bg_rgba(story, &state.colors))
-        .flatten()
+    game_page(story, state.config.honor_game_colours, &state.colors)
+}
+
+/// [`v6_game_page`] from the two facts it reads, for a caller that holds them
+/// without an `AppState` — [`compose_v6_frame`] (SQ-1543).
+fn game_page(
+    story: Option<&crate::engine::PositionedWindow>,
+    honor: bool,
+    colors: &crate::colors::ColorScheme,
+) -> Option<image::Rgba<u8>> {
+    honor.then(|| crate::render::v6_layout::story_bg_rgba(story, colors)).flatten()
 }
 
 /// The MACHINE's own page alone, as an opaque colour, or `None` when this frame
@@ -2767,12 +2773,128 @@ pub fn build_v6_raster_frame(
     want: crate::render::v6_layout::RasterFrame,
     state: &AppState,
 ) -> (image::RgbaImage, Option<RasterMetrics>, crate::render::v6_layout::RasterFrame) {
+    let paint = state.v6_paint.borrow();
+    let prose = |cols: u16, rows: u16| build_main_text(state, cols, rows);
+    let inputs = V6FrameInputs::from_state(state, paint.as_deref(), &prose);
+    let built = compose_v6_frame(layout, want, &inputs);
+    (built.canvas, built.metrics, built.frame)
+}
+
+/// Everything a v6 RASTER composite reads besides the window layout, as one value
+/// (SQ-1543).
+///
+/// [`build_v6_raster_frame`] used to take `&AppState` and reach into it for these,
+/// so composing a v6 frame anywhere but the TUI meant building a whole `AppState`.
+/// The TUI now builds this from its state ([`Self::from_state`]) and composes
+/// through [`compose_v6_frame`] exactly like any other host, so there is one copy
+/// of the rules.
+///
+/// Deliberately absent: the text CELL and the native screen size. The cell is
+/// `face.cell()` and the screen is the frame the caller asks for, and carrying a
+/// second copy of either is how a harness comes to lay a Macintosh frame out on
+/// 8x16 (SQ-1020, SQ-1021). The game's own text runs, with their native pixel
+/// positions, are already in the [`V6Layout`](crate::render::v6_layout::V6Layout)'s
+/// windows.
+pub struct V6FrameInputs<'a> {
+    /// The HOST's default `(ink, page)` — what an inherited channel resolves to.
+    /// The TUI's is [`v6_host_pair`]: the machine's own pair, else the transcript
+    /// theme, else the terminal's, else the fallback.
+    pub host_pair: (image::Rgba<u8>, image::Rgba<u8>),
+    /// Whether the game's own colours are honoured (`honor_game_colours`).
+    pub honor_game_colours: bool,
+    /// The colour scheme a packed Z-machine colour resolves through, carrying the
+    /// machine's palette (SQ-1393).
+    pub colors: &'a crate::colors::ColorScheme,
+    /// The one text face every glyph on the frame is drawn in — cell, bitmap
+    /// face and pen (SQ-1009).
+    pub face: &'a crate::native_font::TextFace,
+    /// The game's painted ground (`erase_window` fills, SQ-0706), if any.
+    pub paint: Option<&'a image::RgbaImage>,
+    /// The live input line to echo into a secondary prose window the game is
+    /// reading through (SQ-0746), or `None` while the view is scrolled back.
+    pub panel_input: Option<&'a str>,
+    /// The story transcript, windowed to a prose box of `(cols, rows)` text cells
+    /// — [`build_main_text`] in the TUI. A callback because the box is only known
+    /// once the composite has measured the art around it. Called at most once.
+    pub prose: &'a dyn Fn(u16, u16) -> (crate::render::v6_layout::MainText, RasterMetrics),
+    /// The lit word reveal, if one is lit (SQ-1138).
+    pub reveal: Option<crate::reveal::RevealLight<'a>>,
+    /// Whether the `[more]` pager is holding output (SQ-0455).
+    pub pager_active: bool,
+    /// The `[more]` block's `(block, ink)` when the game set no story pair — the
+    /// TUI's is the themed `more_prompt` selector resolved like [`v6_host_pair`].
+    pub more_prompt_pair: (image::Rgba<u8>, image::Rgba<u8>),
+    /// What happens to each glyph — see
+    /// [`V6TextMode`](crate::render::v6_layout::V6TextMode).
+    pub text: crate::render::v6_layout::V6TextMode,
+}
+
+impl<'a> V6FrameInputs<'a> {
+    /// The TUI's inputs: every field read off `state`, text rasterised.
+    ///
+    /// `paint` and `prose` come in from outside because neither can be borrowed
+    /// out of `state` as a plain reference — the painted ground sits behind a
+    /// `RefCell` and the transcript window is built on demand.
+    pub fn from_state(
+        state: &'a AppState,
+        paint: Option<&'a image::RgbaImage>,
+        prose: &'a dyn Fn(u16, u16) -> (crate::render::v6_layout::MainText, RasterMetrics),
+    ) -> V6FrameInputs<'a> {
+        let mp = state.colors.theme.get("more_prompt").style;
+        V6FrameInputs {
+            host_pair: v6_host_pair(state),
+            honor_game_colours: state.config.honor_game_colours,
+            colors: &state.colors,
+            face: &state.v6_text,
+            paint,
+            panel_input: (state.effective_transcript_scroll() == 0).then_some(state.input.value.as_str()),
+            prose,
+            reveal: crate::reveal::reveal_light(state),
+            pager_active: state.pager.active,
+            more_prompt_pair: v6_default_pair(mp, state.term_default_colors.fg, state.term_default_colors.bg),
+            text: crate::render::v6_layout::V6TextMode::Rasterise,
+        }
+    }
+}
+
+/// One composed v6 raster frame (SQ-1543).
+pub struct V6Frame {
+    /// The composite, flattened opaque onto the story page.
+    pub canvas: image::RgbaImage,
+    /// The story scroll/pager metrics, `None` when the frame has no transcript.
+    pub metrics: Option<RasterMetrics>,
+    /// The frame actually built — see [`build_v6_raster_frame`].
+    pub frame: crate::render::v6_layout::RasterFrame,
+    /// Every glyph the frame imaged, as runs in native pixels — empty under
+    /// [`V6TextMode::Rasterise`](crate::render::v6_layout::V6TextMode::Rasterise).
+    pub text: Vec<crate::render::v6_layout::V6TextRun>,
+}
+
+/// [`build_v6_raster_frame`] from a [`V6FrameInputs`] rather than an `AppState` —
+/// the one implementation both call (SQ-1543).
+pub fn compose_v6_frame(
+    layout: &crate::render::v6_layout::V6Layout<'_>,
+    want: crate::render::v6_layout::RasterFrame,
+    inputs: &V6FrameInputs<'_>,
+) -> V6Frame {
+    use crate::render::v6_layout as v6;
+    let mut glyphs = v6::GlyphSink::new(inputs.text);
+    let (canvas, metrics, frame) = compose_v6_frame_into(layout, want, inputs, &mut glyphs);
+    V6Frame { canvas, metrics, frame, text: glyphs.into_runs() }
+}
+
+fn compose_v6_frame_into(
+    layout: &crate::render::v6_layout::V6Layout<'_>,
+    want: crate::render::v6_layout::RasterFrame,
+    inputs: &V6FrameInputs<'_>,
+    glyphs: &mut crate::render::v6_layout::GlyphSink,
+) -> (image::RgbaImage, Option<RasterMetrics>, crate::render::v6_layout::RasterFrame) {
     use crate::render::v6_layout as v6;
     // The game's own screen. Everything between here and the flank extension is
     // stated in it and is unchanged by SQ-1032: the extension only ever adds rows
     // BELOW, and the game laid its windows out on this.
     let native = want.native;
-    let (default_fg, default_bg) = v6_host_pair(state);
+    let (default_fg, default_bg) = inputs.host_pair;
     // The story PAIR (SQ-0510, extended in SQ-0532 wave-5): a game-set
     // story-window colour (`set_colour`) wins per channel, else the paired
     // host default. Zork Zero boots `set_colour(fg=2, bg=9)`, so taking its
@@ -2782,9 +2904,9 @@ pub fn build_v6_raster_frame(
     // the LIVE honor config: a mid-game `/set-game-colours off` leaves the
     // recorded pair in the model, and the composite must fall back to the host
     // pair rather than keep painting the game's page/ink.
-    let honor = state.config.honor_game_colours;
-    let game_ink = if honor { v6::story_fg_rgba(layout.story, &state.colors) } else { None };
-    let game_page = v6_game_page(layout.story, state);
+    let honor = inputs.honor_game_colours;
+    let game_ink = if honor { v6::story_fg_rgba(layout.story, inputs.colors) } else { None };
+    let game_page = game_page(layout.story, honor, inputs.colors);
     let page = game_page.unwrap_or(default_bg);
     let ink = game_ink.unwrap_or(default_fg);
     // What the story box is measured against (SQ-0728): the same layers, MINUS the
@@ -2843,7 +2965,7 @@ pub fn build_v6_raster_frame(
     // below, because the frame's HEIGHT is decided from it. It reads `obstruction`
     // and nothing else, and nothing between the two positions touches that canvas,
     // so `Raster` builds the identical composite either way.
-    let cell = state.v6_text.cell();
+    let cell = inputs.face.cell();
     let story_clear =
         v6::story_clear_native(layout.story, &obstruction).filter(|&(_, _, w, h)| w >= 8 && h >= 16);
     // SQ-1032: does this frame extend, and by how many native rows?
@@ -2976,16 +3098,22 @@ pub fn build_v6_raster_frame(
         if moved.is_empty() { native } else { (native.0, frame.canvas_h as u16) };
     // Raster has no cells to draw text with, so it needs every run imaged: the
     // empty set is not a default here, it is this path's answer (SQ-0903).
-    let mut canvas =
-        v6::build_chrome_canvas(&chrome, canvas_native, default_fg, default_bg, &state.colors, v6::TextLayer::All, &state.v6_text);
+    let mut canvas = v6::build_chrome_canvas_into(
+        &chrome,
+        canvas_native,
+        default_fg,
+        default_bg,
+        inputs.colors,
+        v6::TextLayer::All,
+        inputs.face,
+        glyphs,
+    );
     // …and the lines of any SECONDARY prose window (SQ-0729), which the chrome
     // canvas does not draw. The story page below spares them like any chrome text.
     // …and the live input line into whichever of them the player is typing into
     // (SQ-0746), on the same "only when the view is at the bottom" rule
     // `build_main_text` applies to the transcript's own live line.
-    let panel_input =
-        (state.effective_transcript_scroll() == 0).then_some(state.input.value.as_str());
-    v6::draw_secondary_prose(&mut canvas, &chrome, ink, honor, &state.colors, panel_input, &state.v6_text);
+    v6::draw_secondary_prose_into(&mut canvas, &chrome, ink, honor, inputs.colors, inputs.panel_input, inputs.face, glyphs);
     // SQ-0704: each chrome window's own page (ZMSD §8.8.3.2) fills its unpainted
     // pixels before the story is stamped — the story box itself is skipped (see
     // `fill_window_pages`). This runs on the COMPOSITE only: the clear-interior
@@ -2995,15 +3123,15 @@ pub fn build_v6_raster_frame(
     // what is left, because a fill is the oldest thing on the screen: the game
     // filled its rectangle, then printed the label on top of it.
     let grounds = |c: &mut image::RgbaImage| {
-        v6::blit_paint_ground(c, state.v6_paint.borrow().as_deref(), v6::TextLayer::All, state.v6_text.cell());
+        v6::blit_paint_ground(c, inputs.paint, v6::TextLayer::All, inputs.face.cell());
         if honor {
             v6::fill_window_pages(
                 c,
                 &chrome,
                 layout.story,
-                &state.colors,
+                inputs.colors,
                 v6::TextLayer::All,
-                state.v6_text.cell(),
+                inputs.face.cell(),
             );
         } else {
             // SQ-0716: colours declined, but a window the game has PAINTED INTO still
@@ -3016,9 +3144,9 @@ pub fn build_v6_raster_frame(
                 c,
                 &chrome,
                 layout.story,
-                &state.colors,
-                state.v6_paint.borrow().as_deref(),
-                state.v6_text.cell(),
+                inputs.colors,
+                inputs.paint,
+                inputs.face.cell(),
             );
         }
     };
@@ -3045,8 +3173,8 @@ pub fn build_v6_raster_frame(
             (sx, sy, sw, sh),
             page,
             &chrome,
-            state.v6_paint.borrow().as_deref(),
-            &state.v6_text,
+            inputs.paint,
+            inputs.face,
         );
         // …then the story window's OWN absolutely-placed artwork, before any
         // prose: Arthur's intro centres a 584×392 plate in window 0, so the plate
@@ -3063,7 +3191,7 @@ pub fn build_v6_raster_frame(
         // prose box, and no scroll metrics, exactly as when a plate owns the
         // screen. See `story_window_is_a_canvas`: fmvpoker alone.
         if story_window_is_a_canvas(layout, native) {
-            v6::draw_story_canvas_runs(&mut canvas, layout.story, ink, page, honor, &state.colors, &state.v6_text);
+            v6::draw_story_canvas_runs_into(&mut canvas, layout.story, ink, page, honor, inputs.colors, inputs.face, glyphs);
             return finish_v6_raster_canvas(canvas, page, raster_metrics, frame);
         }
         // **A `Grid` in the story slot contributes its RECT and nothing else**
@@ -3117,7 +3245,7 @@ pub fn build_v6_raster_frame(
         let th = th + extension;
         let cols = (tw / u32::from(cell.w())).max(1) as u16;
         let rows = (th / u32::from(cell.h())).max(1) as u16;
-        let (main, rm) = build_main_text(state, cols, rows);
+        let (main, rm) = (inputs.prose)(cols, rows);
         // …sparing the cells another window's own text already holds (SQ-0729).
         // The page fill above spares them; the GLYPHS did not, so the transcript
         // was drawn straight through them. fmvpoker's dealt hand is the report:
@@ -3137,8 +3265,8 @@ pub fn build_v6_raster_frame(
         // The fallback ink is the story's own, which makes a theme that cannot
         // resolve to concrete bytes draw the prose exactly as it already was
         // rather than in some colour nobody chose.
-        let reveal = crate::reveal::raster_reveal(state, ink);
-        v6::draw_story_text(
+        let reveal = inputs.reveal.map(|l| l.at(ink));
+        v6::draw_story_text_into(
             &mut canvas,
             &main,
             sx,
@@ -3146,9 +3274,10 @@ pub fn build_v6_raster_frame(
             cols,
             rows,
             ink,
-            &v6::chrome_text_rects(&chrome, &state.v6_text),
-            &state.v6_text,
+            &v6::chrome_text_rects(&chrome, inputs.face),
+            inputs.face,
             reveal.as_ref(),
+            glyphs,
         );
         // [more] pager indicator (SQ-0455): when a single turn's output
         // overflowed the story box the shared pager (SQ-0404) parks the
@@ -3156,8 +3285,7 @@ pub fn build_v6_raster_frame(
         // a terminal row, so draw the prompt as a text run bottom-right of
         // the story box, themed via the `more_prompt` selector (drawn as a
         // reverse-video block, matching the terminal bar).
-        if state.pager.active {
-            let mp = state.colors.theme.get("more_prompt").style;
+        if inputs.pager_active {
             // Reverse-video against whatever the story page/ink actually ARE.
             // When the game set its own pair (Zork Zero's black on white) the
             // prompt must reverse THAT pair, or a themed block resolved from an
@@ -3167,10 +3295,10 @@ pub fn build_v6_raster_frame(
             // fallback) so the block and its ink never mix sources.
             let (block, prompt_ink) = match (game_page, game_ink) {
                 (Some(p), Some(i)) => (i, p),
-                _ => v6_default_pair(mp, state.term_default_colors.fg, state.term_default_colors.bg),
+                _ => inputs.more_prompt_pair,
             };
             let label = "[more]";
-            let cell = state.v6_text.cell();
+            let cell = inputs.face.cell();
             let last_row = rows.saturating_sub(1) as u32;
             // SQ-1009: flush RIGHT by the PEN's width, and stepped by the pen. Sized
             // by a character count against the cell it drew a reverse block the
@@ -3178,12 +3306,12 @@ pub fn build_v6_raster_frame(
             // 8-px slots, which is what "compressed and unreadable" looks like from
             // the other side. Both numbers come from the same pen, so they cannot
             // disagree.
-            let width = state.v6_text.run_px(label);
+            let width = inputs.face.run_px(label);
             let mut pen = sx + (cols as u32 * u32::from(cell.w())).saturating_sub(width);
             for ch in label.chars() {
-                let adv = state.v6_text.advance(ch);
-                crate::render::bitfont::blit_glyph(
-                    &mut canvas, ch, pen, sy + last_row * u32::from(cell.h()), adv, u32::from(cell.h()), prompt_ink, Some(block), Some(&state.v6_text),
+                let adv = inputs.face.advance(ch);
+                glyphs.blit(
+                    &mut canvas, ch, pen, sy + last_row * u32::from(cell.h()), adv, u32::from(cell.h()), prompt_ink, Some(block), 0, inputs.face,
                 );
                 pen += adv;
             }

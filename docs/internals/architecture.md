@@ -489,6 +489,31 @@ than inferred, with the last consumed line's fingerprint in the key as the guard
 that catches a mutator which picked wrong. `cargo run --release -p app --example
 scroll_bench` measures all of it.
 
+### Composing a v6 frame without the TUI
+
+The raster composite reads no `AppState` of its own. `render::screen::compose_v6_frame`
+takes the classified window layout, the frame to build, and a `V6FrameInputs`:
+the host's default pair, whether game colours are honoured, the colour scheme,
+the one `TextFace`, the painted ground, the live input line for a secondary
+panel, the lit reveal, the pager flag, the `[more]` pair — and the transcript as
+a callback, because the prose box is only known once the art around it has been
+measured. The TUI builds that value with `V6FrameInputs::from_state` and goes
+through the same function (`build_v6_raster_frame` is just that pair of calls), so
+a GUI, a server or an FFI binding composes a frame by the same rules without
+building an `AppState` (SQ-1543). The text cell and the screen size are
+deliberately *not* fields: the cell is `face.cell()` and the screen is the frame
+asked for, and a second copy of either is the SQ-1020 trap.
+
+The frame's text also comes back as data. Every glyph the composite draws goes
+through one sink (`v6_layout::GlyphSink`), and under `V6TextMode::RasteriseAndRecord`
+or `RecordOnly` it reports `V6TextRun`s — row, colours, style and one native-pixel
+box per character — so a host with real text rendering can draw the characters
+itself rather than ship them as pixels, SQ-0750's rule carried off the terminal.
+`RecordOnly` leaves every glyph (and its background block) out of the canvas;
+`v6_headless_compose` checks that it changes no pixel outside a recorded box, and
+that a host's hand-built inputs reproduce the TUI's canvas on Zork Zero and
+Journey.
+
 ## Input: a suspend/resume handshake
 
 Input is engine-neutral too. A VM's `step()` returns a request —

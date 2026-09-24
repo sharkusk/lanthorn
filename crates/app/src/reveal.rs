@@ -576,13 +576,39 @@ pub struct RasterReveal<'a> {
 /// the STORY's own ink, so a theme that cannot resolve draws the prose exactly as
 /// it already was rather than in some colour nobody chose.
 pub fn raster_reveal(state: &AppState, fallback: image::Rgba<u8>) -> Option<RasterReveal<'_>> {
+    reveal_light(state).map(|l| l.at(fallback))
+}
+
+/// A lit reveal resolved as far as it can be BEFORE the story's ink is known
+/// (SQ-1543) — what [`crate::render::screen::V6FrameInputs`] carries, since the
+/// composite decides that ink itself. [`RevealLight::at`] finishes the job, and
+/// [`raster_reveal`] is exactly the two steps in a row.
+#[derive(Debug, Clone, Copy)]
+pub struct RevealLight<'a> {
+    /// The spellings that light.
+    pub words: &'a BTreeSet<String>,
+    /// The ink they light in, or `None` for "the story's own ink" — the answer
+    /// whenever the theme names a colour the canvas cannot resolve to bytes.
+    pub ink: Option<image::Rgba<u8>>,
+    /// Whether to rule under them — see [`RasterReveal::rule`].
+    pub rule: bool,
+}
+
+impl<'a> RevealLight<'a> {
+    /// The reveal as the draw takes it, with `story_ink` standing in for an ink
+    /// the theme left unresolved.
+    pub fn at(self, story_ink: image::Rgba<u8>) -> RasterReveal<'a> {
+        RasterReveal { words: self.words, ink: self.ink.unwrap_or(story_ink), rule: self.rule }
+    }
+}
+
+/// The live reveal as a [`RevealLight`], or `None` when nothing is lit.
+pub fn reveal_light(state: &AppState) -> Option<RevealLight<'_>> {
     let reveal = state.reveal.as_ref().filter(|r| r.is_lit())?;
     let style = state.colors.theme.get("transcript_reveal").style;
-    let ink = style
-        .fg
-        .map_or(fallback, |c| crate::render::v6_layout::color_to_rgba(c, fallback));
+    let ink = style.fg.and_then(crate::render::v6_layout::color_rgba);
     let rule = style.add_modifier.contains(ratatui::style::Modifier::UNDERLINED);
-    Some(RasterReveal { words: &reveal.words, ink, rule })
+    Some(RevealLight { words: &reveal.words, ink, rule })
 }
 
 #[cfg(all(test, feature = "t-guidance"))]

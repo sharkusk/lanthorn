@@ -102,6 +102,13 @@ pub(crate) fn packed_to_rgba(packed: u32, fallback: Rgba<u8>, colors: &ColorSche
 /// 16 base ANSI colours resolve to the standard VGA RGB values; `Reset` and
 /// `Indexed` (no canonical RGB here) fall back.
 pub(crate) fn color_to_rgba(c: ratatui::style::Color, fallback: Rgba<u8>) -> Rgba<u8> {
+    color_rgba(c).unwrap_or(fallback)
+}
+
+/// [`color_to_rgba`] without the fallback: `None` exactly where that function
+/// would answer its `fallback` (`Reset`, `Indexed`). For a caller that has to
+/// state "whatever the fallback turns out to be" before it knows it (SQ-1543).
+pub(crate) fn color_rgba(c: ratatui::style::Color) -> Option<Rgba<u8>> {
     use ratatui::style::Color;
     let (r, g, b) = match c {
         Color::Rgb(r, g, b) => (r, g, b),
@@ -121,9 +128,9 @@ pub(crate) fn color_to_rgba(c: ratatui::style::Color, fallback: Rgba<u8>) -> Rgb
         Color::LightMagenta => (255, 85, 255),
         Color::LightCyan => (85, 255, 255),
         Color::White => (255, 255, 255),
-        Color::Reset | Color::Indexed(_) => return fallback,
+        Color::Reset | Color::Indexed(_) => return None,
     };
-    Rgba([r, g, b, 255])
+    Some(Rgba([r, g, b, 255]))
 }
 
 /// 1:1 opaque-over blit of `src` into `dst` at `(dx, dy)`, clipped to the
@@ -1633,6 +1640,120 @@ pub(crate) fn pen_chains(runs: &[&PxText], tf: &crate::native_font::TextFace) ->
     out
 }
 
+/// What a v6 composite does with each character it would image (SQ-1543).
+///
+/// SQ-0750's rule is that a character the game printed should be drawn AS a
+/// character wherever the surface can: a host with real text rendering — a GUI, a
+/// web client — gets crisper, better-aligned text by drawing
+/// [`V6TextRun`]s itself than by shipping them as pixels. The TUI's raster mode
+/// has no such surface and takes [`V6TextMode::Rasterise`], which records nothing.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum V6TextMode {
+    /// Image every glyph into the canvas and record none — the TUI's raster path.
+    #[default]
+    Rasterise,
+    /// Image every glyph AND report it as a [`V6TextRun`].
+    RasteriseAndRecord,
+    /// Report every glyph and image NONE of them: the canvas carries the art,
+    /// the grounds, the page, the reveal rule and the caret block, and the host
+    /// draws the text — including each run's `bg` block, which the glyph blit
+    /// would otherwise have painted.
+    RecordOnly,
+}
+
+/// One run of characters a v6 composite imaged (or would have), in the game's
+/// NATIVE pixel space (SQ-1543).
+///
+/// Every character in a run shares its row, colours and §8.7.1 style byte and
+/// follows the one before it without a gap; each carries its own left edge, because a proportional face (SQ-1009) steps by
+/// per-glyph advances no column count reproduces. The face every run was drawn in
+/// is the frame's one [`crate::native_font::TextFace`] —
+/// [`TextFace::face_for`](crate::native_font::TextFace::face_for) with `style`
+/// answers the bitmap, [`TextFace::cell`](crate::native_font::TextFace::cell) the
+/// cell. Coordinates are where the glyph box was placed and are not clipped to
+/// the canvas.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct V6TextRun {
+    /// Top of the glyph box, native px.
+    pub y: u32,
+    /// Height of the glyph box, native px — the text cell's.
+    pub h: u32,
+    /// The ink the glyph is drawn in (a lit reveal's, where one lights it).
+    pub fg: Rgba<u8>,
+    /// The block painted behind the glyph box, or `None` for transparent text.
+    pub bg: Option<Rgba<u8>>,
+    /// ZMSD §8.7.1 style byte (reverse already resolved into `fg`/`bg`).
+    pub style: u8,
+    /// The characters, in drawing order.
+    pub text: String,
+    /// One `(x, w)` per character of `text`: the glyph box's native left edge and
+    /// width.
+    pub boxes: Vec<(u32, u32)>,
+}
+
+/// Where a composite's glyphs go: into the canvas, into a [`V6TextRun`] list, or
+/// both, per [`V6TextMode`]. The ONE place every composite glyph passes through,
+/// so the list cannot describe a different screen from the pixels (SQ-1543).
+pub(crate) struct GlyphSink {
+    mode: V6TextMode,
+    runs: Vec<V6TextRun>,
+}
+
+impl GlyphSink {
+    pub(crate) fn new(mode: V6TextMode) -> GlyphSink {
+        GlyphSink { mode, runs: Vec::new() }
+    }
+
+    /// [`crate::render::bitfont::blit_glyph_styled`], recorded per the mode.
+    pub(crate) fn blit(
+        &mut self,
+        canvas: &mut RgbaImage,
+        glyph: char,
+        px: u32,
+        py: u32,
+        cw: u32,
+        ch: u32,
+        fg: Rgba<u8>,
+        bg: Option<Rgba<u8>>,
+        style: u8,
+        tf: &crate::native_font::TextFace,
+    ) {
+        if self.mode != V6TextMode::RecordOnly {
+            crate::render::bitfont::blit_glyph_styled(canvas, glyph, px, py, cw, ch, fg, bg, style, Some(tf));
+        }
+        if self.mode == V6TextMode::Rasterise {
+            return;
+        }
+        // Continue the last run when this glyph shares its row, box height,
+        // colours and style and starts where the last one's pen left off — by
+        // its box (a grid cell, the `[more]` prompt) or by the face's advance (a
+        // pen-stepped run). A gap starts a new run, so two labels the game put on
+        // one row stay two runs.
+        if let Some(run) = self.runs.last_mut() {
+            let contiguous = match (run.boxes.last(), run.text.chars().last()) {
+                (Some(&(x, w)), Some(last)) => px == x + w || px == x + tf.advance_styled(last, style),
+                _ => false,
+            };
+            let joins = run.y == py
+                && run.h == ch
+                && run.fg == fg
+                && run.bg == bg
+                && run.style == style
+                && contiguous;
+            if joins {
+                run.text.push(glyph);
+                run.boxes.push((px, cw));
+                return;
+            }
+        }
+        self.runs.push(V6TextRun { y: py, h: ch, fg, bg, style, text: glyph.to_string(), boxes: vec![(px, cw)] });
+    }
+
+    pub(crate) fn into_runs(self) -> Vec<V6TextRun> {
+        self.runs
+    }
+}
+
 pub fn build_chrome_canvas(
     chrome: &[&PositionedWindow],
     native: (u16, u16),
@@ -1642,6 +1763,20 @@ pub fn build_chrome_canvas(
     text: TextLayer<'_>,
     // The cell, the release's face and the pen, as one value (SQ-1009).
     tf: &crate::native_font::TextFace,
+) -> RgbaImage {
+    build_chrome_canvas_into(chrome, native, default_fg, default_bg, colors, text, tf, &mut GlyphSink::new(V6TextMode::Rasterise))
+}
+
+/// [`build_chrome_canvas`], with its glyphs routed through `glyphs` (SQ-1543).
+pub(crate) fn build_chrome_canvas_into(
+    chrome: &[&PositionedWindow],
+    native: (u16, u16),
+    default_fg: Rgba<u8>,
+    default_bg: Rgba<u8>,
+    colors: &ColorScheme,
+    text: TextLayer<'_>,
+    tf: &crate::native_font::TextFace,
+    glyphs: &mut GlyphSink,
 ) -> RgbaImage {
     let cell = tf.cell();
     let font_w = u32::from(cell.w());
@@ -1808,7 +1943,7 @@ pub fn build_chrome_canvas(
                         let (fg, bg) = chrome_run_ink(t, default_fg, default_bg, colors, || {
                             region_has_opaque(&art, pen, py, span_w, font_h)
                         });
-                        crate::render::bitfont::blit_glyph_styled(&mut canvas, ch, pen, py, font_w, font_h, fg, bg, t.style, Some(tf));
+                        glyphs.blit(&mut canvas, ch, pen, py, font_w, font_h, fg, bg, t.style, tf);
                         pen += adv;
                     }
                 }
@@ -1838,7 +1973,7 @@ pub fn build_chrome_canvas(
                     // A grid CELL is addressed by column and stays on the grid —
                     // the game's own `set_cursor` counted these columns, so a pen
                     // here would place a character where nothing asked for it.
-                    crate::render::bitfont::blit_glyph_styled(&mut canvas, cell.ch, px, py, font_w, font_h, fg, cellbg, cell.style, Some(tf));
+                    glyphs.blit(&mut canvas, cell.ch, px, py, font_w, font_h, fg, cellbg, cell.style, tf);
                 }
             }
         }
@@ -1882,6 +2017,20 @@ pub fn draw_secondary_prose(
     input: Option<&str>,
     tf: &crate::native_font::TextFace,
 ) {
+    draw_secondary_prose_into(canvas, chrome, ink, honor, colors, input, tf, &mut GlyphSink::new(V6TextMode::Rasterise));
+}
+
+/// [`draw_secondary_prose`], with its glyphs routed through `glyphs` (SQ-1543).
+pub(crate) fn draw_secondary_prose_into(
+    canvas: &mut RgbaImage,
+    chrome: &[&PositionedWindow],
+    ink: Rgba<u8>,
+    honor: bool,
+    colors: &ColorScheme,
+    input: Option<&str>,
+    tf: &crate::native_font::TextFace,
+    glyphs: &mut GlyphSink,
+) {
     let cell = tf.cell();
     let font_w = u32::from(cell.w());
     let font_h = u32::from(cell.h());
@@ -1900,7 +2049,7 @@ pub fn draw_secondary_prose(
                 if pen + adv > right {
                     break;
                 }
-                crate::render::bitfont::blit_glyph(canvas, ch, pen, y0, font_w, font_h, fg, None, Some(tf));
+                glyphs.blit(canvas, ch, pen, y0, font_w, font_h, fg, None, 0, tf);
                 pen += adv;
             }
         }
@@ -1929,7 +2078,7 @@ pub fn draw_secondary_prose(
             if i == input.chars().count() {
                 fill_cell(canvas, pen, y0, font_w, font_h, fg);
             } else {
-                crate::render::bitfont::blit_glyph(canvas, ch, pen, y0, font_w, font_h, fg, None, Some(tf));
+                glyphs.blit(canvas, ch, pen, y0, font_w, font_h, fg, None, 0, tf);
             }
             pen += adv;
         }
@@ -1961,6 +2110,20 @@ pub fn draw_story_canvas_runs(
     honor: bool,
     colors: &ColorScheme,
     tf: &crate::native_font::TextFace,
+) {
+    draw_story_canvas_runs_into(canvas, story, ink, page, honor, colors, tf, &mut GlyphSink::new(V6TextMode::Rasterise));
+}
+
+/// [`draw_story_canvas_runs`], with its glyphs routed through `glyphs` (SQ-1543).
+pub(crate) fn draw_story_canvas_runs_into(
+    canvas: &mut RgbaImage,
+    story: Option<&PositionedWindow>,
+    ink: Rgba<u8>,
+    page: Rgba<u8>,
+    honor: bool,
+    colors: &ColorScheme,
+    tf: &crate::native_font::TextFace,
+    glyphs: &mut GlyphSink,
 ) {
     let cell = tf.cell();
     let font_w = u32::from(cell.w());
@@ -1998,7 +2161,7 @@ pub fn draw_story_canvas_runs(
                     break;
                 }
             }
-            crate::render::bitfont::blit_glyph_styled(canvas, ch, pen, py, font_w, font_h, fg, bg, t.style, Some(tf));
+            glyphs.blit(canvas, ch, pen, py, font_w, font_h, fg, bg, t.style, tf);
             pen += tf.advance_styled(ch, t.style);
         }
     }
@@ -2663,6 +2826,11 @@ pub fn chrome_bands(
 /// wrapped rows are the game's own output and get persisted in the archive, and a
 /// decoration folded into them would have to be taken back out again.
 pub fn draw_story_text(canvas: &mut RgbaImage, main: &MainText, ox: u32, oy: u32, cols: u16, rows: u16, fg: Rgba<u8>, spare: &[(u32, u32, u32, u32)], tf: &crate::native_font::TextFace, reveal: Option<&crate::reveal::RasterReveal<'_>>) {
+    draw_story_text_into(canvas, main, ox, oy, cols, rows, fg, spare, tf, reveal, &mut GlyphSink::new(V6TextMode::Rasterise));
+}
+
+/// [`draw_story_text`], with its glyphs routed through `glyphs` (SQ-1543).
+pub(crate) fn draw_story_text_into(canvas: &mut RgbaImage, main: &MainText, ox: u32, oy: u32, cols: u16, rows: u16, fg: Rgba<u8>, spare: &[(u32, u32, u32, u32)], tf: &crate::native_font::TextFace, reveal: Option<&crate::reveal::RasterReveal<'_>>, glyphs: &mut GlyphSink) {
     let cell = tf.cell();
     let font_w = u32::from(cell.w());
     let font_h = u32::from(cell.h());
@@ -2757,7 +2925,7 @@ pub fn draw_story_text(canvas: &mut RgbaImage, main: &MainText, ox: u32, oy: u32
             }
             let hit = reveal.filter(|_| lit.iter().any(|&(s, e)| col >= s && col < e));
             if !blocked(pen, py) {
-                crate::render::bitfont::blit_glyph_styled(canvas, glyph, pen, py, font_w, font_h, hit.map_or(fg, |r| r.ink), None, style, Some(tf));
+                glyphs.blit(canvas, glyph, pen, py, font_w, font_h, hit.map_or(fg, |r| r.ink), None, style, tf);
                 // …and the rule under it, AFTER the glyph so it reads as one line
                 // rather than as a row the descenders punch holes in — the same
                 // order `blit_metric_glyph` draws SQ-1028's in. Spanning the whole
@@ -2789,7 +2957,7 @@ pub fn draw_story_text(canvas: &mut RgbaImage, main: &MainText, ox: u32, oy: u32
                     break;
                 }
                 if !blocked(ox + pen, py) {
-                    crate::render::bitfont::blit_glyph(canvas, glyph, ox + pen, py, font_w, font_h, fg, None, Some(tf));
+                    glyphs.blit(canvas, glyph, ox + pen, py, font_w, font_h, fg, None, 0, tf);
                 }
                 pen += adv;
             }
@@ -3760,6 +3928,42 @@ mod tests {
 
     fn colors() -> ColorScheme {
         ColorScheme::default()
+    }
+
+    /// SQ-1543: the glyph sink records what the draw imaged without moving a
+    /// pixel, and `RecordOnly` hands every glyph to the host and images none.
+    #[test]
+    fn glyph_sink_records_the_text_the_draw_images() {
+        let tf = crate::native_font::TextFace::cell_only(zvm::screen::V6Cell::DEFAULT);
+        let main = MainText {
+            lines: vec!["Hi there".into(), "ok".into()],
+            styles: Vec::new(),
+            input: String::new(),
+            cursor_col: 0,
+            awaiting: false,
+            floats: Vec::new(),
+        };
+        let ink = Rgba([255, 255, 255, 255]);
+        let draw = |mode: V6TextMode| {
+            let mut canvas = RgbaImage::new(10 * FONT_W, 3 * FONT_H);
+            let mut sink = GlyphSink::new(mode);
+            draw_story_text_into(&mut canvas, &main, 4, 2, 10, 3, ink, &[], &tf, None, &mut sink);
+            (canvas, sink.into_runs())
+        };
+        let (plain, none) = draw(V6TextMode::Rasterise);
+        let (recorded, runs) = draw(V6TextMode::RasteriseAndRecord);
+        let (bare, same_runs) = draw(V6TextMode::RecordOnly);
+        assert!(none.is_empty(), "Rasterise records nothing");
+        assert_eq!(plain, recorded, "recording must not move a pixel");
+        assert!(plain.pixels().any(|p| p[3] > 0), "non-vacuity: the draw imaged ink");
+        assert!(bare.pixels().all(|p| p[3] == 0), "RecordOnly images no glyph");
+        assert_eq!(runs, same_runs, "both recording modes see the same text");
+        let texts: Vec<&str> = runs.iter().map(|r| r.text.as_str()).collect();
+        assert_eq!(texts, ["Hi there", "ok"]);
+        assert_eq!((runs[0].y, runs[1].y), (2, 2 + FONT_H), "one run per row, at the row's top");
+        let xs: Vec<u32> = runs[0].boxes.iter().map(|&(x, _)| x).collect();
+        assert_eq!(xs, (0..8).map(|i| 4 + i * FONT_W).collect::<Vec<_>>(), "each glyph at its own pen");
+        assert!(runs.iter().all(|r| r.fg == ink && r.bg.is_none() && r.h == FONT_H));
     }
 
     #[test]
