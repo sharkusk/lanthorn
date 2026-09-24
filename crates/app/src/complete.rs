@@ -62,6 +62,116 @@ pub fn suggest(
     room_matches
 }
 
+// ── Host-facing completion (SQ-1549) ────────────────────────────────────────
+//
+// `input::recompute_suggestions` and `input::apply_completion` run this same
+// logic against `AppState`, for the TUI's Tab/Shift-Tab. A host that is not
+// the TUI has no `AppState::current_partial`/`suggestion_idx` of its own, so
+// the ranking, the apply, and the "rest of the word" ghost hint are pulled
+// out here as pure functions over a plain `line` — the data they need
+// (`dict_words`, `seen_words`, `scope_words`) is already reached per-turn by
+// `host::turn` / at boot by `host::boot` (see the module docs there).
+
+/// The trailing whitespace-delimited token of `line[..caret]` — the word a
+/// completion would replace. `caret` is a CHAR index, clamped to the line's
+/// length.
+///
+/// The TUI's own [`crate::state::AppState::current_partial`] always reads the
+/// FULL line's trailing word, cursor position notwithstanding — completing
+/// while the caret sits mid-line has never had defined behaviour there. This
+/// generalises the same rule to an explicit caret, and the two answer
+/// identically whenever `caret` is the line's own length (the case every
+/// existing call site, and every acceptance test here, drives).
+pub fn partial_word(line: &str, caret: usize) -> &str {
+    let char_len = line.chars().count();
+    let caret = caret.min(char_len);
+    let byte_at = line.char_indices().nth(caret).map(|(b, _)| b).unwrap_or(line.len());
+    let head = &line[..byte_at];
+    match head.rfind(' ') {
+        Some(pos) => &head[pos + 1..],
+        None => head,
+    }
+}
+
+/// Completion candidates for `line` with the caret at `caret` — the same
+/// ranking and cap [`crate::input::recompute_suggestions`] applies for the
+/// TUI (SQ-1549).
+///
+/// Inside a slash command's name (the line starts with `prefix` and the body
+/// has no space yet) this offers matching command names from `slash_names`
+/// instead of story vocabulary. Otherwise: scope words first (what's
+/// actually here), then a merge of the story's flat dictionary and its
+/// recently-printed words, deduplicated against the scope hits, capped at 6.
+pub fn completion_candidates(
+    line: &str,
+    caret: usize,
+    prefix: char,
+    slash_names: &[String],
+    dict_words: &[String],
+    seen_words: &[String],
+    scope_words: &[String],
+) -> Vec<String> {
+    const SUGGESTION_LIMIT: usize = 6;
+    if line.starts_with(prefix) {
+        let body = &line[prefix.len_utf8()..];
+        let first_token = body.split_whitespace().next().unwrap_or("");
+        if body.contains(' ') {
+            return Vec::new(); // command name already chosen
+        }
+        return crate::input::slash_suggestions(first_token, slash_names, SUGGESTION_LIMIT);
+    }
+    let partial = partial_word(line, caret);
+    if partial.is_empty() {
+        return Vec::new();
+    }
+    let mut hits = suggest(&[], scope_words, partial, SUGGESTION_LIMIT);
+    if hits.len() < SUGGESTION_LIMIT {
+        for w in suggest(dict_words, seen_words, partial, SUGGESTION_LIMIT) {
+            if !hits.iter().any(|h| h.eq_ignore_ascii_case(&w)) {
+                hits.push(w);
+            }
+            if hits.len() == SUGGESTION_LIMIT {
+                break;
+            }
+        }
+    }
+    hits
+}
+
+/// The line that results from applying `completion` to `line` — the pure
+/// twin of `input::apply_completion`, which Tab and Shift-Tab share (SQ-1549).
+///
+/// Inside a slash command's name, rebuilds the line as `prefix` + `completion`
+/// (the leading prefix survives). Otherwise replaces `line`'s own trailing
+/// word (by [`partial_word`], over the FULL line — matching
+/// `apply_completion`'s use of `AppState::current_partial`) with `completion`.
+/// The caret always lands at the end of the result, exactly as the TUI's own
+/// does.
+pub fn apply_completion_to_line(line: &str, prefix: char, completion: &str) -> String {
+    let is_slash_name = line.starts_with(prefix) && !line[prefix.len_utf8()..].contains(' ');
+    if is_slash_name {
+        return format!("{prefix}{completion}");
+    }
+    let char_len = line.chars().count();
+    let partial = partial_word(line, char_len);
+    let keep = char_len - partial.chars().count();
+    let byte_at = line.char_indices().nth(keep).map(|(b, _)| b).unwrap_or(line.len());
+    format!("{}{}", &line[..byte_at], completion)
+}
+
+/// The "rest of the word" a completion `candidate` adds beyond `partial` —
+/// the pure half of `render::transcript::ghost_completion`'s dim inline hint
+/// (SQ-1549). `None` when `candidate` does not extend `partial`
+/// case-insensitively, or adds nothing (the state right after the candidate
+/// was applied).
+pub fn completion_ghost_tail(candidate: &str, partial: &str) -> Option<String> {
+    if !candidate.to_lowercase().starts_with(&partial.to_lowercase()) {
+        return None;
+    }
+    let hint: String = candidate.chars().skip(partial.chars().count()).collect();
+    (!hint.is_empty()).then_some(hint)
+}
+
 /// Split prose into words for a story whose own tokeniser we cannot borrow.
 ///
 /// The last resort, for an engine with no

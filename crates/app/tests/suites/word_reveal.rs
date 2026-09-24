@@ -193,6 +193,50 @@ fn the_opening_screen_lights_the_words_the_story_knows() {
     assert!(!all.contains("field"), "`field` must not be underlined:{}", frame(&buf));
 }
 
+/// **SQ-1549**: a host with no `AppState`/wrap-cache of its own — supplying the
+/// same text `arm` itself read off the wrap cache — gets exactly the same words.
+/// `arm_from_text` is the pure twin `arm` shares its two filter tiers with
+/// ([`app::reveal::arm_from_text`]), so this is the one place the two could
+/// legitimately disagree: nothing else differs between them but how the text
+/// arrives.
+#[test]
+fn reveal_from_supplied_text_lights_the_same_words_as_the_tui() {
+    let mut session = minizork();
+    let text = session.take_transcript();
+    let mut state = screen_of(&text);
+
+    let armed = app::reveal::arm(&mut state, &session);
+    assert!(matches!(armed, Armed::Lit { .. }), "sanity: the opening screen lights something");
+    let mut tui_words: Vec<String> = words(&state);
+    tui_words.sort();
+
+    let vocab = <GameSession as Engine>::story_vocabulary(&session);
+    let host = app::reveal::arm_from_text(true, &text, &session, vocab.as_ref())
+        .expect("the same text should light the same way");
+    let host_words: Vec<String> = host.into_iter().collect();
+
+    assert_eq!(
+        host_words, tui_words,
+        "a host asking directly about the same text gets the same words `arm` would"
+    );
+}
+
+/// The guidance switch and the "nothing to read" / "no vocabulary" answers all
+/// carry over to the text-in variant unchanged (SQ-1549).
+#[test]
+fn reveal_from_text_honors_the_same_switch_and_empty_answers() {
+    let session = minizork();
+    let vocab = <GameSession as Engine>::story_vocabulary(&session);
+
+    assert_eq!(app::reveal::arm_from_text(false, "There is a mailbox here.", &session, vocab.as_ref()), Err(Armed::GuidanceOff));
+    assert_eq!(app::reveal::arm_from_text(true, "   ", &session, vocab.as_ref()), Err(Armed::NoText));
+    assert_eq!(
+        app::reveal::arm_from_text(true, "colourless green ideas", &session, vocab.as_ref()),
+        Err(Armed::Nothing),
+        "not a word this story's objects or dictionary answer to"
+    );
+}
+
 /// **A verb never lights.** The command band answers "what can I do"; this answers
 /// "what does the story know about". `open` and `take` are all over Mini-Zork's
 /// grammar and its opening prose says `open field` — lighting the verb would

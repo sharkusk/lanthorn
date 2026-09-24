@@ -1190,3 +1190,52 @@ fn the_verb_column_drops_a_word_the_storys_own_tokeniser_would_split() {
         }
     }
 }
+
+// ── SQ-1549: the host-facing plain-value band data ──────────────────────────
+
+/// `app::host::refresh_band_data` for Zork I: the story's own grammar verbs
+/// with their shapes, the room and carried objects, and the WITH slot's
+/// candidates — the same answers `refresh_verbs`/`refresh_objects` give the
+/// TUI's own overlay, read back as plain values and with no overlay left open
+/// afterward.
+#[test]
+fn band_data_lists_zork_is_grammar_verbs_and_room_objects() {
+    let Some(mut session) = boot_zmachine("zork1-r88-s840726.z3") else { return };
+    let mut state = AppState::default();
+    session.submit("look");
+    state.player_obj = session.introspect().and_then(|i| i.player_object());
+    state.begin_turn();
+
+    assert!(state.overlays.command_band.is_none(), "premise: no overlay open beforehand");
+    let data = app::host::refresh_band_data(&mut state, &session);
+    assert!(state.overlays.command_band.is_none(), "…and none left open afterward");
+
+    assert_eq!(data.verb_source, VerbSource::Story, "Zork I's own grammar reads");
+    let take = data.verbs.iter().find(|v| v.word == "take").expect("`take` is a Zork I verb");
+    assert!(
+        take.lines.iter().any(|l| l.nouns == 1),
+        "take noun is a one-object line: {:?}",
+        take.lines
+    );
+
+    assert!(!data.here.is_empty(), "West of House holds objects: {:?}", data.here);
+    assert!(
+        data.here.iter().any(|o| o.contains("mailbox")),
+        "the small mailbox is here: {:?}",
+        data.here
+    );
+    assert!(data.carried.is_empty(), "nothing carried at the opening: {:?}", data.carried);
+
+    // Take something, mirror the loop tick's turn_epoch bump, and ask again —
+    // the plain data moves exactly as the TUI's own columns do.
+    session.submit("open mailbox");
+    session.submit("take leaflet");
+    state.begin_turn();
+    let data2 = app::host::refresh_band_data(&mut state, &session);
+    assert!(!data2.carried.is_empty(), "the leaflet moved to carried: {:?}", data2.carried);
+    assert!(
+        data2.preposition_objects.iter().any(|o| data2.carried.contains(o)),
+        "the WITH slot offers carried objects first: {:?}",
+        data2.preposition_objects
+    );
+}

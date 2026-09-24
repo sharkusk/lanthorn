@@ -214,6 +214,31 @@ fn an_exit_save_is_what_the_next_boot_resumes() {
     let _ = std::fs::remove_dir_all(&home);
 }
 
+/// **SQ-1549**: `app::host::set_guidance` persists exactly the way
+/// `/set-guidance` does — a fresh boot of the same story, from the same
+/// per-game save directory, comes up with the override already in force.
+#[test]
+fn set_guidance_persists_across_a_reboot() {
+    let story = fixture_path("Tangle.z5");
+    if !story.is_file() {
+        eprintln!("SKIP: {} absent", story.display());
+        return;
+    }
+    let home = app::scratch_dir("host-guidance");
+    let mut first = boot(story.clone(), &home);
+    assert!(first.state.config.guidance, "premise: guidance ships on");
+
+    let effective =
+        app::host::set_guidance(&mut first.state, &first.game_dir, app::slash::GuidanceArg::Off)
+            .expect("the sidecar writes");
+    assert!(!effective, "off is off");
+    assert!(!first.state.config.guidance, "and takes effect immediately, live");
+
+    let second = boot(story, &home);
+    assert!(!second.state.config.guidance, "the reboot reads the same per-game override");
+    let _ = std::fs::remove_dir_all(&home);
+}
+
 /// A reset with `clear_map` puts the story back at its start with a fresh
 /// transcript, turn count and map, exactly as the TUI's `/reset-game map`.
 #[test]

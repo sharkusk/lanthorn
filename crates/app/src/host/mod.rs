@@ -21,7 +21,12 @@
 //! - [`sound`] — the [`SoundSink`](sound::SoundSink) a host plays sound through,
 //!   and [`sound_finished`](sound::sound_finished) for reporting one back.
 //! - [`ingame_io`] — the game's own SAVE/RESTORE and filename requests.
+//! - [`assist`] — the Guiding Light's per-game switch, and the command band's
+//!   data (SQ-1549). Completion and the reveal's text-in/words-out variant are
+//!   pure enough that they live beside what they're twins of instead —
+//!   [`crate::complete`] and [`crate::reveal::arm_from_text`].
 
+pub mod assist;
 pub mod boot;
 pub mod clock;
 pub mod ingame_io;
@@ -32,6 +37,7 @@ pub mod screen;
 pub mod sound;
 pub mod turn;
 
+pub use assist::{refresh_band_data, set_guidance, BandData};
 pub use boot::{
     boot_story, random_seed_line, resolve_pict_blorb, story_screen_in, BootError, BootHooks,
     BootRequest, BootedStory, LaunchFlags, QuietBoot, TerminalFacts,

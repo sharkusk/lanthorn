@@ -34,7 +34,6 @@ use crossterm::event::{KeyCode, KeyEvent, KeyModifiers, MouseButton, MouseEvent,
 use mapper::direction::Direction;
 use mapper::mapper::Mapper;
 
-use crate::complete::suggest;
 use crate::keymap::{Context, KeySpec};
 use crate::state::{AppState, Focus, TextEntryDialog, TextEntryKind};
 
@@ -3922,21 +3921,13 @@ pub(crate) fn slash_suggestions(body_token: &str, names: &[String], limit: usize
 /// Lengths are counted in CHARS, not bytes. The byte arithmetic this replaces would panic outright
 /// on a multi-byte partial word: `String::truncate` rejects a non-char boundary, and subtracting a
 /// byte length from a byte length lands on one as soon as the word holds anything non-ASCII.
+///
+/// A thin wrapper over [`crate::complete::apply_completion_to_line`] (SQ-1549), the pure twin a
+/// host with no `AppState` of its own can call directly.
 fn apply_completion(state: &mut AppState, completion: &str) {
     let prefix = state.config.command_prefix;
-    // Slash-command suggestions hold the bare name (no prefix). When completing the first token of
-    // a slash command, rebuild the line as prefix + name so the leading prefix survives.
-    let is_slash_name = state.input.value.starts_with(prefix)
-        && !state.input.value[prefix.len_utf8()..].contains(' ');
-    if is_slash_name {
-        state.input.clear();
-        state.input.insert(prefix);
-    } else {
-        let keep = state.input.char_len() - state.current_partial().chars().count();
-        state.input.truncate_chars(keep);
-        state.input.end();
-    }
-    state.input.insert_str(completion);
+    let new_line = crate::complete::apply_completion_to_line(&state.input.value, prefix, completion);
+    state.input.set(new_line, true);
 }
 
 /// Recompute `state.suggestions` from `state.dict_words`, the story's own words
@@ -3947,51 +3938,20 @@ fn apply_completion(state: &mut AppState, completion: &str) {
 /// When the input starts with `state.config.command_prefix`, completes the
 /// first token after the prefix from `slash::slash_names()` instead of the
 /// dictionary.
+///
+/// A thin wrapper over [`crate::complete::completion_candidates`] (SQ-1549), the pure twin a
+/// host with no `AppState` of its own can call directly.
 pub(crate) fn recompute_suggestions(state: &mut AppState) {
-    const SUGGESTION_LIMIT: usize = 6;
-    let prefix = state.config.command_prefix;
-    // Check if the whole input starts with the command prefix.
-    if state.input.value.starts_with(prefix) {
-        // Extract the body (everything after the prefix).
-        let body = &state.input.value[prefix.len_utf8()..];
-        // Complete only the first token (before any space).
-        let first_token = body.split_whitespace().next().unwrap_or("");
-        // Only offer completions while the user is still on the first token
-        // (no space yet in the body, or trailing chars still form the first word).
-        let body_has_space = body.contains(' ');
-        if body_has_space {
-            // Command name already chosen; no further name completions.
-            state.suggestions.clear();
-            return;
-        }
-        let names = crate::slash::slash_names();
-        state.suggestions = slash_suggestions(first_token, &names, SUGGESTION_LIMIT);
-        return;
-    }
-    let partial = state.current_partial().to_owned();
-    if partial.is_empty() {
-        state.suggestions.clear();
-        return;
-    }
-    // Three tiers, best first (SQ-1042): the words for the things that are
-    // ACTUALLY HERE, then the words the story has just printed, then the flat
-    // dictionary. `suggest` ranks its second argument above its first, so the
-    // scope pass runs against no dictionary at all and the prose pass fills
-    // whatever room is left — a player typing `lan` in Zork I's Living Room
-    // wants the lantern in front of them before the four hundred words the
-    // story also knows.
-    let mut hits = suggest(&[], &state.scope_words, &partial, SUGGESTION_LIMIT);
-    if hits.len() < SUGGESTION_LIMIT {
-        for w in suggest(&state.dict_words, &state.seen_words, &partial, SUGGESTION_LIMIT) {
-            if !hits.iter().any(|h| h.eq_ignore_ascii_case(&w)) {
-                hits.push(w);
-            }
-            if hits.len() == SUGGESTION_LIMIT {
-                break;
-            }
-        }
-    }
-    state.suggestions = hits;
+    let slash_names = crate::slash::slash_names();
+    state.suggestions = crate::complete::completion_candidates(
+        &state.input.value,
+        state.input.char_len(),
+        state.config.command_prefix,
+        &slash_names,
+        &state.dict_words,
+        &state.seen_words,
+        &state.scope_words,
+    );
 }
 
 // ── Bracketed paste (SQ-0653) ─────────────────────────────────────────────────

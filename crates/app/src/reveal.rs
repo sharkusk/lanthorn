@@ -300,11 +300,7 @@ pub fn arm(state: &mut AppState, engine: &dyn Engine) -> Armed {
     // doc for the measurement that ruled the flag out) — and `None` still means
     // the question could not be asked, never a story with no names.
     let words = match engine.object_word_set() {
-        Some(set) => tokens
-            .iter()
-            .filter(|t| set.contains(t))
-            .cloned()
-            .collect::<BTreeSet<String>>(),
+        Some(set) => words_known_to_objects(&tokens, &set),
         None => {
             // Reached only by an engine this crate cannot ask about its own
             // objects at all — Scott today, plus any Glulx image whose object
@@ -345,11 +341,7 @@ pub fn arm(state: &mut AppState, engine: &dyn Engine) -> Armed {
                 state.reveal = None;
                 return Armed::NoVocabulary;
             };
-            tokens
-                .iter()
-                .filter(|t| v.roles(t).is_some_and(|r| (r.noun || r.adjective) && !r.special))
-                .cloned()
-                .collect::<BTreeSet<String>>()
+            words_known_to_dictionary(&tokens, v)
         }
     };
 
@@ -360,6 +352,74 @@ pub fn arm(state: &mut AppState, engine: &dyn Engine) -> Armed {
     let n = words.len();
     state.reveal = Some(Reveal { words, until: Instant::now() + REVEAL_HOLD });
     Armed::Lit { words: n }
+}
+
+/// The tokens that are one of the story's own object parse names — [`arm`]'s
+/// object-tree tier, pulled out as a pure function (SQ-1549) so [`arm_from_text`]
+/// can ask the same question without any of `arm`'s `AppState`/wrap-cache
+/// plumbing.
+fn words_known_to_objects(
+    tokens: &[String],
+    set: &crate::engine::ObjectWordSet,
+) -> BTreeSet<String> {
+    tokens.iter().filter(|t| set.contains(t)).cloned().collect()
+}
+
+/// The tokens the story's flat dictionary marks noun/adjective and not a
+/// buzzword — [`arm`]'s fallback tier for an engine whose object tree cannot
+/// answer at all, pulled out for the same reason as
+/// [`words_known_to_objects`] (SQ-1549).
+fn words_known_to_dictionary(
+    tokens: &[String],
+    vocab: &crate::vocab::StoryVocabulary,
+) -> BTreeSet<String> {
+    tokens
+        .iter()
+        .filter(|t| vocab.roles(t).is_some_and(|r| (r.noun || r.adjective) && !r.special))
+        .cloned()
+        .collect()
+}
+
+/// The host-facing twin of [`arm`] (SQ-1549): the words that would light for
+/// `visible` — plain text, already joined the way [`arm`] reads its own wrap
+/// caches (one line per row, `\n`-joined) — instead of reading the TUI's own
+/// `AppState`/wrap-cache plumbing. `vocab` is the dictionary fallback tier's
+/// input, the caller's own `state.vocab.get(engine)` (or `None` for an
+/// engine/story with no readable dictionary); resolving it is the one thing
+/// this cannot do for itself without a `&mut` of its own.
+///
+/// Same guidance switch, same two-tier word filter (via
+/// [`words_known_to_objects`] / [`words_known_to_dictionary`], so this can
+/// never rank a word differently than [`arm`] does for the same text), and the
+/// same four "nothing lit" answers — but no `Reveal`, no hold duration, no
+/// `state.reveal` write: expiry and holding state are the host's own
+/// business. This answers "what would light right now", once.
+pub fn arm_from_text(
+    guidance: bool,
+    visible: &str,
+    engine: &dyn Engine,
+    vocab: Option<&crate::vocab::StoryVocabulary>,
+) -> Result<BTreeSet<String>, Armed> {
+    if !guidance {
+        return Err(Armed::GuidanceOff);
+    }
+    if visible.trim().is_empty() {
+        return Err(Armed::NoText);
+    }
+    let tokens = engine
+        .split_like_parser(visible)
+        .unwrap_or_else(|| crate::complete::split_prose(visible));
+    let words = match engine.object_word_set() {
+        Some(set) => words_known_to_objects(&tokens, &set),
+        None => {
+            let Some(v) = vocab else { return Err(Armed::NoVocabulary) };
+            words_known_to_dictionary(&tokens, v)
+        }
+    };
+    if words.is_empty() {
+        return Err(Armed::Nothing);
+    }
+    Ok(words)
 }
 
 /// Put out whatever is lit. `true` when something actually went out (→ repaint).

@@ -513,6 +513,72 @@ fn a_carried_container_shows_its_contents_only_once_it_is_opened() {
     }
 }
 
+/// **SQ-1549**: a host with no `AppState`/keymap of its own — `app::complete::
+/// completion_candidates`, called directly with the same line, caret, prefix
+/// and word lists — gets exactly the ranked list Tab would show. Falsify by
+/// reverting `input::recompute_suggestions` to its old inline three-tier body:
+/// the two would still happen to agree today, so this is the one test that
+/// would catch them drifting apart later.
+#[test]
+fn completion_candidates_matches_the_tuis_own_ranking() {
+    use app::input::{apply_action, key_to_action, Action};
+    use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
+
+    let session = minizork();
+    let mut state = scoped(&session);
+    state.dict_words =
+        session.introspect().map(|i| i.vocabulary()).expect("a v3 story has a dictionary");
+    let mut mapper = mapper::mapper::Mapper::default();
+    for c in "mail".chars() {
+        let a = key_to_action(&state, KeyEvent::new(KeyCode::Char(c), KeyModifiers::NONE));
+        assert_eq!(a, Action::InputChar(c));
+        apply_action(a, &mut state, &mut mapper);
+    }
+    let tui = state.suggestions.clone();
+    assert_eq!(tui.first().map(String::as_str), Some("mailbox"), "sanity: {tui:?}");
+
+    let slash_names = app::slash::slash_names();
+    let host = app::complete::completion_candidates(
+        &state.input.value,
+        state.input.char_len(),
+        state.config.command_prefix,
+        &slash_names,
+        &state.dict_words,
+        &state.seen_words,
+        &state.scope_words,
+    );
+    assert_eq!(host, tui, "a host asking directly gets exactly what the TUI's own Tab would offer");
+}
+
+/// **SQ-1549**: `app::complete::apply_completion_to_line`, given the line
+/// before Tab and the candidate Tab would apply, rewrites it exactly the way
+/// Tab itself does.
+#[test]
+fn apply_completion_to_line_rewrites_the_line_the_way_tab_does() {
+    use app::input::{apply_action, key_to_action, Action};
+    use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
+
+    let session = minizork();
+    let mut state = scoped(&session);
+    let mut mapper = mapper::mapper::Mapper::default();
+    for c in "mail".chars() {
+        let a = key_to_action(&state, KeyEvent::new(KeyCode::Char(c), KeyModifiers::NONE));
+        apply_action(a, &mut state, &mut mapper);
+    }
+    let before = state.input.value.clone();
+    let candidate = state.suggestions.first().cloned().expect("a candidate for `mail`");
+
+    let host_line =
+        app::complete::apply_completion_to_line(&before, state.config.command_prefix, &candidate);
+
+    let tab = key_to_action(&state, KeyEvent::new(KeyCode::Tab, KeyModifiers::NONE));
+    assert_eq!(tab, Action::Autocomplete);
+    apply_action(tab, &mut state, &mut mapper);
+
+    assert_eq!(host_line, state.input.value, "applying the candidate off-line matches what Tab did");
+    assert_eq!(state.input.value, "mailbox");
+}
+
 /// The same pair on the commercial release the report came from, skipping
 /// vacuously without `stories/`: Zork I r88/s840726, Kitchen, 6 turns in
 /// (`n`, `e`, `open window`, `enter window`, `take sack`, `open sack`).

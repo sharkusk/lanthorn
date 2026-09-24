@@ -647,36 +647,31 @@ pub(crate) fn dispatch_slash_outcome(
             // heart, on for the one you just opened — so it belongs in the
             // per-game sidecar, exactly as `set-v6-pixel-lock` already does. The
             // settings screen still owns the global default new games inherit.
+            //
+            // The persistence itself — write, `state.config.guidance`, the
+            // one-run pin/release — is `app::host::set_guidance` (SQ-1549), so a
+            // non-terminal host gets the same rule without re-implementing it.
             use app::slash::GuidanceArg;
-            let want = match arg {
-                GuidanceArg::On => Some(true),
-                GuidanceArg::Off => Some(false),
-                GuidanceArg::Auto => None,
-                GuidanceArg::Toggle => Some(!state.config.guidance),
-            };
-            match app::styles::write_per_game_guidance(game_dir, want) {
-                Ok(()) => {
-                    // `auto` falls back to the global value captured at boot —
-                    // the one the sidecar overrode, and the only place it survives.
-                    state.config.guidance = want.unwrap_or(state.guidance_base);
-                    // A per-game choice must never reach the user's global
-                    // config.toml: pin it while it is in force, release on `auto`.
-                    match want {
-                        Some(v) => state.config.one_run.pin(app::config::keys::GUIDANCE, v),
-                        None => state.config.one_run.release(app::config::keys::GUIDANCE),
-                    }
-                    let label = match want {
-                        Some(true) => "on",
-                        Some(false) => "off",
-                        None => "auto",
+            match app::host::set_guidance(state, game_dir, arg) {
+                Ok(effective) => {
+                    let label = match arg {
+                        GuidanceArg::On => "on",
+                        GuidanceArg::Off => "off",
+                        GuidanceArg::Auto => "auto",
+                        GuidanceArg::Toggle => {
+                            if effective {
+                                "on"
+                            } else {
+                                "off"
+                            }
+                        }
                     };
                     // Said as META, not as an assist: this is a report of something
                     // lanthorn did, and an assist announcing that assists are now off
                     // would be the one line the switch could not silence.
                     state.push_transcript_internal(
                         &format!(
-                            "Lanthorn's Guiding Light: {label} (for this game — guidance = {})",
-                            state.config.guidance
+                            "Lanthorn's Guiding Light: {label} (for this game — guidance = {effective})"
                         ),
                         TranscriptKind::Meta,
                     );
