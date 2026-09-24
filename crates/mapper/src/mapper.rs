@@ -88,6 +88,13 @@ impl Mapper {
         Mapper { graph, arrived_via: None, pending_suggestion: None, pending_random_exit_suspicion: None }
     }
 
+    /// The graph's structural generation counter (SQ-1540) — see [`MapGraph::struct_gen`]. A
+    /// convenience so a caller holding a `Mapper` (the app-facing type) need not reach into
+    /// `.graph` for a fact this basic.
+    pub fn struct_gen(&self) -> u64 {
+        self.graph.struct_gen()
+    }
+
     /// Observe the player's location after a turn. The conservative form: when the location has
     /// not changed, nothing is minted — the direction is merely recorded as tried.
     pub fn observe(&mut self, location: RoomId, name: &str, via: Option<Direction>) {
@@ -923,5 +930,87 @@ mod probed_passage_tests {
         );
         assert!(g.is_probed(2, Direction::E), "and the search's own progress came back with it");
         assert!(!g.is_probed(2, Direction::W));
+    }
+}
+
+/// SQ-1540: `Mapper::struct_gen` (which just reads [`crate::graph::MapGraph::struct_gen`] — see
+/// that type's own test module for the low-level mutators) through the app-facing wrappers this
+/// file adds over the graph, plus the one behaviour that actually matters for a memoized render:
+/// walking through territory the map already knows must NOT look like a fresh layout.
+#[cfg(test)]
+mod struct_gen_tests {
+    use super::*;
+
+    #[test]
+    fn rename_room_bumps_struct_gen() {
+        let mut m = Mapper::default();
+        m.observe(1, "Hall", None);
+        let gen = m.struct_gen();
+        m.rename_room(1, Some("Great Hall".into()));
+        assert_ne!(m.struct_gen(), gen, "renaming a room must bump");
+    }
+
+    #[test]
+    fn set_notes_bumps_struct_gen() {
+        let mut m = Mapper::default();
+        m.observe(1, "Hall", None);
+        let gen = m.struct_gen();
+        m.set_notes(1, "watch for the loose brick".into());
+        assert_ne!(m.struct_gen(), gen, "setting notes must bump");
+    }
+
+    #[test]
+    fn delete_connection_bumps_struct_gen() {
+        let mut m = Mapper::default();
+        m.observe(1, "Hall", None);
+        m.observe(2, "Cave", Some(Direction::N));
+        let gen = m.struct_gen();
+        assert!(m.delete_connection(1, Direction::N));
+        assert_ne!(m.struct_gen(), gen, "deleting a connection must bump");
+    }
+
+    #[test]
+    fn relabel_edge_bumps_struct_gen() {
+        let mut m = Mapper::default();
+        m.observe(1, "Hall", None);
+        m.observe(2, "Cave", Some(Direction::N));
+        let gen = m.struct_gen();
+        assert!(m.relabel_edge(1, Direction::N, Direction::NE));
+        assert_ne!(m.struct_gen(), gen, "relabelling an edge must bump");
+    }
+
+    #[test]
+    fn rekey_room_bumps_struct_gen() {
+        let mut m = Mapper::default();
+        m.observe(1, "Hall", None);
+        let gen = m.struct_gen();
+        assert!(m.rekey_room(1, 99));
+        assert_ne!(m.struct_gen(), gen, "re-keying a room must bump");
+    }
+
+    /// The acceptance-critical case (SQ-1540): once a passage is fully mapped both ways, walking
+    /// back and forth across it must not bump the counter — a memo keyed on this must stay warm
+    /// while the player is merely retracing known ground, or every step would force a re-route.
+    #[test]
+    fn walking_between_already_mapped_rooms_does_not_bump_struct_gen() {
+        let mut m = Mapper::default();
+        m.observe(1, "Hall", None);
+        m.observe(2, "Cave", Some(Direction::N));
+        m.observe(1, "Hall", Some(Direction::S)); // walk back, completing the reciprocal pair
+        assert_eq!(m.graph.current(), Some(1));
+
+        // Everything the map is ever going to learn about this pair of rooms is now known: both
+        // rooms, both directions, both positions. From here, walking it again and again must be
+        // silent.
+        let gen = m.struct_gen();
+        for _ in 0..5 {
+            m.observe(2, "Cave", Some(Direction::N));
+            m.observe(1, "Hall", Some(Direction::S));
+        }
+        assert_eq!(
+            m.struct_gen(),
+            gen,
+            "retracing an already-mapped passage must not bump struct_gen"
+        );
     }
 }

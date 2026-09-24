@@ -999,6 +999,31 @@ mod tests {
         assert_eq!(real.room(2).and_then(|r| r.pos), tidied_pos2, "position 2 must be applied");
     }
 
+    /// SQ-1540: applying a tidy result writes positions (and possibly distortion flags) through
+    /// `MapGraph::set_pos`/`set_conn_distorted`, both `struct_gen` mutators — so "tidy results
+    /// applied" bumps the counter for free, with no bump call of `apply_tidy_result`'s own.
+    #[test]
+    fn apply_tidy_result_bumps_struct_gen() {
+        use mapper::direction::Direction;
+        let mut real = mapper::graph::MapGraph::new();
+        real.upsert_room(1, "A".into());
+        real.upsert_room(2, "B".into());
+        real.add_edge(1, Direction::E, 2);
+        real.add_edge(2, Direction::W, 1);
+
+        let mut tidied = real.clone();
+        tidy_layer_silent(&mut tidied, mapper::layer::MAIN_LAYER);
+
+        let gen = real.struct_gen();
+        let outcome = apply_tidy_result(&mut real, tidied, mapper::layer::MAIN_LAYER, 42, 42);
+        assert!(matches!(outcome, ApplyTidyOutcome::Applied));
+        assert_ne!(
+            real.struct_gen(),
+            gen,
+            "applying a tidy result that actually places two unplaced rooms must bump struct_gen"
+        );
+    }
+
     #[test]
     fn apply_tidy_result_stale_gen_discards_result() {
         use mapper::direction::Direction;

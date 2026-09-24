@@ -944,4 +944,17 @@ mod tests {
         merge_into(&mut g, l, MAIN_LAYER).expect("fold back");
         assert_eq!(g.rooms_in_layer(MAIN_LAYER), vec![1, 2, 3, 4]);
     }
+
+    /// SQ-1540: peeling a region moves rooms to a new layer (`set_room_layer`), mints that layer
+    /// (`new_layer`) and may reposition a colliding room (`set_pos`) — every one of which is
+    /// already a `MapGraph::struct_gen` mutator, so `move_region` bumps it for free. This just
+    /// confirms the wiring holds at the call this file itself makes.
+    #[test]
+    fn move_region_bumps_struct_gen() {
+        let mut g = two_floors();
+        let region = region_at_edge(&g, 1, Direction::E).expect("the 1→2 passage is a seam");
+        let gen = g.struct_gen();
+        move_region(&mut g, &region, MoveTarget::New).expect("peel");
+        assert_ne!(g.struct_gen(), gen, "move_region must bump the structural generation counter");
+    }
 }
