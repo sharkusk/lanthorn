@@ -611,7 +611,7 @@ pub fn room_at_cell(
 /// in [`AppState::map_derived`] and rebuilt only when the model is replaced
 /// (`poll_render_job` clears the cache) or the zoom changes. Replay, tidy-anim
 /// and test models are built fresh per frame, exactly as before — they are not
-/// tracked by `graph_gen`, so nothing keyed on it may describe them.
+/// tracked by `struct_gen`, so nothing keyed on it may describe them.
 #[derive(Debug)]
 pub(crate) struct MapDerived {
     /// The zoom this was derived at — part of the cache key.
@@ -656,9 +656,9 @@ fn build_derived(rm: &RenderMap, zoom: Zoom) -> MapDerived {
 /// Liveness is decided by address: the production path passes a `Ref`-projected
 /// `&MapRenderCache::rm`, so pointer identity to the entry in `state.map_render`
 /// is exact — a replay graph, a tidy-animation frame or a test's local model can
-/// never alias it. The key carries the entry's own `(gen, layer)` (not
-/// `state.graph_gen`, which runs ahead of a stale model mid-reroute) plus the
-/// zoom; `poll_render_job` clears the cache whenever it installs a new model, so
+/// never alias it. The key carries the entry's own `(gen, layer)` (not the live
+/// graph's current `struct_gen`, which runs ahead of a stale model mid-reroute)
+/// plus the zoom; `poll_render_job` clears the cache whenever it installs a new model, so
 /// a same-`(gen, layer)` replacement (the empty placeholder giving way to the
 /// first real route) cannot serve tables derived from the placeholder.
 fn derived_tables<'a>(rm: &RenderMap, state: &'a AppState, zoom: Zoom) -> DerivedSource<'a> {

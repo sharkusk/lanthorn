@@ -314,13 +314,15 @@ pub(crate) fn poll_tidy_jobs(
     if state.tidy_job.as_ref().is_some_and(|j| j.handle.is_finished()) {
         redraw = true; // tidy result applied (or re-triggered) → map changes
         let job = state.tidy_job.take().unwrap();
-        let current_gen = state.graph_gen;
+        let current_gen = mapper.graph.struct_gen();
         let active_layer = job.layer;
         match job.handle.join() {
             Ok(tidied) => {
                 match apply_tidy_result(&mut mapper.graph, tidied, active_layer, job.gen, current_gen) {
                     ApplyTidyOutcome::Applied => {
-                        state.bump_graph_gen(); // tidied layout applied → invalidate map memo (SQ-0305)
+                        // `apply_tidy_result` writes through `set_pos`/`set_conn_distorted`,
+                        // both `struct_gen` mutators, so a real layout change already bumped
+                        // it (SQ-1544) — no separate invalidation needed.
                         // Re-center on the current room if it moved.
                         if let Some(rid) = mapper.graph.current() {
                             if let Some(room) = mapper.graph.room(rid) {
@@ -340,7 +342,7 @@ pub(crate) fn poll_tidy_jobs(
                         if !app::tidy::layer_is_frozen(&mapper.graph, active_layer2) {
                             let kind = job.kind;
                             let graph_clone = mapper.graph.clone();
-                            let gen2 = state.graph_gen;
+                            let gen2 = mapper.graph.struct_gen();
                             let handle2 = std::thread::spawn(move || {
                                 let mut g = graph_clone;
                                 match kind {
@@ -374,14 +376,14 @@ pub(crate) fn poll_tidy_jobs(
     if state.anim_build_job.as_ref().is_some_and(|j| j.handle.is_finished()) {
         redraw = true; // anim build installed / graph applied → repaint
         let job = state.anim_build_job.take().unwrap();
-        let current_gen = state.graph_gen;
+        let current_gen = mapper.graph.struct_gen();
         if let Ok((frames, tidied)) = job.handle.join() {
             match apply_tidy_result(&mut mapper.graph, tidied, job.layer, job.gen, current_gen) {
                 ApplyTidyOutcome::Applied => {
-                    // Instant re-tidy (animate=false) and the anim's final settle both
-                    // land the tidied graph here — invalidate the map memo so the live
-                    // path shows it (and does not SNAP BACK when the anim ends). (SQ-0305)
-                    state.bump_graph_gen();
+                    // Instant re-tidy (animate=false) and the anim's final settle both land the
+                    // tidied graph here — `apply_tidy_result`'s writes already bumped
+                    // `struct_gen` (SQ-1544), so the live path shows it (and does not SNAP BACK
+                    // when the anim ends) with no separate invalidation.
                     // `animate-tidy` plays the captured frames; the instant `tidy-map`
                     // re-tidy (animate=false) applies the tidied graph without an
                     // animation — it only used the off-thread build for the progress
@@ -550,19 +552,19 @@ pub(crate) fn poll_shadow_answers(
             && app::return_probe::deliver(state, mapper, &answer).is_some()
         {
             // A new passage is a geometry change, so it gets everything a walked
-            // one gets: the render memo invalidated, the layout rescheduled, and
-            // a redraw. An edge nobody lays out or draws is a discovery the
-            // player never sees.
-            state.graph_gen = state.graph_gen.wrapping_add(1);
+            // one gets: the layout rescheduled and a redraw. Minting the edge already
+            // bumped `Mapper::struct_gen` (SQ-1544), which invalidates the render memo
+            // on its own — an edge nobody lays out or draws is a discovery the player
+            // never sees.
             app::host::turn::schedule_map_maintenance(state, mapper, false, true, bg_tidy_counter);
             changed = true;
         } else if app::random_exit_probe::owns(state, answer.token)
             && app::random_exit_probe::deliver(state, mapper, &answer)
         {
             // SQ-1257 Phase 2: an edge was just DELETED (a random exit confirmed), which is a
-            // geometry change exactly like a new one — the render memo and any in-flight tidy
-            // must not go on describing the edge that is now gone.
-            state.graph_gen = state.graph_gen.wrapping_add(1);
+            // geometry change exactly like a new one — `struct_gen` already bumped for it
+            // (SQ-1544), so the render memo and any in-flight tidy will not go on describing
+            // the edge that is now gone.
             app::host::turn::schedule_map_maintenance(state, mapper, false, true, bg_tidy_counter);
             changed = true;
         }

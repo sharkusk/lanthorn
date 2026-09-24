@@ -2412,12 +2412,13 @@ pub type LoadedTranscript = Option<(
 /// viewed layer. `render_layer` re-runs chain detection + edge routing every call,
 /// so re-doing it on an animation / transcript / mouse-move redraw of an otherwise
 /// unchanged map is pure waste. The live graph only changes on a turn / tidy apply /
-/// map edit — each bumps `graph_gen` — so an unchanged `(gen, layer)` reuses this.
-/// Only the live map is cached; replay and tidy-animation graphs are not tracked by
-/// `graph_gen` and are rebuilt per frame (see `AppState::cached_map_render`). (SQ-0305)
+/// map edit — each bumps [`mapper::mapper::Mapper::struct_gen`] (SQ-1540) — so an
+/// unchanged `(gen, layer)` reuses this. Only the live map is cached; replay and
+/// tidy-animation graphs are not tracked by `struct_gen` and are rebuilt per frame
+/// (see `AppState::cached_map_render`). (SQ-0305, SQ-1544)
 #[derive(Debug)]
 pub(crate) struct MapRenderCache {
-    /// Graph generation (`AppState::graph_gen`) this model was routed for.
+    /// The live graph's [`mapper::mapper::Mapper::struct_gen`] this model was routed for.
     pub gen: u64,
     /// Viewed layer this model was routed for.
     pub layer: LayerId,
@@ -2757,7 +2758,7 @@ pub struct AppState {
     pub(crate) map_derived:
         std::cell::RefCell<Option<(u64, LayerId, crate::render::map::MapDerived)>>,
     /// In-flight background map-render job (SQ-0379): rebuilds `map_render` for a
-    /// new `(graph_gen, layer)` off the main thread so a re-route never blocks the
+    /// new `(struct_gen, layer)` off the main thread so a re-route never blocks the
     /// interpreter. `RefCell` so it can be spawned from within the draw closure
     /// (which holds only `&self`); polled/installed from the loop body.
     pub(crate) render_job: std::cell::RefCell<Option<RenderJob>>,
@@ -2900,9 +2901,6 @@ pub struct AppState {
     /// payload, so a scroll past it does not re-send hundreds of KB per step.
     /// `None` = never scrolled this session.
     pub sixel_scroll_motion_at: Option<Instant>,
-    /// Monotonically increasing generation counter. Bumped each time the real graph is mutated
-    /// by an applied turn. Used to detect stale tidy results (job's gen vs current gen).
-    pub graph_gen: u64,
     /// Explicit layer override for the map view. `None` means follow the current room's layer.
     pub viewed_layer: Option<LayerId>,
     /// Which body the room dock draws (SQ-0692). Meaningful only while
@@ -3766,7 +3764,6 @@ impl Default for AppState {
             scroll_anim: None,
             scrollbar_shown_at: None,
             sixel_scroll_motion_at: None,
-            graph_gen: 0,
             viewed_layer: None,
             room_dock_view: RoomDockView::Info,
             drag: None,
@@ -4615,19 +4612,20 @@ impl AppState {
     /// Borrow the live map's routed render model for `layer`. The routing in
     /// `render_layer` is the dominant map cost, so it is kept OFF the main thread
     /// (SQ-0379): the very first model is built synchronously (small, at game
-    /// start), but every later rebuild — triggered by a `graph_gen` change —
+    /// start), but every later rebuild — triggered by a `struct_gen` change —
     /// happens on a background worker while this keeps returning the last-ready
     /// model. Only the current-room highlight and labels are refreshed here, live
     /// and cheaply, so the highlight follows the player with no re-route (SQ-0378).
     ///
     /// Only the live map uses this — replay and tidy-animation graphs are not
-    /// tracked by `graph_gen`, so their models are built fresh each frame. (SQ-0305)
+    /// tracked by `struct_gen`, so their models are built fresh each frame. (SQ-0305,
+    /// SQ-1544)
     pub fn cached_map_render(
         &self,
         layer: LayerId,
         graph: &mapper::graph::MapGraph,
     ) -> std::cell::Ref<'_, mapper::render::RenderMap> {
-        let gen = self.graph_gen;
+        let gen = graph.struct_gen();
         let fresh = matches!(self.map_render.borrow().as_ref(), Some(c) if c.gen == gen && c.layer == layer);
         if !fresh {
             // No routing ever runs on the main thread (SQ-0379). If there is no
@@ -4678,8 +4676,8 @@ impl AppState {
     /// matrix and there is no map to route (SQ-0671).
     ///
     /// This is the churn the player saw as a cycling map pane: [`AppState::cached_map_render`]
-    /// re-routes whenever `graph_gen` moves, and every arriving tidy result bumps that generation,
-    /// so a background job for ANY layer spawned a render worker whose in-flight pulse restyled
+    /// re-routes whenever `struct_gen` moves, and every arriving tidy result bumps that
+    /// generation, so a background job for ANY layer spawned a render worker whose in-flight pulse restyled
     /// the border of a pane drawing a table it never touched. Asking for no model at all is what
     /// makes the matrix independent of the layout pipeline, rather than merely ignoring its
     /// output.
@@ -4722,9 +4720,14 @@ impl AppState {
 
     /// Poll the background map-render worker: if it has finished, install its
     /// model as the new last-ready render (when its generation still matches) or
-    /// discard it as stale (a fresh job then spawns on the next draw). Returns
-    /// true when a completed job was handled (the caller should redraw). (SQ-0379)
-    pub fn poll_render_job(&mut self) -> bool {
+    /// discard it as stale (a fresh job then spawns on the next draw). `graph` is
+    /// the LIVE graph the job's captured generation is checked against — the same
+    /// object `spawn_render_job` was called with, never a freshly loaded one (a
+    /// wholesale replacement goes through [`AppState::invalidate_map_render`]
+    /// instead, which drops this job outright rather than let a stale result race a
+    /// coincidentally-matching generation on the new object). Returns true when a
+    /// completed job was handled (the caller should redraw). (SQ-0379, SQ-1544)
+    pub fn poll_render_job(&mut self, graph: &mapper::graph::MapGraph) -> bool {
         let done = self
             .render_job
             .borrow()
@@ -4736,7 +4739,7 @@ impl AppState {
         let job = self.render_job.borrow_mut().take().expect("checked above");
         match job.handle.join() {
             Ok(rm) => {
-                if job.gen == self.graph_gen {
+                if job.gen == graph.struct_gen() {
                     if self.config.trace.map {
                         let steps = self.render_steps_snapshot();
                         write_map_trace(&self.config.user_dir, &steps, true);
@@ -5191,13 +5194,27 @@ impl AppState {
         }
     }
 
-    /// Bump the graph generation, invalidating the map render memo. Call after ANY
-    /// mutation of the mapper graph or its layout/labels — rename/notes/relabel/nudge,
-    /// tidy applies, room reassignment (restore/import/reset). The map render memo is
-    /// keyed on this (`cached_map_render`), so a missed bump paints a STALE MAP.
-    /// Double-bumping is harmless (`wrapping_add`); a missing bump is a wrong map. (SQ-0305)
-    pub fn bump_graph_gen(&mut self) {
-        self.graph_gen = self.graph_gen.wrapping_add(1);
+    /// Force the live map's render memo to rebuild from scratch on the next draw, and
+    /// drop any in-flight background map job (tidy/anim/render worker) rather than let
+    /// it land later (SQ-1544).
+    ///
+    /// Call whenever the mapper's graph OBJECT is replaced wholesale — a restore, a
+    /// resume, an imported map, `/reset map` — rather than edited in place. In-place
+    /// edits need no call here at all: `cached_map_render` reads
+    /// [`mapper::mapper::Mapper::struct_gen`] straight off the live graph, and that
+    /// counter already bumps itself for exactly the mutations that change what the map
+    /// draws (SQ-1540). But `struct_gen` is scoped to ONE graph object's lifetime — a
+    /// freshly loaded map starts back at generation 0 (see its own doc comment) — so a
+    /// generation number alone cannot tell a genuinely unchanged map apart from a
+    /// stale cache or in-flight job whose captured generation happens to match the
+    /// new object's by coincidence after the swap. An unconditional clear sidesteps
+    /// that question entirely instead of risking the collision.
+    pub fn invalidate_map_render(&mut self) {
+        *self.map_render.borrow_mut() = None;
+        *self.map_derived.borrow_mut() = None;
+        *self.render_job.borrow_mut() = None;
+        self.tidy_job = None;
+        self.anim_build_job = None;
     }
 
     /// Split `text` on `'\n'` and append each line to the transcript with the given kind tag.
@@ -7504,7 +7521,7 @@ mod tests {
     }
 
     /// Wait for the in-flight render worker to finish, then install it.
-    fn drain_render_job(s: &mut AppState) {
+    fn drain_render_job(s: &mut AppState, graph: &MapGraph) {
         while s
             .render_job
             .borrow()
@@ -7513,11 +7530,11 @@ mod tests {
         {
             std::thread::yield_now();
         }
-        s.poll_render_job();
+        s.poll_render_job(graph);
     }
 
     /// SQ-0391, flipped by SQ-0666: a direction that goes NOWHERE adds no room and no
-    /// connection, so `graph_gen` deliberately does not bump for it (SQ-0378 keeps a plain step
+    /// connection, so `struct_gen` deliberately does not bump for it (SQ-0378 keeps a plain step
     /// from re-routing the whole map). The untried-exits OVERLAY was memoised on that generation
     /// and needed a hand-written refresh to notice a foiled move; the matrix view that replaced
     /// it reads the graph directly on every frame and so cannot go stale at all. Same fact, same
@@ -7532,16 +7549,16 @@ mod tests {
         m.observe(1, "Hall", None);
         let mut s = AppState::default();
         let _ = s.cached_map_render(0, &m.graph);
-        drain_render_job(&mut s);
+        drain_render_job(&mut s, &m.graph);
 
         assert_eq!(classify(&m.graph, 1, Direction::N), MatrixCell::Untried, "north starts `·`");
 
         let (gen, rooms, conns) =
-            (s.graph_gen, m.graph.rooms().count(), m.graph.connections().len());
+            (m.graph.struct_gen(), m.graph.rooms().count(), m.graph.connections().len());
         m.observe(1, "Hall", Some(Direction::N)); // typed, went nowhere
         assert_eq!(m.graph.rooms().count(), rooms, "a foiled move adds no room");
         assert_eq!(m.graph.connections().len(), conns, "and no connection");
-        assert_eq!(s.graph_gen, gen, "so the map memo is NOT invalidated");
+        assert_eq!(m.graph.struct_gen(), gen, "so the map memo is NOT invalidated");
 
         assert_eq!(
             classify(&m.graph, 1, Direction::N),
@@ -7568,7 +7585,7 @@ mod tests {
             assert_eq!(rm.rooms.len(), 0, "empty placeholder while the first route runs");
         }
         assert!(s.render_job.borrow().is_some(), "even the first build is off-thread");
-        drain_render_job(&mut s);
+        drain_render_job(&mut s, &g);
         {
             let rm = s.cached_map_render(0, &g);
             assert_eq!(rm.rooms.len(), 1, "routed model served once it lands");
@@ -7577,17 +7594,16 @@ mod tests {
         let _ = s.cached_map_render(0, &g);
         assert!(s.render_job.borrow().is_none());
 
-        // A geometry change (new room + gen bump): re-route OFF-thread, the STALE
-        // model (still 1 room) served meanwhile.
+        // A geometry change (new room, which bumps struct_gen on its own): re-route
+        // OFF-thread, the STALE model (still 1 room) served meanwhile.
         g.upsert_room(2, "B".into());
         g.set_pos(2, (1, 0));
-        s.graph_gen = s.graph_gen.wrapping_add(1);
         {
             let rm = s.cached_map_render(0, &g);
             assert_eq!(rm.rooms.len(), 1, "last-ready model served while routing");
         }
         assert!(s.render_job.borrow().is_some(), "a stale model re-routes off-thread");
-        drain_render_job(&mut s);
+        drain_render_job(&mut s, &g);
         {
             let rm = s.cached_map_render(0, &g);
             assert_eq!(rm.rooms.len(), 2, "the freshly routed model is now served");
@@ -7627,7 +7643,7 @@ mod tests {
         }
 
         // The routed model lands at the SAME (gen, layer): the cache must drop.
-        drain_render_job(&mut s);
+        drain_render_job(&mut s, &g);
         assert!(
             s.map_derived.borrow().is_none(),
             "installing the routed model drops the placeholder's tables"
@@ -7645,7 +7661,7 @@ mod tests {
     }
 
     /// SQ-0378: a step between already-placed rooms changes the current-room
-    /// highlight but not the routed geometry, so `graph_gen` does not bump. The
+    /// highlight but not the routed geometry, so `struct_gen` does not bump. The
     /// cache must follow the player WITHOUT re-routing (no worker spawns).
     #[test]
     fn cached_map_render_refreshes_current_without_rerouting() {
@@ -7660,14 +7676,14 @@ mod tests {
 
         // Build + install the initial model.
         let _ = s.cached_map_render(0, &g);
-        drain_render_job(&mut s);
+        drain_render_job(&mut s, &g);
         {
             let rm = s.cached_map_render(0, &g);
             assert!(rm.rooms.iter().find(|r| r.id == 1).unwrap().is_current);
             assert!(!rm.rooms.iter().find(|r| r.id == 2).unwrap().is_current);
         }
 
-        // Move the player to room 2 WITHOUT bumping graph_gen.
+        // Move the player to room 2 WITHOUT bumping struct_gen (set_current never does).
         g.set_current(2);
         {
             let rm = s.cached_map_render(0, &g);
@@ -7680,6 +7696,52 @@ mod tests {
         assert!(
             s.render_job.borrow().is_none(),
             "a current-room change must NOT spawn a re-route worker"
+        );
+    }
+
+    /// SQ-1544: `invalidate_map_render`'s own doc comment says a generation-number
+    /// comparison alone cannot be trusted across a wholesale graph swap, because a
+    /// brand-new `MapGraph`'s `struct_gen` starts back at 0 and can coincidentally
+    /// equal a stale cache entry's `gen`. This forces exactly that collision — not a
+    /// contrived mismatch — and checks the fresh graph is routed anyway.
+    #[test]
+    fn invalidate_map_render_defeats_a_generation_collision_after_a_wholesale_graph_swap() {
+        use mapper::graph::MapGraph;
+
+        let mut s = AppState::default();
+        // Poison the cache with a routed model standing in for the previous game's
+        // stale map — a room the fresh graph below can never contain.
+        *s.map_render.borrow_mut() = Some(MapRenderCache {
+            gen: 0,
+            layer: 0,
+            rm: {
+                let mut poisoned = MapGraph::new();
+                poisoned.upsert_room(1, "Stale Room".into());
+                poisoned.set_pos(1, (0, 0));
+                mapper::render::render(&poisoned)
+            },
+        });
+
+        let fresh = MapGraph::new();
+        assert_eq!(
+            fresh.struct_gen(),
+            0,
+            "fixture: the collision this test forces (gen 0 == gen 0) is real, not assumed"
+        );
+
+        // Without invalidation, `cached_map_render`'s `c.gen == gen` freshness check
+        // would treat the poisoned entry as still fresh for this "new" graph and
+        // serve "Stale Room" straight through with no re-route.
+        s.invalidate_map_render();
+        let rm = s.cached_map_render(0, &fresh);
+        assert!(
+            rm.rooms.is_empty(),
+            "the fresh empty-placeholder model must be served, not the poisoned cache: {:?}",
+            rm.rooms.iter().map(|r| &r.label).collect::<Vec<_>>()
+        );
+        assert!(
+            s.render_job.borrow().is_some(),
+            "a real re-route must be spawned for the new graph, not skipped as already \"fresh\""
         );
     }
 

@@ -416,8 +416,13 @@ pub fn reset_game(
                 state.select_room(Some(rid));
             }
             // Reset cleared and/or re-seeded the mapper graph — invalidate the map
-            // memo so the fresh map (not the previous game's) shows. (SQ-0305)
-            state.bump_graph_gen();
+            // memo so the fresh map (not the previous game's) shows. Unconditional
+            // (SQ-0305): when `clear_map` replaced `mapper` wholesale, the new
+            // graph's `struct_gen` starts back at 0 (see its own doc comment) and
+            // could coincidentally match whatever the OLD graph's cached render was
+            // routed for, so this cannot rely on a generation-number comparison at
+            // all (SQ-1544) — it drops the cache and any in-flight job outright.
+            state.invalidate_map_render();
             state.push_notice("[Game reset]");
         }
         Err(e) => {

@@ -337,20 +337,56 @@ mod tests {
     }
 
     #[test]
-    fn reset_game_bumps_graph_gen() {
-        // Reset re-seeds the mapper graph via the production path; it must bump
-        // graph_gen so the map render memo invalidates and the fresh map — not the
-        // previous game's — is drawn this frame. (SQ-0305)
+    fn reset_game_shows_the_fresh_map_not_the_previous_games() {
+        // Reset re-seeds the mapper graph via the production path (a wholesale
+        // mapper replacement when `clear_map`); the render cache must show the
+        // FRESH map afterwards, never a stale routed model left over from the
+        // previous game. (SQ-0305) Since SQ-1544 this can no longer rely on a
+        // generation-number comparison alone — a freshly loaded graph's
+        // `struct_gen` starts back at 0 (see its own doc comment) and could
+        // coincidentally equal whatever the stale cache was routed for — so
+        // `reset_game` drops the cache unconditionally via
+        // `AppState::invalidate_map_render` (only `map_render`/`map_derived`/
+        // `render_job`/`tidy_job`/`anim_build_job` are `pub(crate)` to the
+        // library, so this drives it through the public `cached_map_render`/
+        // `poll_render_job` API rather than inspecting the cache directly, this
+        // file being part of the binary crate rather than the library).
         let fixture = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
             .join("../zvm/tests/fixtures/czech.z5");
         let Ok(bytes) = std::fs::read(&fixture) else { return };
         let mut engine: Box<dyn app::engine::Engine> =
             Box::new(app::session::GameSession::new(bytes.clone(), true, false, None).expect("zcode session"));
         let mut mapper = mapper::mapper::Mapper::default();
+        // Seed a stale cached model for a room no fresh reset can ever re-create.
+        mapper.observe(999_999, "Stale Room From The Old Game", None);
+        mapper.graph.set_pos(999_999, (0, 0));
         let mut state = app::state::AppState::default();
-        let before = state.graph_gen;
-        super::reset_game(&mut *engine, &mut mapper, &mut state, &bytes, &fixture, std::path::Path::new(""), false, false);
-        assert_ne!(state.graph_gen, before, "reset must bump graph_gen to invalidate the map memo");
+        let drain = |state: &mut app::state::AppState, graph: &mapper::graph::MapGraph| {
+            let _ = state.cached_map_render(mapper::layer::MAIN_LAYER, graph);
+            while state.map_render_in_flight() {
+                state.poll_render_job(graph);
+                std::thread::yield_now();
+            }
+        };
+        drain(&mut state, &mapper.graph);
+        {
+            let rm = state.cached_map_render(mapper::layer::MAIN_LAYER, &mapper.graph);
+            assert!(
+                rm.rooms.iter().any(|r| r.label.contains("Stale Room")),
+                "fixture: the cache must show the seeded room before reset"
+            );
+        }
+
+        super::reset_game(&mut *engine, &mut mapper, &mut state, &bytes, &fixture, std::path::Path::new(""), true, false);
+        assert!(mapper.graph.room(999_999).is_none(), "fixture: clear_map must actually replace the graph");
+
+        drain(&mut state, &mapper.graph);
+        let rm = state.cached_map_render(mapper::layer::MAIN_LAYER, &mapper.graph);
+        assert!(
+            !rm.rooms.iter().any(|r| r.label.contains("Stale Room")),
+            "reset must not go on showing the previous game's stale map: {:?}",
+            rm.rooms.iter().map(|r| &r.label).collect::<Vec<_>>()
+        );
     }
 
     #[test]

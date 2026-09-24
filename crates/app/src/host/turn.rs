@@ -10,7 +10,8 @@
 //! on the current room. That is now `map_view` — the pane's `(cols, rows)`, or
 //! `None` for a host that draws no map — and playback goes through the state's
 //! [`SoundSink`](super::sound::SoundSink) rather than straight to a device. The
-//! Wave 1 invariant calls (`graph_gen` bumps after `apply_turn`, transcript
+//! Wave 1 invariant calls (the map memo's `Mapper::struct_gen` read after
+//! `apply_turn` — SQ-1544, replacing a hand-bumped `graph_gen` — transcript
 //! generation bumps inside `push_*`) move intact inside the bodies.
 //!
 //! Every entry point returns a [`TurnOutcome`]: whether the game ended, and the
@@ -157,8 +158,12 @@ pub fn reobserve_location(
     // The caller has just swapped in a restored/imported mapper (or is about to
     // re-observe into it); invalidate the map render memo so the loaded map shows
     // this frame instead of the pre-restore one. Unconditional so even the
-    // no-current-location early-return below still invalidates. (SQ-0305)
-    state.bump_graph_gen();
+    // no-current-location early-return below still invalidates. A wholesale
+    // mapper swap starts `struct_gen` back at 0 (see its own doc comment), so a
+    // generation-number comparison alone could coincidentally match the stale
+    // cache's — this drops the cache and any in-flight job outright instead
+    // (SQ-0305, SQ-1544).
+    state.invalidate_map_render();
     // The restored game is not the one the death watch was watching: a death outstanding in the
     // live session says nothing about the saved one, and the re-observation below is itself a room
     // change with no passage behind it. Cleared before the early return, so a restore into a game
@@ -313,11 +318,13 @@ pub fn finish_command_turn(
         && (!result.transcript.trim().is_empty() || !result.transcript_elems.is_empty());
     crate::vocab::offer_vocabulary(state, &*session, cmd, printed);
 
-    // Capture room + connection counts before apply_turn, to detect
-    // whether THIS turn actually changed the graph (a non-mutating
-    // command like "look" leaves both unchanged).
+    // Capture room + connection counts before apply_turn, for `new_room`/`new_conn`
+    // below (tidy scheduling — a non-mutating command like "look" leaves both
+    // unchanged). `struct_gen_before` is `post_turn_bookkeeping`'s own before/after
+    // comparison (SQ-1544).
     let rooms_before = mapper.graph.rooms().count();
     let conns_before = mapper.graph.connections().len();
+    let struct_gen_before = mapper.graph.struct_gen();
 
     // SQ-0526: the Glulx side identifies rooms by hashing their printed NAME until
     // it has worked out where the game keeps its `location` global, then switches
@@ -393,19 +400,14 @@ pub fn finish_command_turn(
         result.declared_exit,
     );
 
-    // Bump the graph generation ONLY when the turn actually changed the map's
-    // routed geometry (a room or connection added/removed). This invalidates the
-    // map render memo (forcing a re-route) and marks any in-flight tidy result
-    // stale. A step between already-placed rooms changes neither, so it must NOT
-    // bump — otherwise every step re-routes the whole map and pauses gameplay on
-    // large explored maps (SQ-0378). The current-room highlight and any in-place
-    // relabel are refreshed cheaply at draw time (see `cached_map_render`), with
-    // no re-route.
-    if mapper.graph.rooms().count() != rooms_before
-        || mapper.graph.connections().len() != conns_before
-    {
-        state.graph_gen = state.graph_gen.wrapping_add(1);
-    }
+    // The map render memo (`AppState::cached_map_render`) reads `Mapper::struct_gen`
+    // straight off the live graph, and that counter bumps itself ONLY for a mutation
+    // that changes the routed geometry (SQ-1540/SQ-1544) — never for a step between
+    // already-placed rooms. No separate invalidation is needed here: bumping on every
+    // step (rather than only a real geometry change) is exactly what SQ-0378 fixed,
+    // and `struct_gen` already keeps that guarantee for free. The current-room
+    // highlight and any in-place relabel are refreshed cheaply at draw time (see
+    // `cached_map_render`), with no re-route.
 
     // Game-initiated (v4+) save/restore: open the saves dialog in
     // in-game mode and defer auto-save/history capture until the
@@ -435,7 +437,7 @@ pub fn finish_command_turn(
     // ── Post-turn bookkeeping (history / inventory / auto-save) ──
     post_turn_bookkeeping(
         state, mapper, &mut *session, &result, cmd,
-        rooms_before, conns_before, ifid, arc_file, &mut turn_save,
+        struct_gen_before, ifid, arc_file, &mut turn_save,
     );
     persist_aux_after_turn(session, state, game_dir);
     persist_vfs_after_turn(session, state, game_dir);
@@ -567,7 +569,7 @@ pub fn schedule_map_maintenance(
         should_bg_tidy(state.config.background_tidy, new_room, overlap, changed, bg_tidy_counter);
     let kind = if full { TidyKind::Full } else { TidyKind::Cleanup };
     let graph_clone = mapper.graph.clone();
-    let gen = state.graph_gen;
+    let gen = mapper.graph.struct_gen();
     let handle = std::thread::spawn(move || {
         let mut g = graph_clone;
         match kind {
@@ -626,17 +628,18 @@ fn intercept_scott_game_over(should_exit: bool, is_scott: bool, state: &mut AppS
 
 /// Post-turn bookkeeping shared by the normal `submit` path and the resumed
 /// in-game save/restore path: opt-in rewind/replay capture, inventory tracking,
-/// and per-turn auto-save. `rooms_before`/`conns_before` are the graph sizes
-/// captured before this turn's `apply_turn` (to detect a map change). `cmd` is
-/// the player's command (empty string for a resumed in-game I/O turn).
+/// and per-turn auto-save. `struct_gen_before` is the mapper's
+/// [`mapper::mapper::Mapper::struct_gen`] captured before this turn's
+/// `apply_turn` (to detect a map change, SQ-1544 — was a rooms/conns count
+/// comparison before it). `cmd` is the player's command (empty string for a
+/// resumed in-game I/O turn).
 fn post_turn_bookkeeping(
     state: &mut AppState,
     mapper: &Mapper,
     session: &mut dyn Engine,
     result: &TurnResult,
     cmd: &str,
-    rooms_before: usize,
-    conns_before: usize,
+    struct_gen_before: u64,
     ifid: &str,
     arc_file: &std::path::Path,
     turn_save: &mut crate::engine::TurnSave,
@@ -652,8 +655,7 @@ fn post_turn_bookkeeping(
     // Skip the quit turn: the VM has terminated, so its snapshot has
     // no replayable state — recording it just adds a junk final turn.
     if state.config.record_turn_history && !result.quit {
-        let map_changed = mapper.graph.rooms().count() != rooms_before
-            || mapper.graph.connections().len() != conns_before;
+        let map_changed = mapper.graph.struct_gen() != struct_gen_before;
         // The record owns its bytes — it outlives the turn and is serialized
         // into the archive — so it copies them out of the shared turn snapshot
         // (SQ-1178): a memcpy, where a second `save_state` was the cost.
@@ -849,9 +851,8 @@ pub fn finish_resumed_turn(
     if let Some(note) = &result.info {
         state.push_transcript(note);
     }
-    // Capture graph sizes before apply_turn so bookkeeping can detect a change.
-    let rooms_before = mapper.graph.rooms().count();
-    let conns_before = mapper.graph.connections().len();
+    // Captured before apply_turn so post_turn_bookkeeping can detect a map change.
+    let struct_gen_before = mapper.graph.struct_gen();
     let room_before = mapper.graph.current();
     apply_turn(mapper, "", &result, &mut state.death_watch);
     // The resumed half of a turn can be where the death lands; it names no direction of its own,
@@ -862,7 +863,11 @@ pub fn finish_resumed_turn(
         None,
         crate::session::turn_reports_death(&result.transcript),
     );
-    state.graph_gen = state.graph_gen.wrapping_add(1);
+    // Unconditional, mirroring the pre-SQ-1544 hand-bump this replaces: the resumed
+    // half of a turn always forces a redraw, whether or not this apply_turn actually
+    // changed the map (see `invalidate_map_render`'s own doc for why a plain
+    // generation-number check is not used here).
+    state.invalidate_map_render();
     // The resumed half of a turn can be a crossing too, and it is certainly a place a search
     // can be outrun (SQ-0785). It names no direction, so the fallback order applies.
     // The snapshot it takes is the one `post_turn_bookkeeping` below shares (SQ-1178).
@@ -891,7 +896,7 @@ pub fn finish_resumed_turn(
         open_filename_modal(req, session, state);
     } else {
         let arc_file = default_state_path(game_dir);
-        post_turn_bookkeeping(state, mapper, &mut *session, &result, "", rooms_before, conns_before, ifid, &arc_file, &mut turn_save);
+        post_turn_bookkeeping(state, mapper, &mut *session, &result, "", struct_gen_before, ifid, &arc_file, &mut turn_save);
     }
     // A resumed turn arms no pager (it never did); the report still says where
     // its output began and whether a pager could have armed.
@@ -1129,8 +1134,6 @@ pub fn apply_game_driven_result(
     let paging = Paging::after(first_line, session.pending_input(), session);
     // apply_turn: this input doesn't carry direction info (no text command to
     // parse), but we still observe any location change so the map stays in sync.
-    let rooms_before = mapper.graph.rooms().count();
-    let conns_before = mapper.graph.connections().len();
     let room_before = mapper.graph.current();
     apply_turn(mapper, "", result, &mut state.death_watch);
     // A keypress can be the turn a death is finally admitted on ("press any key" after the
@@ -1159,19 +1162,14 @@ pub fn apply_game_driven_result(
         open_filename_modal(req, session, state);
         return TurnOutcome { quit: false, paging };
     }
-    // Bump the graph generation ONLY when this game-driven turn actually changed
-    // the routed geometry (a room/connection added). A char-input keypress —
-    // menu navigation, a "press any key" prompt — changes nothing, so it must NOT
-    // re-route the whole map on the main thread every keystroke (the Counterfeit
-    // Monkey help-menu pause). Mirrors the line-input path's gate in
-    // `finish_command_turn` (SQ-0378), which this path was missing. The current-
-    // room highlight + recenter below still update cheaply without a re-route.
-    // (SQ-0406)
-    if mapper.graph.rooms().count() != rooms_before
-        || mapper.graph.connections().len() != conns_before
-    {
-        state.graph_gen = state.graph_gen.wrapping_add(1);
-    }
+    // The map render memo reads `Mapper::struct_gen` straight off the live graph
+    // (SQ-1540/SQ-1544), which bumps itself ONLY when this game-driven turn actually
+    // changed the routed geometry (a room/connection added) — never for a char-input
+    // keypress (menu navigation, a "press any key" prompt), so it does not re-route
+    // the whole map on the main thread every keystroke (the Counterfeit Monkey
+    // help-menu pause). Mirrors the line-input path's gate in `finish_command_turn`
+    // (SQ-0378), which this path used to spell by hand (SQ-0406). The current-room
+    // highlight + recenter below still update cheaply without a re-route.
     // A game-driven turn can move the player too — a timer, a menu selection, a teleport — so it
     // both arms a search and ends one that has been outrun (SQ-0785). This path deliberately
     // skips `post_turn_bookkeeping`, so there is nobody to share the turn snapshot with.
@@ -1822,31 +1820,33 @@ mod tests {
     }
 
     #[test]
-    fn game_driven_turn_bumps_graph_gen_only_on_new_geometry() {
-        // SQ-0406: a char-input keypress (menu navigation / "press any key") is a
-        // game-driven turn that changes no geometry — it must NOT bump graph_gen,
-        // which would re-route the whole map on the main thread every keystroke
-        // (the Counterfeit Monkey help-menu pause). A turn that reveals a NEW room
-        // still must bump so the map updates.
+    fn game_driven_turn_bumps_struct_gen_only_on_new_geometry() {
+        // SQ-0406, reworked for SQ-1544: a char-input keypress (menu navigation /
+        // "press any key") is a game-driven turn that changes no geometry — it must
+        // NOT bump `Mapper::struct_gen`, which would re-route the whole map on the
+        // main thread every keystroke (the Counterfeit Monkey help-menu pause). A
+        // turn that reveals a NEW room still must bump so the map updates. This is
+        // the map's own counter now (not a mirror `AppState` field), so it is read
+        // straight off `m` — production code no longer bumps anything by hand here.
         let tmp = std::env::temp_dir().join(format!("lanthorn-gdr-{}", std::process::id()));
         std::fs::create_dir_all(&tmp).unwrap();
         let mut state = crate::state::AppState::default();
         state.config.user_dir = tmp.clone();
         let mut m = mapper::mapper::Mapper::default();
         m.observe(1, "Lab", None); // a known, placed room
-        let gen0 = state.graph_gen;
+        let gen0 = m.struct_gen();
         let rect = Some((20u16, 20u16));
         let eng = TraceOnlyEngine { line: None, v6: None, filename_req: None };
 
         // Re-reporting the SAME room (a menu keystroke) must not re-route.
         let same = game_driven_result(Some(crate::engine::LocationInfo { number: 1, parent: 0, name: "Lab".into() }));
         let _ = super::apply_game_driven_result(&mut state, &mut m, &same, &tmp, rect, &eng, crate::pager::Driver::PlayerInput);
-        assert_eq!(state.graph_gen, gen0, "re-reporting a known room must not bump graph_gen");
+        assert_eq!(m.struct_gen(), gen0, "re-reporting a known room must not bump struct_gen");
 
         // Revealing a NEW room must bump (the map has to update).
         let moved = game_driven_result(Some(crate::engine::LocationInfo { number: 2, parent: 0, name: "Hall".into() }));
         let _ = super::apply_game_driven_result(&mut state, &mut m, &moved, &tmp, rect, &eng, crate::pager::Driver::PlayerInput);
-        assert_ne!(state.graph_gen, gen0, "a new room on a game-driven turn must bump graph_gen");
+        assert_ne!(m.struct_gen(), gen0, "a new room on a game-driven turn must bump struct_gen");
 
         let _ = std::fs::remove_dir_all(&tmp);
     }
@@ -2069,7 +2069,7 @@ mod tests {
         let mapper = mapper::mapper::Mapper::default();
         let result = game_driven_result(None);
 
-        super::post_turn_bookkeeping(&mut state, &mapper, &mut sess, &result, "look", 0, 0, "TEST-IFID", &arc_file, &mut crate::engine::TurnSave::default());
+        super::post_turn_bookkeeping(&mut state, &mapper, &mut sess, &result, "look", mapper.struct_gen(), "TEST-IFID", &arc_file, &mut crate::engine::TurnSave::default());
         // The write now happens on the background archive worker (SQ-1184);
         // flush before asserting on disk.
         state.archive_worker.flush();

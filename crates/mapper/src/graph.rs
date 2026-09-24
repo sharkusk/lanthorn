@@ -280,9 +280,15 @@ pub struct MapGraph {
     /// Structural generation counter (SQ-1540): bumped by every mutator below that changes what a
     /// room/connector LAYOUT actually draws — a room or connection minted, a rename, a note, a
     /// relabel, a delete, a re-key, a position/distortion write (which is what a re-tidy or
-    /// `move_region` applies), a layer's name/maze/view. Never bumped by [`MapGraph::set_current`]:
-    /// that change is reported separately, through [`MapGraph::current`] itself, so walking between
-    /// rooms the map already knows does not look like a fresh layout to a memo keyed on this.
+    /// `move_region` applies), a layer's name/maze/view. Also (SQ-1544) a random-exit mark/unmark
+    /// that actually adds or removes the drawn `?` badge ([`MapGraph::mark_random_exit`],
+    /// [`MapGraph::unmark_random_exit`]) and a newly recorded random destination
+    /// ([`MapGraph::note_random_destination`]), since the badge prints that count — but NOT a
+    /// change to `random_inherited` alone, which is bookkeeping for
+    /// [`MapGraph::is_inherited_random_exit`] and never drawn. Never bumped by
+    /// [`MapGraph::set_current`]: that change is reported separately, through
+    /// [`MapGraph::current`] itself, so walking between rooms the map already knows does not look
+    /// like a fresh layout to a memo keyed on this.
     ///
     /// Not persisted — a fresh load is a fresh generation, and nothing compares this ACROSS a
     /// save/restore, only within one running session (a render memo, an embedding host's own
@@ -845,14 +851,22 @@ impl MapGraph {
             return;
         }
         self.mark_tried(id, dir);
+        let mut newly_marked = false;
         if let Some(r) = self.rooms.get_mut(&id) {
             if !r.random_exits.contains(&dir) {
                 r.random_exits.push(dir);
+                newly_marked = true;
             }
             // SQ-1370: this call is evidence about THIS direction — a probe disagreement, a
             // contradicted edge, a rename loop. Whatever the mark used to rest on, it rests on
             // that now, so a provisional inherited mark is promoted rather than left provisional.
             r.random_inherited.retain(|&d| d != dir);
+        }
+        // SQ-1544: the `?` random-stub badge is drawn from `random_exits`, so a mark that
+        // actually adds one changes what the map draws. `random_inherited` alone is not — see
+        // that field's doc comment — so clearing it here never bumps on its own.
+        if newly_marked {
+            self.touch_layout();
         }
     }
 
@@ -903,15 +917,26 @@ impl MapGraph {
     /// if the direction was never marked. Does NOT touch `tried` — the direction was and remains
     /// tried, whichever way this resolves.
     pub fn unmark_random_exit(&mut self, id: RoomId, dir: Direction) {
+        let mut changed = false;
         if let Some(r) = self.rooms.get_mut(&id) {
+            let before = r.random_exits.len();
             r.random_exits.retain(|&d| d != dir);
+            changed |= r.random_exits.len() != before;
             // SQ-1370: an inherited mark is a mark; clearing one clears what it rested on too.
             r.random_inherited.retain(|&d| d != dir);
             // The destinations recorded against this direction were evidence for a fact that no
             // longer holds — the direction is confirmed deterministic now, and re-marking it
             // later (SQ-1257 Phase 2's upgrade can be undone by a subsequent disagreement) starts
             // the list over rather than resuming a stale one from before the confirmation.
+            let before_dest = r.random_destinations.len();
             r.random_destinations.retain(|(d, _)| *d != dir);
+            changed |= r.random_destinations.len() != before_dest;
+        }
+        // SQ-1544: `random_exits` is the drawn `?` badge and `random_destinations` its printed
+        // count, so clearing either changes what the map draws; `random_inherited` alone does not
+        // (see `mark_random_exit`).
+        if changed {
+            self.touch_layout();
         }
     }
 
@@ -925,13 +950,24 @@ impl MapGraph {
             return;
         }
         let Some(r) = self.rooms.get_mut(&id) else { return };
-        match r.random_destinations.iter_mut().find(|(d, _)| *d == dir) {
+        let added = match r.random_destinations.iter_mut().find(|(d, _)| *d == dir) {
             Some((_, dests)) => {
-                if !dests.contains(&dest) {
+                if dests.contains(&dest) {
+                    false
+                } else {
                     dests.push(dest);
+                    true
                 }
             }
-            None => r.random_destinations.push((dir, vec![dest])),
+            None => {
+                r.random_destinations.push((dir, vec![dest]));
+                true
+            }
+        };
+        // SQ-1544: the badge's printed destination count reads `random_destinations`, so a newly
+        // recorded destination changes what the map draws.
+        if added {
+            self.touch_layout();
         }
     }
 
@@ -2016,5 +2052,45 @@ mod struct_gen_tests {
         g.set_current(1);
         g.set_current(2);
         assert_eq!(g.struct_gen(), gen, "the current room is reported separately (MapGraph::current), never through struct_gen");
+    }
+
+    /// SQ-1544: `mark_random_exit`/`unmark_random_exit`/`note_random_destination` were scoped out
+    /// of SQ-1540 — they change a room's drawn `?` badge and its printed destination count, but
+    /// left `struct_gen` untouched. `random_inherited` alone is never drawn, so it must not bump.
+    #[test]
+    fn random_exit_marks_bump_struct_gen_only_when_the_drawn_badge_changes() {
+        let mut g = MapGraph::new();
+        g.upsert_room(1, "Forest".into());
+
+        let gen = g.struct_gen();
+        g.mark_random_exit(1, Direction::N);
+        assert_ne!(g.struct_gen(), gen, "a new `?` badge must bump");
+
+        let gen = g.struct_gen();
+        g.mark_random_exit(1, Direction::N); // already marked
+        assert_eq!(g.struct_gen(), gen, "re-marking an already-random direction must not bump");
+
+        let gen = g.struct_gen();
+        g.note_random_destination(1, Direction::N, 2);
+        assert_ne!(g.struct_gen(), gen, "a newly recorded destination changes the printed count and must bump");
+
+        let gen = g.struct_gen();
+        g.note_random_destination(1, Direction::N, 2); // same destination again
+        assert_eq!(g.struct_gen(), gen, "re-noting the same destination must not bump");
+
+        let gen = g.struct_gen();
+        g.unmark_random_exit(1, Direction::N);
+        assert_ne!(g.struct_gen(), gen, "clearing the `?` badge must bump");
+
+        let gen = g.struct_gen();
+        g.unmark_random_exit(1, Direction::N); // already unmarked
+        assert_eq!(g.struct_gen(), gen, "unmarking an already-clear direction must not bump");
+
+        // `random_inherited` is bookkeeping for `is_inherited_random_exit`, never drawn — a mark
+        // that only demotes it from provisional to earned must not look like a layout change.
+        g.mark_random_exit_inherited(1, Direction::S);
+        let gen = g.struct_gen();
+        g.mark_random_exit(1, Direction::S); // promotes the inherited mark, badge already drawn
+        assert_eq!(g.struct_gen(), gen, "promoting an inherited mark with no new badge must not bump");
     }
 }

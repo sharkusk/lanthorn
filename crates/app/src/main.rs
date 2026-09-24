@@ -642,7 +642,7 @@ struct PaneRects {
 
 /// The map render model for one frame: either borrowed from the per-frame cache
 /// (the live graph, keyed by generation + layer) or freshly built and owned (the
-/// replay / tidy-animation graphs, which `graph_gen` does not track). Derefs to
+/// replay / tidy-animation graphs, which `struct_gen` does not track). Derefs to
 /// `&RenderMap` so the draw call sites are unchanged. (SQ-0305)
 enum FrameRenderMap<'a> {
     Cached(std::cell::Ref<'a, mapper::render::RenderMap>),
@@ -753,9 +753,9 @@ fn draw_frame(
         });
 
         // During tidy-animation playback the map shows the current captured stage, not the live graph.
-        // The live graph's routed model is memoized on (graph_gen, layer) — see `cached_map_render` —
+        // The live graph's routed model is memoized on (struct_gen, layer) — see `cached_map_render` —
         // so an animation / transcript / mouse-move redraw of an unchanged map skips re-routing.
-        // Replay and tidy-animation graphs are not tracked by `graph_gen`, so they are built fresh.
+        // Replay and tidy-animation graphs are not tracked by `struct_gen`, so they are built fresh.
         // `frame_layer`, not `active_layer(g)`: an animation frame's graph is a layer SUBGRAPH and
         // cannot be asked which layer it is — it always answers main, and the map draws blank
         // (SQ-0359).
@@ -2111,7 +2111,7 @@ fn run_event_loop(boot: startup::BootResult, launched_from_library: bool) -> Run
         needs_redraw |=
             turn::catch_up_deferred_map_layout(&mut state, &mapper, &mut bg_tidy_counter);
         needs_redraw |= loop_tick::poll_tidy_jobs(&mut state, &mut mapper, &last_panes);
-        needs_redraw |= state.poll_render_job();
+        needs_redraw |= state.poll_render_job(&mapper.graph);
         needs_redraw |= state.poll_v6_encode_job();
         // Play out a v6 turn's picture sequence one frame at a time (SQ-0708).
         // Runs before the draw, so an advanced frame paints on this very pass.
@@ -4186,7 +4186,11 @@ fn run_event_loop(boot: startup::BootResult, launched_from_library: bool) -> Run
                                 app::input::refresh_seen_words(&mut state, &*session);
                                 state.turns = plan.turn;
                                 state.unsaved_progress = false; // resumed a past (saved) turn
-                                state.graph_gen = state.graph_gen.wrapping_add(1);
+                                // A rewind may have swapped `mapper` in wholesale above (when
+                                // `plan.map_json` parsed); its `struct_gen` starts back at 0, so a
+                                // generation-number check alone could coincidentally match the
+                                // stale cache's — drop it outright instead (SQ-1544).
+                                state.invalidate_map_render();
                                 // Resuming a past turn is a restore: the watch describes a death
                                 // in a timeline this one has replaced (SQ-0671, SQ-0673).
                                 state.death_watch = Default::default();

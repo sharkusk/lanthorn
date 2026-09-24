@@ -2421,8 +2421,10 @@ fn apply_action_inner(action: Action, state: &mut AppState, mapper: &mut Mapper)
                 MapView::Drawn => MapView::Matrix,
                 MapView::Matrix => MapView::Drawn,
             });
+            // `set_layer_view` bumps `Mapper::struct_gen` itself when the choice actually
+            // changes (SQ-1544), which `cached_map_render` reads directly — no separate
+            // invalidation needed.
             mapper.graph.set_layer_view(layer, Some(next));
-            state.bump_graph_gen(); // the pane draws something else entirely (SQ-0305)
             let label = match next {
                 MapView::Drawn => "drawn",
                 MapView::Matrix => "matrix",
@@ -2433,8 +2435,9 @@ fn apply_action_inner(action: Action, state: &mut AppState, mapper: &mut Mapper)
             use mapper::layer::MapView;
             let layer = state.active_layer(&mapper.graph);
             let maze = !mapper.graph.layer_is_maze(layer);
+            // `set_layer_maze` bumps `Mapper::struct_gen` itself (SQ-1544) — see the comment on
+            // the `ViewMap` arm above.
             mapper.graph.set_layer_maze(layer, maze);
-            state.bump_graph_gen();
             // Flagging a maze is how most players will ever reach the matrix, and the flag alone
             // takes them there: it moves the layer's DEFAULT view. Nothing is written to the
             // layer's explicit choice, so an earlier `/view-map` still wins, and unflagging puts
@@ -2468,7 +2471,7 @@ fn apply_action_inner(action: Action, state: &mut AppState, mapper: &mut Mapper)
                     return;
                 }
                 let mut g = mapper.graph.clone();
-                let gen = state.graph_gen;
+                let gen = mapper.graph.struct_gen();
                 let total = mapper.graph.rooms_in_layer(layer).len() + 8;
                 let progress = std::sync::Arc::new(std::sync::atomic::AtomicUsize::new(0));
                 let progress_clone = std::sync::Arc::clone(&progress);
@@ -2517,7 +2520,7 @@ fn apply_action_inner(action: Action, state: &mut AppState, mapper: &mut Mapper)
             if state.anim_build_job.is_none() && state.tidy_anim.is_none() {
                 let layer = state.active_layer(&mapper.graph);
                 let mut g = mapper.graph.clone();
-                let gen = state.graph_gen;
+                let gen = mapper.graph.struct_gen();
                 // Estimate the final frame count from the layer's room count (one placement
                 // frame per room dominates), plus headroom for the fixed layout/cleanup stages.
                 // Only an estimate — the real total isn't known until the build finishes.
@@ -2685,8 +2688,8 @@ fn apply_action_inner(action: Action, state: &mut AppState, mapper: &mut Mapper)
                 if let Some(conn) =
                     mapper.graph.connections().iter().find(|c| c.origin == id).cloned()
                 {
+                    // `delete_connection` bumps `Mapper::struct_gen` itself (SQ-1544).
                     mapper.delete_connection(conn.origin, conn.dir);
-                    state.bump_graph_gen(); // edge removed → invalidate map memo (SQ-0305)
                 }
             }
         }
@@ -4112,8 +4115,9 @@ pub fn apply_paste(state: &mut AppState, text: &str) -> bool {
 
 /// Apply a submitted text-entry dialog. Byte-identical to the retired
 /// `apply_prompt`, per kind (SQ-0307):
-///   - map-edit kinds mutate the mapper and bump `graph_gen` so the edit shows
-///     this frame instead of waiting for the next turn (the Wave-1 choke);
+///   - map-edit kinds mutate the mapper, which bumps `Mapper::struct_gen` itself
+///     for a real change (SQ-1544) so the edit shows this frame instead of
+///     waiting for the next turn (the Wave-1 choke);
 ///   - `ConfigEditPath` writes the config-screen working copy;
 ///   - `CreateFile` flag-hops the chosen filename (empty → cancel) to the run
 ///     loop's `resolve_filename_request`.
@@ -4128,22 +4132,18 @@ pub fn apply_text_entry(dlg: TextEntryDialog, state: &mut AppState, mapper: &mut
         TextEntryKind::RenameRoom(id) => {
             let label = if value.is_empty() { None } else { Some(value) };
             mapper.rename_room(id, label);
-            state.bump_graph_gen(); // a graph-mutating edit was applied (SQ-0305)
         }
         TextEntryKind::EditNotes(id) => {
             mapper.set_notes(id, value);
-            state.bump_graph_gen();
         }
         TextEntryKind::RelabelEdge(id, old_dir) => {
             // Parse the user's input as a direction name.
             if let Some(new_dir) = mapper::direction::parse_direction(&value) {
                 mapper.relabel_edge(id, old_dir, new_dir);
             }
-            state.bump_graph_gen();
         }
         TextEntryKind::RenameLayer(id) => {
             mapper.graph.set_layer_name(id, value);
-            state.bump_graph_gen();
         }
         TextEntryKind::ConfigEditPath { field } => {
             if let Some(cs) = &mut state.overlays.config_screen {
@@ -4466,7 +4466,7 @@ fn perform_move(
     let moved = region.rooms.len();
     match mapper::layer::move_region(&mut mapper.graph, region, target) {
         Ok(landed) => {
-            state.bump_graph_gen(); // rooms changed layer → invalidate the render memo (SQ-0305)
+            // `move_region` bumps `Mapper::struct_gen` itself (SQ-1544).
             // A seam the player did not name was chosen FOR them, so say which passage was cut —
             // otherwise a bare move silently picks a boundary and the map simply changes shape.
             if let Some((from, d)) = cut {
@@ -5579,14 +5579,16 @@ mod tests {
         }
     }
 
-    // ── Map-memo invalidation: production paths bump graph_gen (SQ-0305) ──────────
-    // The map render model is memoized on (graph_gen, viewed_layer). Any graph edit
-    // that reaches the live path with an unchanged graph_gen paints a STALE MAP, so
-    // each edit path must bump. These drive the real apply_action code, not a manual
-    // bump, so a regression that drops a bump fails here.
+    // ── Map-memo invalidation: production paths bump Mapper::struct_gen (SQ-1544) ─
+    // The map render model is memoized on (struct_gen, viewed_layer) — see
+    // `AppState::cached_map_render`, which reads `MapGraph::struct_gen` straight off
+    // the live graph. Any graph edit that reaches the live path with an unchanged
+    // struct_gen paints a STALE MAP, so each edit path must actually mutate the
+    // graph. These drive the real apply_action/apply_text_entry code, not a manual
+    // bump, so a regression that drops the underlying mutation fails here.
 
     #[test]
-    fn rename_room_prompt_submit_bumps_graph_gen() {
+    fn rename_room_prompt_submit_bumps_struct_gen() {
         let mut s = AppState::default();
         let mut m = Mapper::default();
         m.observe(1, "Old Name", None);
@@ -5595,15 +5597,15 @@ mod tests {
             crate::state::TextEntryKind::RenameRoom(1),
             "New Name",
         );
-        let before = s.graph_gen;
+        let before = m.struct_gen();
         apply_text_entry(dlg, &mut s, &mut m);
         assert_eq!(m.graph.room(1).unwrap().label_override.as_deref(), Some("New Name"),
             "rename actually applied");
-        assert_ne!(s.graph_gen, before, "renaming a room must invalidate the map memo");
+        assert_ne!(m.struct_gen(), before, "renaming a room must invalidate the map memo");
     }
 
     #[test]
-    fn delete_connection_bumps_graph_gen() {
+    fn delete_connection_bumps_struct_gen() {
         let mut s = AppState::default();
         let mut m = Mapper::default();
         m.observe(1, "A", None);
@@ -5611,10 +5613,10 @@ mod tests {
         assert!(m.graph.connections().iter().any(|c| c.origin == 1),
             "fixture must have an outgoing edge from room 1");
         s.select_room(Some(1));
-        let before = s.graph_gen;
+        let before = m.struct_gen();
         apply_action(Action::DeleteSelectedConnection, &mut s, &mut m);
         assert!(!m.graph.connections().iter().any(|c| c.origin == 1), "edge actually deleted");
-        assert_ne!(s.graph_gen, before, "deleting a connection must invalidate the map memo");
+        assert_ne!(m.struct_gen(), before, "deleting a connection must invalidate the map memo");
     }
 
     #[test]

@@ -426,7 +426,10 @@ pub(crate) fn dispatch_slash_outcome(
             match load_map(&full) {
                 Some(m) => {
                     *mapper = m;
-                    state.bump_graph_gen(); // imported map replaced the graph → invalidate memo (SQ-0305)
+                    // A wholesale graph replacement: the new graph's `struct_gen` starts back at
+                    // 0, so a generation-number check alone could coincidentally match the stale
+                    // cache's — drop it outright instead (SQ-0305, SQ-1544).
+                    state.invalidate_map_render();
                     state.set_viewed_layer(None);
                     // A whole new graph switches the active layer to whatever the loaded map's
                     // current room sits on — route it through the same layer-switch recenter as
