@@ -27,10 +27,11 @@ pub fn decode(bytes: &[u8]) -> Option<image::DynamicImage> {
     image::load_from_memory(bytes).ok()
 }
 
-/// Read `path`; if it is a blorb declaring an `Fspc` frontispiece, fetch and
-/// decode that Pict. `None` when the file isn't a blorb, has no frontispiece,
-/// the referenced Pict is missing, or the image doesn't decode.
-fn frontispiece_cover(path: &Path) -> Option<image::DynamicImage> {
+/// Read `path`; if it is a blorb declaring an `Fspc` frontispiece, fetch that
+/// Pict's original encoded bytes and format (verifying they decode). `None`
+/// when the file isn't a blorb, has no frontispiece, the referenced Pict is
+/// missing, or the image doesn't decode.
+fn frontispiece_cover_bytes(path: &Path) -> Option<(Vec<u8>, image::ImageFormat)> {
     let bytes = std::fs::read(path).ok()?;
     if !blorb::Blorb::is_blorb(&bytes) {
         return None;
@@ -38,7 +39,29 @@ fn frontispiece_cover(path: &Path) -> Option<image::DynamicImage> {
     let b = blorb::Blorb::parse(bytes).ok()?;
     let n = b.frontispiece()?;
     let (_ty, data) = b.resource(b"Pict", n)?;
-    decode(data)
+    decode(data)?;
+    let format = image::guess_format(data).ok()?;
+    Some((data.to_vec(), format))
+}
+
+/// `path`'s cover, by precedence: the story's own `Fspc` frontispiece always
+/// wins; a fetched `<game_dir>/cover.png` (written by the fetch worker,
+/// SQ-0348) is used only when the story has none. `game_dir` is `None` when
+/// no fallback source is available (e.g. the IFDB-precedence check in
+/// `fetch_worker`, which only cares whether a story already has its own
+/// cover). `None` when neither source yields a decodable image.
+///
+/// Returns the cover's ORIGINAL ENCODED bytes and format, undecoded — for a
+/// host that wants to serve the cover as a file (e.g. over HTTP, or an FFI
+/// caller that decodes with its own image stack) without paying to decode and
+/// re-encode it. [`load_cover`] is built on top of this.
+pub fn cover_bytes(path: &Path, game_dir: Option<&Path>) -> Option<(Vec<u8>, image::ImageFormat)> {
+    if let Some(found) = frontispiece_cover_bytes(path) {
+        return Some(found);
+    }
+    let bytes = std::fs::read(game_dir?.join("cover.png")).ok()?;
+    let format = image::guess_format(&bytes).ok()?;
+    Some((bytes, format))
 }
 
 /// `path`'s cover, by precedence: the story's own `Fspc` frontispiece always
@@ -48,10 +71,7 @@ fn frontispiece_cover(path: &Path) -> Option<image::DynamicImage> {
 /// `fetch_worker`, which only cares whether a story already has its own
 /// cover). `None` when neither source yields a decodable image.
 pub fn load_cover(path: &Path, game_dir: Option<&Path>) -> Option<image::DynamicImage> {
-    if let Some(img) = frontispiece_cover(path) {
-        return Some(img);
-    }
-    let bytes = std::fs::read(game_dir?.join("cover.png")).ok()?;
+    let (bytes, _format) = cover_bytes(path, game_dir)?;
     decode(&bytes)
 }
 
@@ -1219,6 +1239,42 @@ mod tests {
         let img = load_cover(&story_path, Some(&game_dir)).expect("own frontispiece should load");
         let px = img.to_rgb8().get_pixel(0, 0).0;
         assert_eq!(px, [200, 50, 50], "the story's own Fspc must win over a fetched cover.png");
+
+        let _ = std::fs::remove_dir_all(story_path.parent().unwrap());
+    }
+
+    /// SQ-1542: a story with no `Fspc` of its own hands back the fetched
+    /// `cover.png`'s bytes byte-for-byte, undecoded — a host serving the cover
+    /// as a file must not have to re-encode a decoded image.
+    #[test]
+    fn cover_bytes_returns_a_cached_cover_png_unchanged() {
+        let cover_png = png_bytes_colored([9, 8, 7]);
+        let (story_path, game_dir) =
+            temp_story_and_game_dir("cover-bytes-fallback", &minimal_blorb_no_fspc());
+        std::fs::write(game_dir.join("cover.png"), &cover_png).unwrap();
+
+        let (bytes, format) =
+            cover_bytes(&story_path, Some(&game_dir)).expect("fetched cover.png should be found");
+        assert_eq!(bytes, cover_png, "bytes must be returned unchanged, not re-encoded");
+        assert_eq!(format, image::ImageFormat::Png);
+
+        let _ = std::fs::remove_dir_all(story_path.parent().unwrap());
+    }
+
+    /// SQ-1542: a story's own `Fspc` frontispiece wins, and its raw Pict bytes
+    /// (not the fetched `cover.png`'s) are what comes back.
+    #[test]
+    fn cover_bytes_prefers_the_frontispieces_raw_bytes_over_a_fetched_cover_png() {
+        let own = png_bytes_colored([200, 50, 50]);
+        let fetched = png_bytes_colored([1, 2, 3]);
+        let (story_path, game_dir) =
+            temp_story_and_game_dir("cover-bytes-precedence", &blorb_with_fspc(&own));
+        std::fs::write(game_dir.join("cover.png"), &fetched).unwrap();
+
+        let (bytes, format) =
+            cover_bytes(&story_path, Some(&game_dir)).expect("the story's own frontispiece should be found");
+        assert_eq!(bytes, own, "the frontispiece's own bytes must win over the fetched cover.png");
+        assert_eq!(format, image::ImageFormat::Png);
 
         let _ = std::fs::remove_dir_all(story_path.parent().unwrap());
     }
