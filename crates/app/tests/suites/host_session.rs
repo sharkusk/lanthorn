@@ -1,0 +1,311 @@
+//! SQ-1539: the rest of a session through the library — game clocks, the
+//! pane size, exit save and resume, reset, and the game's own file prompts —
+//! with no terminal.
+//!
+//! | fixture | what | where |
+//! |---|---|---|
+//! | a hand-assembled v5 story | a timed `read_char` whose routine counts | built below |
+//! | `Kerkerkruip.gblorb` | a Glulx intro driven by Glk timer events | `stories/` (skips when absent) |
+//! | `Tangle.z5` (Spider and Web r4) | exit save, reset, SAVE/RESTORE | fetched (`fixture_path`) |
+
+use std::path::{Path, PathBuf};
+use std::time::Duration;
+
+use app::config::Config;
+use app::engine::Engine;
+use app::host::ingame_io::{answer_file_prompt, pending_file_prompt, FilePrompt};
+use app::host::{boot_story, BootRequest, BootedStory, LaunchFlags, QuietBoot, TerminalFacts, TurnOutcome};
+use app::launch_options::LaunchOverrides;
+use app::session::InputKind;
+
+use crate::fixture_paths::fixture_path;
+
+fn headless_config(home: &Path) -> Config {
+    Config {
+        user_dir: home.to_path_buf(),
+        config_file: home.join("config.toml"),
+        random_seed: Some(1),
+        auto_save: true,
+        ..Config::default()
+    }
+}
+
+fn boot(story: PathBuf, home: &Path) -> BootedStory {
+    let overrides = LaunchOverrides::default();
+    let req = BootRequest {
+        story_path: story,
+        disk_entry: None,
+        overrides: &overrides,
+        cfg: headless_config(home),
+        data_base: home.join("saves"),
+        flags: LaunchFlags::default(),
+        terminal: TerminalFacts::default(),
+    };
+    boot_story(req, &mut QuietBoot).expect("the story boots headlessly")
+}
+
+fn command(b: &mut BootedStory, cmd: &str) -> TurnOutcome {
+    let result = b.session.submit(cmd);
+    let mut tidy = 0u32;
+    app::host::finish_command_turn(
+        cmd, true, result, &mut b.state, &mut b.mapper, &mut *b.session, &b.game_dir, &b.ifid,
+        &b.arc_file, None, &mut tidy,
+    )
+}
+
+fn here(b: &BootedStory) -> Option<String> {
+    b.session.current_location().map(|l| l.name)
+}
+
+fn fire(b: &mut BootedStory, at: std::time::Instant) -> app::host::clock::Fired {
+    app::host::clock::fire_due(&mut b.state, &mut b.mapper, &mut *b.session, &b.game_dir, None, at)
+}
+
+// ── Clocks ────────────────────────────────────────────────────────────────────
+
+/// A v5 story whose `read_char` times out every tenth of a second and runs a
+/// routine that counts the timeouts in `G1` and keeps waiting.
+///
+/// ```text
+/// 0x40  read_char 1 1 routine=0x0200 (packed 0x80) -> G0
+/// 0x47  quit
+/// 0x200 routine: inc G1 ; rfalse
+/// ```
+fn timed_story() -> Vec<u8> {
+    let mut buf = vec![0u8; 0x0800];
+    buf[0x00] = 5;
+    buf[0x04] = 0x04; // high memory 0x0400
+    buf[0x07] = 0x40; // initial PC
+    buf[0x08] = 0x04; // dictionary 0x0400 (empty), in static memory as a story's is
+    buf[0x401] = 4;
+    buf[0x0A] = 0x01; // objects 0x0100
+    buf[0x0C] = 0x03; // globals 0x0300
+    buf[0x0E] = 0x04; // static memory 0x0400
+    buf[0x12..0x18].copy_from_slice(b"260923");
+    buf[0x19] = 0x60; // abbreviations
+    // read_char: operand types small, small, large, omit = 01 01 00 11.
+    let code: &[u8] = &[0xF6, 0x53, 0x01, 0x01, 0x00, 0x80, 0x10, 0xBA];
+    buf[0x40..0x40 + code.len()].copy_from_slice(code);
+    buf[0x200..0x204].copy_from_slice(&[0x00, 0x95, 0x11, 0xB1]); // 0 locals; inc G1; rfalse
+    buf
+}
+
+/// The host's clock loop — `refresh_input`, `next_deadline`, `fire_due` — runs a
+/// Z-machine story's timed-input routine each time its interval elapses, and
+/// the read goes on waiting because the routine said to.
+#[test]
+fn a_zmachine_timed_read_fires_through_the_host_clock() {
+    let home = app::scratch_dir("host-clock-z");
+    let story = home.join("timed.z5");
+    std::fs::write(&story, timed_story()).unwrap();
+    let mut b = boot(story, &home);
+    let g1 = |b: &BootedStory| app::engine_helpers::zvm_session_opt(&*b.session).unwrap().machine.global(1);
+
+    let req = app::host::clock::input_request(&*b.session);
+    assert_eq!(req.kind, InputKind::Char);
+    assert_eq!(req.timeout, Some(Duration::from_millis(100)), "a tenth of a second, ZMSD §15");
+    assert_eq!(app::host::clock::next_deadline(&b.state), None, "nothing armed before the host refreshes");
+
+    for n in 1..=3 {
+        let _ = app::host::clock::refresh_input(&mut b.state, &mut *b.session);
+        let due = app::host::clock::next_deadline(&b.state).expect("the timed read arms a deadline");
+        let early = fire(&mut b, due - Duration::from_millis(1));
+        assert!(!early.redraw, "nothing fires before its deadline");
+        assert_eq!(g1(&b), n - 1);
+        let fired = fire(&mut b, due);
+        assert!(fired.redraw && !fired.quit);
+        assert_eq!(g1(&b), n, "the routine ran once per elapsed interval");
+        assert_eq!(b.session.pending_input(), InputKind::Char, "and the read goes on waiting");
+    }
+    let _ = std::fs::remove_dir_all(&home);
+}
+
+/// Kerkerkruip's intro is driven by Glk timer events (see
+/// `sq1514_kerkerkruip_panel_links`): its title animation paints into windows
+/// of its own rather than the transcript, so what the timer moves is the screen
+/// — with nothing but the host clock ticking, the frame changes under it.
+#[test]
+fn a_glulx_timer_fires_through_the_host_clock() {
+    let story = fixture_path("Kerkerkruip.gblorb");
+    if !story.is_file() {
+        eprintln!("SKIP: {} absent", story.display());
+        return;
+    }
+    let home = app::scratch_dir("host-clock-glulx");
+    let mut b = boot(story, &home);
+    let _ = app::host::clock::refresh_input(&mut b.state, &mut *b.session);
+    let req = app::host::clock::input_request(&*b.session);
+    assert!(req.timeout.is_some(), "premise: the intro runs on a Glk timer: {req:?}");
+    let frame = |b: &BootedStory| format!("{:?}", b.session.screen().root);
+    let before = frame(&b);
+    let mut ticks = 0;
+    while ticks < 20 {
+        let due = app::host::clock::next_deadline(&b.state).expect("the timer stays armed through the intro");
+        let early = fire(&mut b, due - Duration::from_millis(1));
+        assert!(!early.redraw, "nothing fires before its deadline");
+        let fired = fire(&mut b, due);
+        assert!(fired.redraw && !fired.quit, "tick {ticks}");
+        assert!(b.state.glulx_timer_next_fire.is_none(), "a fired timer disarms until the host refreshes");
+        let _ = app::host::clock::refresh_input(&mut b.state, &mut *b.session);
+        ticks += 1;
+        if frame(&b) != before {
+            break;
+        }
+    }
+    assert_ne!(frame(&b), before, "timer events alone moved the game's screen on ({ticks} ticks)");
+    let _ = std::fs::remove_dir_all(&home);
+}
+
+// ── The pane size ─────────────────────────────────────────────────────────────
+
+/// The host names the pane in cells and a v5 story is told it in its header —
+/// no pane rectangles, no terminal.
+#[test]
+fn the_host_sets_a_zmachine_storys_screen_size() {
+    let story = fixture_path("Tangle.z5");
+    if !story.is_file() {
+        eprintln!("SKIP: {} absent", story.display());
+        return;
+    }
+    let home = app::scratch_dir("host-screen");
+    let mut b = boot(story, &home);
+    let header = |b: &BootedStory| {
+        let z = app::engine_helpers::zvm_session_opt(&*b.session).unwrap();
+        (z.machine.mem.read_byte(0x20), z.machine.mem.read_byte(0x21))
+    };
+    assert!(app::host::screen::set_story_pane(&mut *b.session, &b.state, (120, 40)));
+    let (rows, cols) = header(&b);
+    assert!(cols >= 110 && rows >= 30, "the story is told a pane near 120x40: {cols}x{rows}");
+    assert!(
+        !app::host::screen::set_story_pane(&mut *b.session, &b.state, (120, 40)),
+        "the same size again tells the story nothing new"
+    );
+    let _ = std::fs::remove_dir_all(&home);
+}
+
+// ── Exit save, reset, and the game's own SAVE/RESTORE ─────────────────────────
+
+/// The exit save leaves a resume point the next boot picks up, and the game
+/// plays on from it exactly as the original would have.
+#[test]
+fn an_exit_save_is_what_the_next_boot_resumes() {
+    let story = fixture_path("Tangle.z5");
+    if !story.is_file() {
+        eprintln!("SKIP: {} absent", story.display());
+        return;
+    }
+    let home = app::scratch_dir("host-exit-save");
+    let mut first = boot(story.clone(), &home);
+    assert!(!command(&mut first, "south").quit);
+    assert_eq!(here(&first).as_deref(), Some("Mouth of Alley"), "premise: the move went somewhere");
+    let saved = app::host::persist::exit_save(
+        &mut *first.session, &first.mapper, &first.state, &first.ifid, &first.arc_file,
+    );
+    assert_eq!(saved, app::host::persist::ExitSave::Saved);
+
+    let mut second = boot(story, &home);
+    assert_eq!(here(&second), here(&first), "the next boot resumes where the exit save left off");
+    assert_eq!(second.state.turns, first.state.turns);
+    // Perturb before trusting it.
+    let _ = command(&mut first, "north");
+    let _ = command(&mut second, "north");
+    assert_eq!(here(&second), here(&first));
+    assert_eq!(second.state.transcript.last(), first.state.transcript.last());
+    let _ = std::fs::remove_dir_all(&home);
+}
+
+/// A reset with `clear_map` puts the story back at its start with a fresh
+/// transcript, turn count and map, exactly as the TUI's `/reset-game map`.
+#[test]
+fn a_reset_clears_the_game_the_map_and_the_counters() {
+    let story = fixture_path("Tangle.z5");
+    if !story.is_file() {
+        eprintln!("SKIP: {} absent", story.display());
+        return;
+    }
+    let home = app::scratch_dir("host-reset");
+    let mut b = boot(story.clone(), &home);
+    let start = here(&b);
+    let _ = command(&mut b, "south");
+    b.state.turns = 1;
+    assert!(b.mapper.graph.rooms().count() >= 2, "premise: the walk mapped two rooms");
+
+    app::host::reset::reset_game(
+        &mut *b.session,
+        &mut b.mapper,
+        &mut b.state,
+        &b.story_bytes,
+        &b.story_path,
+        &b.game_dir,
+        None,
+        app::host::reset::ResetOptions { clear_map: true, delete_data: false },
+    );
+    assert_eq!(here(&b), start, "back at the start");
+    assert_eq!(b.state.turns, 0);
+    assert_eq!(b.mapper.graph.rooms().count(), 1, "the map holds only the start room");
+    let text = b.state.transcript.join("\n");
+    assert!(text.contains("Spider And Web"), "the transcript is the fresh banner: {text}");
+    assert!(!text.contains("Mouth of Alley"), "and nothing from before the reset");
+    let _ = command(&mut b, "south");
+    assert_eq!(here(&b).as_deref(), Some("Mouth of Alley"), "and the game plays on from there");
+    let _ = std::fs::remove_dir_all(&home);
+}
+
+/// The game's own SAVE, answered with a name, writes the save file; the game's
+/// own RESTORE, answered with the same name, reads it back.
+#[test]
+fn a_game_save_answered_by_name_is_what_a_later_restore_reads() {
+    let story = fixture_path("Tangle.z5");
+    if !story.is_file() {
+        eprintln!("SKIP: {} absent", story.display());
+        return;
+    }
+    let home = app::scratch_dir("host-file-prompt");
+    let mut b = boot(story, &home);
+    let _ = command(&mut b, "south");
+    assert_eq!(here(&b).as_deref(), Some("Mouth of Alley"));
+
+    let _ = command(&mut b, "save");
+    assert_eq!(pending_file_prompt(&b.state), Some(FilePrompt::Save), "the game asks where to save");
+    let out = answer_file_prompt(
+        &mut *b.session, &mut b.mapper, &mut b.state, &b.game_dir, &b.ifid, Some("in the alley"), None,
+    );
+    assert!(!out.quit);
+    assert_eq!(pending_file_prompt(&b.state), None, "the save was answered");
+    assert!(b.game_dir.join("in-the-alley.lanthorn").is_file(), "and written");
+    assert_eq!(b.session.pending_input(), InputKind::Line, "the game took its turn back");
+
+    let _ = command(&mut b, "north");
+    assert_eq!(here(&b).as_deref(), Some("End of Alley"), "premise: we moved on after saving");
+
+    let _ = command(&mut b, "restore");
+    assert_eq!(pending_file_prompt(&b.state), Some(FilePrompt::Restore), "the game asks what to restore");
+    let out = answer_file_prompt(
+        &mut *b.session, &mut b.mapper, &mut b.state, &b.game_dir, &b.ifid, Some("In The Alley"), None,
+    );
+    assert!(!out.quit);
+    assert_eq!(pending_file_prompt(&b.state), None);
+    assert_eq!(here(&b).as_deref(), Some("Mouth of Alley"), "the restore read back the saved game");
+    // Perturb: the restored game plays on from the saved room.
+    let _ = command(&mut b, "north");
+    assert_eq!(here(&b).as_deref(), Some("End of Alley"));
+    let _ = std::fs::remove_dir_all(&home);
+}
+
+/// Cancelling the game's prompt tells the game it failed, and the game goes on.
+#[test]
+fn a_cancelled_game_save_resumes_the_game() {
+    let story = fixture_path("Tangle.z5");
+    if !story.is_file() {
+        eprintln!("SKIP: {} absent", story.display());
+        return;
+    }
+    let home = app::scratch_dir("host-file-cancel");
+    let mut b = boot(story, &home);
+    let _ = command(&mut b, "save");
+    assert_eq!(pending_file_prompt(&b.state), Some(FilePrompt::Save));
+    let _ = answer_file_prompt(&mut *b.session, &mut b.mapper, &mut b.state, &b.game_dir, &b.ifid, None, None);
+    assert_eq!(pending_file_prompt(&b.state), None);
+    assert_eq!(b.session.pending_input(), InputKind::Line, "the game is back at its prompt");
+    let _ = std::fs::remove_dir_all(&home);
+}

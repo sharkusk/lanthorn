@@ -118,6 +118,16 @@ pub fn format_rfc3339(secs: u64) -> String {
     format!("{:04}-{:02}-{:02}T{:02}:{:02}:{:02}Z", year, month, day, hour, min, sec)
 }
 
+/// Now, as [`format_rfc3339`] writes it — every save's `Meta::saved_at`.
+pub fn now_rfc3339() -> String {
+    format_rfc3339(
+        std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map(|d| d.as_secs())
+            .unwrap_or(0),
+    )
+}
+
 fn days_to_ymd(mut days: u64) -> (u64, u64, u64) {
     days += 719468;
     let era = days / 146097;

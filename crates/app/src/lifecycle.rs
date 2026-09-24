@@ -1,30 +1,19 @@
 //! Exit / quit persistence paths: exit auto-save, the quit-dialog "Save State &
 //! quit" snapshot, and the pending config-write flush. Extracted verbatim from
-//! `main.rs` (SQ-0306) as a pure move — no behavior change. The SQ-0283
-//! save/restore-pending guards and the auto-save gate move intact inside the
-//! bodies. Helper fns these rely on stay in `main.rs` (referenced via `crate::`).
+//! `main.rs` (SQ-0306). The saves themselves — the gates, the archive each one
+//! writes — are the library's [`app::host::persist`] (SQ-1539); what stays here
+//! is the TUI's half: telling the termination watchdog a write is in flight
+//! (SQ-0651), and saying on stderr how it went.
 
 use mapper::mapper::Mapper;
 
 use app::engine::Engine;
+use app::host::persist::ExitSave;
 use app::state::AppState;
 
-use app::engine_helpers::zvm_session_opt;
-use crate::format_rfc3339;
-
-/// Save on exit ONLY when auto_save is enabled. With auto_save off (the default),
-/// nothing is saved automatically — the user controls saving via the quit prompt's
-/// "Save State & quit", the /save-state command, or named save slots. This keeps
-/// "Quit without saving" honest and avoids silently overwriting an explicit save
-/// point on exit.
-/// Exit auto-save is engine-neutral: the save routes through Engine::save_state
-/// (Quetzal for zvm, the gvm snapshot for Glulx); screen.bin is written for
-/// zvm only.
-/// Skip while a Glulx in-game @save/@restore is suspended, awaiting host I/O:
-/// snapshotting mid-suspension would capture the un-popped @save call stub,
-/// and restore_state never pops it -> a corrupted stack on a later Save State
-/// restore (SQ-0283 carry-forward fix). The in-game save the player was
-/// already making is the relevant persistence in that case.
+/// Save on exit when auto_save is enabled — see
+/// [`app::host::persist::exit_auto_save`] for the rules (the auto_save gate, and
+/// the SQ-0283 skip while an in-game @save/@restore is suspended).
 pub(crate) fn exit_auto_save(
     session: &mut dyn Engine,
     mapper: &Mapper,
@@ -32,60 +21,23 @@ pub(crate) fn exit_auto_save(
     ifid: &str,
     arc_file: &std::path::Path,
 ) {
-    if !state.config.auto_save || session.is_saveload_pending() {
-        return;
-    }
     // Tell the termination watchdog a save is actively running so its fixed grace
     // does not kill the process mid-write and lose it (SQ-0651 / partial SQ-0644).
     // Held for the whole snapshot+write; cleared on drop, unwind included.
     let _writing = crate::ExitSaveGuard::new();
-    // Land any in-flight background auto-save write (SQ-1184) BEFORE this
-    // function does its own synchronous write to the same path — otherwise a
-    // background write still catching up on the last turn could finish AFTER
-    // this one and overwrite the exit save with a stale turn, or the two
-    // could interleave onto the file. See `archive_worker::ArchiveWorker::flush`.
-    state.archive_worker.flush();
-    let (location, score) = app::engine_helpers::save_summary(session, state);
-    let exit_meta = app::archive::Meta {
-        format_version: app::archive::CURRENT_FORMAT_VERSION,
-        ifid: Some(ifid.to_string()),
-        name: None,
-        turns: state.turns,
-        saved_at: format_rfc3339(
-            std::time::SystemTime::now()
-                .duration_since(std::time::UNIX_EPOCH)
-                .map(|d| d.as_secs())
-                .unwrap_or(0),
-        ),
-        location,
-        score,
-        trigger: app::archive::SaveTrigger::HostState,
-    };
-    let (v6_pics, v6_display, v6_ground, v6_diags) = app::engine_helpers::v6_save_payload(session);
-    for d in &v6_diags { state.note_v6_save(d); }
-    match app::archive::save_archive_meta_pics(arc_file, mapper, &session.save_state(), zvm_session_opt(session).map(|z| &z.machine.screen), session.aux_data(), exit_meta, &app::archive::SessionRecord::of(state), &v6_pics, v6_display.as_ref(), v6_ground.as_deref()) {
-        Ok(()) => {
-            eprintln!("lanthorn: map saved to {}", arc_file.display());
-        }
-        Err(e) => {
-            eprintln!("lanthorn: warning: could not save to {}: {}", arc_file.display(), e);
+    match app::host::persist::exit_auto_save(session, mapper, state, ifid, arc_file) {
+        ExitSave::Skipped => {}
+        ExitSave::Saved => eprintln!("lanthorn: map saved to {}", arc_file.display()),
+        ExitSave::Failed(e) => {
+            eprintln!("lanthorn: warning: could not save to {}: {}", arc_file.display(), e)
         }
     }
 }
 
-/// Exit path for a CLEAN, game-driven quit (SQ-1342): rewrite the archive with
-/// no resume point instead of `exit_auto_save`'s snapshot, so reopening the
-/// story starts it fresh rather than one turn before the player typed `quit`.
-///
-/// "No resume point" means an [`app::engine::EngineSave`] with empty `bytes`
-/// (`ArchiveContents::save.is_empty()` is what `startup.rs`'s auto-load check
-/// reads) and no screen/transcript/history — but the mapper (the player's own
-/// knowledge of the map), the aux table, and the command history all survive a
-/// clean finish exactly as they do today, because nothing about THOSE is
-/// specific to the turn the player quit on.
-///
-/// Called instead of, never alongside, `exit_auto_save` — see the call site in
-/// `main.rs` §6 gated on `state.game_ended`.
+/// Exit path for a CLEAN, game-driven quit (SQ-1342) — see
+/// [`app::host::persist::exit_clear_resume_save`]. Called instead of, never
+/// alongside, `exit_auto_save` — see the call site in `main.rs` §6 gated on
+/// `state.game_ended`.
 pub(crate) fn exit_clear_resume_save(
     session: &mut dyn Engine,
     mapper: &Mapper,
@@ -93,46 +45,23 @@ pub(crate) fn exit_clear_resume_save(
     ifid: &str,
     arc_file: &std::path::Path,
 ) {
-    if !state.config.auto_save || session.is_saveload_pending() {
-        return;
-    }
     let _writing = crate::ExitSaveGuard::new();
-    // Land any in-flight per-turn auto-save BEFORE this write (see the matching
-    // comment in `exit_auto_save`): a background write for an earlier turn that
-    // lands AFTER this one would silently put the resume point right back.
-    state.archive_worker.flush();
-    // A full save just to discard its bytes looks wasteful, but this runs once,
-    // at exit, and it is the only way to get the CORRECT engine tag/format
-    // version stamped on an empty save — the same ones a real save on this
-    // engine would carry, so a hand-rolled shortcut can't drift from them.
-    // `write_cleared_resume_archive` (`app::archive`) is the shared, testable
-    // core: it discards `save.bytes` itself and writes no transcript/history/
-    // screen, keeping only the mapper/aux (passed through) and command history.
-    let save = session.save_state();
-    let saved_at = format_rfc3339(
-        std::time::SystemTime::now()
-            .duration_since(std::time::UNIX_EPOCH)
-            .map(|d| d.as_secs())
-            .unwrap_or(0),
-    );
-    match app::archive::write_cleared_resume_archive(arc_file, mapper, &save, session.aux_data(), ifid, saved_at, &state.command_history) {
-        Ok(()) => {
-            eprintln!("lanthorn: map saved to {} (story finished — no resume point)", arc_file.display());
-        }
-        Err(e) => {
-            eprintln!("lanthorn: warning: could not save to {}: {}", arc_file.display(), e);
+    match app::host::persist::exit_clear_resume_save(session, mapper, state, ifid, arc_file) {
+        ExitSave::Skipped => {}
+        ExitSave::Saved => eprintln!(
+            "lanthorn: map saved to {} (story finished — no resume point)",
+            arc_file.display()
+        ),
+        ExitSave::Failed(e) => {
+            eprintln!("lanthorn: warning: could not save to {}: {}", arc_file.display(), e)
         }
     }
 }
 
 /// Quit-dialog "Save State & quit" host snapshot, extracted from the quit-dialog
-/// keyboard and mouse handlers so the guard below is unit-testable.
-/// Skip while a Glulx in-game @save/@restore is suspended, awaiting host I/O:
-/// snapshotting mid-suspension would capture the un-popped @save call stub, and
-/// restore_state never pops it -> a corrupted stack on a later Save State
-/// restore (SQ-0283 carry-forward fix). The in-game save the player was already
-/// making is the relevant persistence in that case; the dialog still proceeds
-/// to quit either way.
+/// keyboard and mouse handlers so the guard it relies on is unit-testable — see
+/// [`app::host::persist::save_state_now`] (skipped while an in-game
+/// @save/@restore is suspended, SQ-0283; the dialog still proceeds to quit).
 ///
 /// Returns the failure message when the save the user explicitly asked for did
 /// not happen, so the caller can print it AFTER the terminal is restored (SQ-0651
@@ -147,33 +76,9 @@ pub(crate) fn quit_dialog_save(
     ifid: &str,
     arc_file: &std::path::Path,
 ) -> Option<String> {
-    if session.is_saveload_pending() {
-        return None;
-    }
-    // See the matching comment in `exit_auto_save` (SQ-1184): this writes the
-    // same path a background per-turn auto-save may still be catching up on.
-    state.archive_worker.flush();
-    let (location, score) = app::engine_helpers::save_summary(session, state);
-    let meta = app::archive::Meta {
-        format_version: app::archive::CURRENT_FORMAT_VERSION,
-        ifid: Some(ifid.to_string()),
-        name: None,
-        turns: state.turns,
-        saved_at: format_rfc3339(
-            std::time::SystemTime::now()
-                .duration_since(std::time::UNIX_EPOCH)
-                .map(|d| d.as_secs())
-                .unwrap_or(0),
-        ),
-        location,
-        score,
-        trigger: app::archive::SaveTrigger::HostState,
-    };
-    let (v6_pics, v6_display, v6_ground, v6_diags) = app::engine_helpers::v6_save_payload(session);
-    for d in &v6_diags { state.note_v6_save(d); }
-    match app::archive::save_archive_meta_pics(arc_file, mapper, &session.save_state(), zvm_session_opt(session).map(|z| &z.machine.screen), session.aux_data(), meta, &app::archive::SessionRecord::of(state), &v6_pics, v6_display.as_ref(), v6_ground.as_deref()) {
-        Ok(()) => None,
-        Err(e) => Some(format!(
+    match app::host::persist::save_state_now(session, mapper, state, ifid, arc_file) {
+        ExitSave::Skipped | ExitSave::Saved => None,
+        ExitSave::Failed(e) => Some(format!(
             "lanthorn: warning: \"Save State & quit\" could not save to {}: {}",
             arc_file.display(),
             e

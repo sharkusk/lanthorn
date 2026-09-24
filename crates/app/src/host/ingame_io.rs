@@ -303,6 +303,108 @@ pub fn resolve_filename_request(
     false
 }
 
+/// Resume whatever the game was waiting on once its dialog has been answered or
+/// closed — an in-game SAVE/RESTORE ([`resolve_ingame_dialog`]) or a
+/// `create_by_prompt` filename ([`resolve_filename_request`]) — and persist
+/// what that turn changed (the aux table, the Glk file VFS). Returns `true` if
+/// the game ended. The TUI runs this after every dialog interaction.
+pub fn resolve_pending(
+    session: &mut dyn Engine,
+    mapper: &mut Mapper,
+    state: &mut AppState,
+    game_dir: &std::path::Path,
+    ifid: &str,
+    map_view: Option<(u16, u16)>,
+) -> bool {
+    let quit = resolve_ingame_dialog(session, mapper, state, game_dir, ifid, map_view)
+        || resolve_filename_request(session, mapper, state, game_dir, ifid, map_view);
+    turn::persist_aux_after_turn(session, state, game_dir);
+    turn::persist_vfs_after_turn(session, state, game_dir);
+    quit
+}
+
+/// A file the game itself has asked the host for (SQ-1539).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum FilePrompt {
+    /// The game's own `@save`: a name to save under.
+    Save,
+    /// The game's own `@restore`: which save to read back.
+    Restore,
+    /// A Glk `glk_fileref_create_by_prompt`: a file name for the game's own use
+    /// (a transcript, a data file).
+    Filename(crate::session::FilenameReq),
+}
+
+/// The file prompt the game is waiting on, if any. While one is pending the
+/// game takes no other input; answer it with [`answer_file_prompt`].
+pub fn pending_file_prompt(state: &AppState) -> Option<FilePrompt> {
+    match state.ingame_io {
+        Some(crate::session::PendingIo::Save) => Some(FilePrompt::Save),
+        Some(crate::session::PendingIo::Restore) => Some(FilePrompt::Restore),
+        None => state.pending_filename.map(FilePrompt::Filename),
+    }
+}
+
+/// Answer the game's pending file prompt ([`pending_file_prompt`]) the way a
+/// player answers its dialog, for a host that draws no dialogs: `Some(name)`
+/// supplies a name, `None` cancels.
+///
+/// - **Save** — writes the `.lanthorn` a player's in-game save writes, under
+///   `name` in `game_dir`, over any save already there (a host that wants to
+///   confirm an overwrite asks before answering), and resumes the game.
+/// - **Restore** — `name` is a save's display name from this story's saves
+///   (as `/restore-state <name>` takes it); a game save answers the pending
+///   `@restore`, a host Save State resumes the whole session instead.
+/// - **Filename** — `name` is handed to the game's `create_by_prompt`.
+///
+/// A name that cannot be used (an empty or unwritable save name, a restore name
+/// no save carries) leaves the prompt pending, with a notice saying why.
+pub fn answer_file_prompt(
+    session: &mut dyn Engine,
+    mapper: &mut Mapper,
+    state: &mut AppState,
+    game_dir: &std::path::Path,
+    ifid: &str,
+    answer: Option<&str>,
+    map_view: Option<(u16, u16)>,
+) -> turn::TurnOutcome {
+    match (pending_file_prompt(state), answer) {
+        (None, _) => return turn::TurnOutcome::default(),
+        (Some(FilePrompt::Save), Some(name)) => {
+            state.overlays.save_name_dialog = None;
+            handle_save_as(name.to_string(), game_dir, ifid, mapper, session, state, true);
+        }
+        (Some(FilePrompt::Save), None) => state.overlays.save_name_dialog = None,
+        (Some(FilePrompt::Restore), Some(name)) => {
+            let wanted = name.to_lowercase();
+            let Some(entry) = combined_saves(game_dir)
+                .into_iter()
+                .find(|e| !e.is_default && e.name.to_lowercase() == wanted)
+            else {
+                state.push_notice(&format!("[No save named {name}]"));
+                return turn::TurnOutcome::default();
+            };
+            let loaded = super::persist::load_save(
+                session,
+                mapper,
+                state,
+                (&entry.path, &entry.name, entry.trigger),
+                game_dir,
+                ifid,
+                map_view,
+            );
+            return turn::TurnOutcome { quit: loaded.quit, ..Default::default() };
+        }
+        (Some(FilePrompt::Restore), None) => state.overlays.saves = None,
+        (Some(FilePrompt::Filename(_)), choice) => {
+            state.overlays.text_entry = None;
+            state.overlays.file_picker = None;
+            state.filename_submitted = Some(choice.map(str::to_string));
+        }
+    }
+    turn::TurnOutcome { quit: resolve_pending(session, mapper, state, game_dir, ifid, map_view), ..Default::default() }
+}
+
 // ── Tests ────────────────────────────────────────────────────────────────────
 
 #[cfg(all(test, feature = "t-persist"))]

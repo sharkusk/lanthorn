@@ -183,6 +183,20 @@ caller of it: there is one copy of each rule.
   sound through `sound_finished`, which runs the routine exactly as the TUI does
   when its device reports one. `tests/suites/host_turn.rs` drives Zork I into the
   grue and a hand-assembled `@sound_effect` story through a recording sink.
+- **The rest of a session** (SQ-1539) — `host::clock`: `refresh_input` re-arms the
+  timed-input and Glk-timer deadlines, `next_deadline` says when to wake,
+  `fire_due(now)` fires what is due (interrupt routines, Glk timers, sound
+  finishes, Sound2 ramps); the TUI runs exactly that once per loop pass.
+  `host::screen`: the host names the story pane in cells (`set_story_pane`), and
+  the header write or Glulx re-arrange follows — the TUI keeps only its drag
+  debounce. `host::persist`: the exit save, the clean-quit clear, a Save State on
+  demand, `restore_file` and the saves manager's `load_save`; the TUI's
+  `lifecycle.rs` wraps them with the watchdog guard and its stderr lines.
+  `host::reset::reset_game` takes the host's terminal size and a
+  `ResetOptions { clear_map, delete_data }`. `host::ingame_io`'s
+  `pending_file_prompt` / `answer_file_prompt` answer the game's own
+  SAVE/RESTORE/`create_by_prompt` with a name or a cancel, for a host that draws
+  none of the dialogs. `tests/suites/host_session.rs` covers each.
 
 ## Three engines, one renderer — and Glk only for Glulx
 

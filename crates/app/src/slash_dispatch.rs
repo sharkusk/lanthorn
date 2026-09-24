@@ -14,11 +14,11 @@ use app::state::{AppState, ExitTarget, Focus, SavesState, TranscriptFilter, Tran
 use mapper::mapper::Mapper;
 use ratatui::layout::Rect;
 
-use app::engine_helpers::{apply_archive_state, restore_from_file, zvm_session_opt, RestoreOutcome};
+use app::engine_helpers::zvm_session_opt;
 use crate::reset::reset_game;
 use crate::{
-    combined_saves, format_rfc3339, handle_map_export, map_view, open_hints, reobserve_location,
-    scroll_for_match, should_prompt_save_on_quit, toggle_style_watch,
+    combined_saves, format_rfc3339, handle_map_export, map_view, open_hints, scroll_for_match,
+    should_prompt_save_on_quit, toggle_style_watch,
 };
 
 /// Handle a parsed `SlashOutcome` from either typed input or a key dispatch.
@@ -409,24 +409,13 @@ pub(crate) fn dispatch_slash_outcome(
                     state.set_status("load failed: no save found with that name");
                 }
                 Some(ref path) => {
-                    let restore_outcome = restore_from_file(path, &mut *session);
+                    // The restore and everything the archive carries back is the
+                    // library's (`host::persist::restore_file`, SQ-1539).
+                    let restored = app::host::persist::restore_file(&mut *session, mapper, state, path, map_view(map_rect));
                     app::trace::hostio(&state.config.user_dir, state.config.trace.hostio, format!("restore_state({})", path.display()));
-                    match restore_outcome {
-                        Ok(RestoreOutcome::DescriptorCompleted(ac)) => {
-                            // An in-game @save archive carries the whole session
-                            // alongside its game bytes (SQ-0531); a bare .qzl has
-                            // nothing but the bytes.
-                            if let Some(ac) = ac {
-                                apply_archive_state(*ac, &mut *session, mapper, state);
-                            }
-                            reobserve_location(state, mapper, &*session, map_view(map_rect));
-                            state.set_status("restored");
-                        }
-                        Ok(RestoreOutcome::Resumed(ac)) => {
-                            apply_archive_state(*ac, &mut *session, mapper, state);
-                            reobserve_location(state, mapper, &*session, map_view(map_rect));
-                            state.set_status("loaded");
-                        }
+                    match restored {
+                        Ok(app::host::persist::Restored::GameSave { .. }) => state.set_status("restored"),
+                        Ok(app::host::persist::Restored::Resumed) => state.set_status("loaded"),
                         Err(e) => state.set_status(format!("load failed: {}", e)),
                     }
                 }

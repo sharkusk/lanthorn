@@ -23,7 +23,11 @@
 //! - [`ingame_io`] — the game's own SAVE/RESTORE and filename requests.
 
 pub mod boot;
+pub mod clock;
 pub mod ingame_io;
+pub mod persist;
+pub mod reset;
+pub mod screen;
 pub mod sound;
 pub mod turn;
 

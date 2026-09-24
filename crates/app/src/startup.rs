@@ -777,27 +777,6 @@ fn ask_font_check(cfg: &Config) -> FontCheckOutcome {
     outcome
 }
 
-/// The story pane the LIVE terminal gives `state`, in character cells — the
-/// `host_screen` a boot is seeded with.
-///
-/// The live-terminal half of [`app::host::story_screen_in`], which a launch and a
-/// RESTART both reach (SQ-1061). Restarting passed a bare `None` here, under
-/// a comment three dozen lines above promising "the same four links `startup.rs`
-/// resolves, in the same order" — so `GameSession::new_for_machine` took neither
-/// the `set_screen_dims` branch nor the `boot_screen_cols` one, and a v3/v4/v5
-/// story whose status routine lays itself out once at boot came back on zvm's
-/// 80x24 fallback. The launch had to synthesise an `AppState` because it runs
-/// before there is one; a restart holds the real one, and the only thing that
-/// kept the two apart was that this was a positional argument nobody had to fill.
-///
-/// `None` when the terminal size cannot be queried (piped/non-terminal stdout,
-/// e.g. some test harnesses) or the query reports a zero-area frame; the
-/// constructor then falls back to the 80x24 boot default.
-pub(crate) fn host_story_screen(state: &AppState) -> Option<(u16, u16)> {
-    let size = crossterm::terminal::size().ok()?;
-    app::host::story_screen_in(state, size)
-}
-
 /// Re-issue bracketed paste and (when `mouse` is on) mouse capture.
 ///
 /// Written once here so the launch path below and every `Event::Resize` arm

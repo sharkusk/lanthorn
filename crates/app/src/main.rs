@@ -59,14 +59,11 @@ use crate::slash_dispatch::dispatch_slash_outcome;
 use app::host::{ingame_io, turn};
 use app::host::ingame_io::combined_saves;
 use app::host::turn::{format_rfc3339, reobserve_location};
-use crate::ingame_io::{
-    delete_save_confirmed, handle_save_as, open_ingame_saves, resolve_filename_request,
-    resolve_ingame_dialog,
-};
+use crate::ingame_io::{delete_save_confirmed, handle_save_as};
 use crate::reset::reset_game;
 use app::engine_helpers::{
-    apply_archive_state, engine_supports_save, engine_tag, glulx_session_opt_mut, restore_error_msg,
-    restore_from_file, zvm_session_mut, zvm_session_opt, zvm_session_opt_mut, RestoreOutcome,
+    engine_supports_save, engine_tag, glulx_session_opt_mut, restore_error_msg, zvm_session_mut,
+    zvm_session_opt, zvm_session_opt_mut,
 };
 
 // ── Run outcome ─────────────────────────────────────────────────────────────
@@ -1685,113 +1682,6 @@ fn clear_terminal<B: ratatui::backend::Backend>(
     gr.invalidate_v6();
 }
 
-/// True when an armed deadline has come due. Extracted so the "is this clock
-/// due?" decision is testable on its own (SQ-0650). `None` = not armed.
-fn deadline_due(deadline: Option<std::time::Instant>, now: std::time::Instant) -> bool {
-    deadline.is_some_and(|dl| now >= dl)
-}
-
-/// Fire every game clock whose deadline has come due: the Z-machine timed-input
-/// interrupt, the Glulx Glk timer, sampled-sound finish routines / sound-notify,
-/// and Sound2 volume ramps + their volume-notify. Returns
-/// `(redraw_needed, should_quit)`.
-///
-/// **Runs once per loop iteration, on every path** (SQ-0650). This used to live
-/// inside the poll-timeout branch, which meant it only ran on a tick where NO
-/// terminal event arrived — so a mouse whose motion events keep `poll()`
-/// permanently "ready" froze every one of these clocks: a timed-input puzzle
-/// stopped counting down, a Glk timer stopped ticking, and a finished sound never
-/// ran its finish routine, for as long as the pointer kept moving. The loop top
-/// is the same safe point the timeout branch used (both sit between whole event
-/// dispatches, with nothing borrowed), so this is a move, not a new re-entrancy.
-///
-/// Each fired clock disarms itself before dispatching so an elapsed deadline
-/// cannot re-fire every iteration until the game re-arms it.
-fn dispatch_due_game_clocks(
-    state: &mut app::state::AppState,
-    mapper: &mut Mapper,
-    session: &mut dyn Engine,
-    game_dir: &std::path::Path,
-    map_rect: Rect,
-) -> (bool, bool) {
-    let mut redraw = false;
-    // Timed-input interrupt: the deadline elapsed with no key pressed. Run the
-    // game's interrupt routine and apply its output through the same path a
-    // char-mode keypress uses. If the read continues, the pre-input pollers
-    // re-arm the deadline next iteration from `pending_timeout()`; if the routine
-    // aborted the read, it returns `None` and the timer simply stops.
-    if deadline_due(state.input_deadline, std::time::Instant::now()) {
-        if let Some(zs) = zvm_session_opt_mut(session) {
-            let result = zs.run_timed_interrupt();
-            // Fired: disarm so the next armed iteration re-arms fresh at
-            // now + interval (otherwise the elapsed deadline would refire
-            // immediately every iteration).
-            state.input_deadline = None;
-            redraw = true; // interrupt ran → repaint any output
-            if turn::apply_game_driven_result(
-                state, mapper, &result, game_dir, map_view(map_rect), &*session, app::pager::Driver::Timeout,
-            ).quit {
-                return (redraw, true);
-            }
-        }
-    }
-    // Glulx Glk timer tick: the interval elapsed with no key pressed. Deliver an
-    // evtype_Timer to the game and apply its output; disarm so the next armed
-    // iteration re-arms fresh at now + interval (mirroring the guard above).
-    if deadline_due(state.glulx_timer_next_fire, std::time::Instant::now()) {
-        state.glulx_timer_next_fire = None;
-        redraw = true; // timer event delivered → repaint any output
-        if let Some(gs) = glulx_session_opt_mut(session) {
-            let result = gs.deliver_timer();
-            if turn::apply_game_driven_result(
-                state, mapper, &result, game_dir, map_view(map_rect), &*session, app::pager::Driver::Timeout,
-            ).quit {
-                return (redraw, true);
-            }
-        }
-    }
-    // Poll for finished sampled sounds and fire their finish-routines.
-    let done: Vec<u32> = state.audio.as_mut().map(|b| b.finished()).unwrap_or_default();
-    if !done.is_empty() {
-        redraw = true; // finish-routine output / channel state changed
-    }
-    // What a finished sound runs — its finish routine or Glk sound-notify — is the
-    // library's rule (SQ-1538); the device is only what noticed it finish.
-    for id in done {
-        if app::host::sound::sound_finished(state, mapper, session, id, game_dir, map_view(map_rect)) {
-            return (redraw, true);
-        }
-    }
-    // Glulx Sound2 volume-ramp completion: a gradual set_volume_ext whose
-    // duration has elapsed delivers an evtype_VolumeNotify. The host owns the
-    // ramp clock (mirroring the sound-finish notify above); deliver every due one.
-    let now = std::time::Instant::now();
-    // Step any in-flight Sound2 volume ramp toward its target (host owns the ramp
-    // clock). Pure audio — no redraw needed.
-    state.advance_volume_ramps(now);
-    let due_volume: Vec<(u32, u32)> = state
-        .glulx_volume_notify
-        .iter()
-        .filter(|(_, (deadline, _))| *deadline <= now)
-        .map(|(&chan, &(_, notify))| (chan, notify))
-        .collect();
-    if !due_volume.is_empty() {
-        redraw = true;
-    }
-    for (chan, notify) in due_volume {
-        state.glulx_volume_notify.remove(&chan);
-        if let Some(gs) = glulx_session_opt_mut(session) {
-            let result = gs.volume_notify(notify);
-            if turn::apply_game_driven_result(
-                state, mapper, &result, game_dir, map_view(map_rect), &*session, app::pager::Driver::Timeout,
-            ).quit {
-                return (redraw, true);
-            }
-        }
-    }
-    (redraw, false)
-}
-
 /// `--fetch`: run the IFDB metadata pass over `source` without a terminal,
 /// printing one line per story, and return the process exit code (0 unless a
 /// fetch failed). The worker, the delay between requests and the sidecar
@@ -2172,12 +2062,15 @@ fn run_event_loop(boot: startup::BootResult, launched_from_library: bool) -> Run
         // instead, once per iteration, on every path. (The timeout branch reached
         // this same point via its `continue`, so the ordering is unchanged for the
         // idle case that already worked.)
+        // The rules live in the library (SQ-1539): `fire_due` is what a host
+        // that is not a terminal calls on its own schedule too.
         {
-            let (redraw, quit) = dispatch_due_game_clocks(
-                &mut state, &mut mapper, &mut *session, &game_dir, last_panes.map,
+            let fired = app::host::clock::fire_due(
+                &mut state, &mut mapper, &mut *session, &game_dir, map_view(last_panes.map),
+                std::time::Instant::now(),
             );
-            needs_redraw |= redraw;
-            if quit {
+            needs_redraw |= fired.redraw;
+            if fired.quit {
                 break 'event_loop state.exit_target.into();
             }
         }
@@ -2223,7 +2116,7 @@ fn run_event_loop(boot: startup::BootResult, launched_from_library: bool) -> Run
         // Play out a v6 turn's picture sequence one frame at a time (SQ-0708).
         // Runs before the draw, so an advanced frame paints on this very pass.
         needs_redraw |= loop_tick::poll_picture_pacing(&mut state, &mut *session);
-        needs_redraw |= loop_tick::refresh_engine_input(&mut state, &mut *session);
+        needs_redraw |= app::host::clock::refresh_input(&mut state, &mut *session);
         // The command band's object columns are LIVE: refilled from the engine
         // every tick, so a take/drop moves an object between *here* and
         // *carried* on the very next frame (SQ-0664).
@@ -2340,14 +2233,11 @@ fn run_event_loop(boot: startup::BootResult, launched_from_library: bool) -> Run
             } else { false }
         };
         let base_poll_ms = if state.has_active_animation() || sound_active || timer_active || selecting_at_edge { TIDY_POLL_MS } else { 50 };
-        // Clamp to whichever clock is due first: the Z-machine timed-input deadline,
-        // the Glulx Glk-timer deadline, or the soonest pending Sound2 volume-ramp
-        // completion (any may be `None`/empty).
-        let next_volume_deadline = state.glulx_volume_notify.values().map(|(t, _)| *t).min();
+        // Clamp to whichever clock is due first: the game's own (the Z-machine
+        // timed-input deadline, the Glulx Glk-timer deadline, or the soonest
+        // pending Sound2 volume-ramp completion — `host::clock::next_deadline`)…
         let next_deadline = [
-            state.input_deadline,
-            state.glulx_timer_next_fire,
-            next_volume_deadline,
+            app::host::clock::next_deadline(&state),
             // …and the v6 picture pacer, so the loop wakes to land the next frame
             // of a turn's picture sequence on time (SQ-0708).
             state.picture_pace_next,
@@ -2824,19 +2714,13 @@ fn run_event_loop(boot: startup::BootResult, launched_from_library: bool) -> Run
                             handle_save_as(
                                 value, &game_dir, &ifid, &mut mapper, &mut *session, &mut state, false,
                             );
-                            let quit = resolve_ingame_dialog(&mut *session, &mut mapper, &mut state, &game_dir, &ifid, map_view(last_panes.map))
-                                || resolve_filename_request(&mut *session, &mut mapper, &mut state, &game_dir, &ifid, map_view(last_panes.map));
-                            turn::persist_aux_after_turn(&mut *session, &mut state, &game_dir);
-                            turn::persist_vfs_after_turn(&mut *session, &state, &game_dir);
+                            let quit = ingame_io::resolve_pending(&mut *session, &mut mapper, &mut state, &game_dir, &ifid, map_view(last_panes.map));
                             if quit { break 'event_loop state.exit_target.into(); }
                         }
                     }
                     OverlayAct::SaveNameCancel => {
                         state.overlays.save_name_dialog = None;
-                        let quit = resolve_ingame_dialog(&mut *session, &mut mapper, &mut state, &game_dir, &ifid, map_view(last_panes.map))
-                            || resolve_filename_request(&mut *session, &mut mapper, &mut state, &game_dir, &ifid, map_view(last_panes.map));
-                        turn::persist_aux_after_turn(&mut *session, &mut state, &game_dir);
-                        turn::persist_vfs_after_turn(&mut *session, &state, &game_dir);
+                        let quit = ingame_io::resolve_pending(&mut *session, &mut mapper, &mut state, &game_dir, &ifid, map_view(last_panes.map));
                         if quit { break 'event_loop state.exit_target.into(); }
                     }
                     OverlayAct::TextEntrySubmit => {
@@ -2845,20 +2729,14 @@ fn run_event_loop(boot: startup::BootResult, launched_from_library: bool) -> Run
                         if let Some(dlg) = state.overlays.text_entry.take() {
                             apply_text_entry(dlg, &mut state, &mut mapper);
                         }
-                        let quit = resolve_ingame_dialog(&mut *session, &mut mapper, &mut state, &game_dir, &ifid, map_view(last_panes.map))
-                            || resolve_filename_request(&mut *session, &mut mapper, &mut state, &game_dir, &ifid, map_view(last_panes.map));
-                        turn::persist_aux_after_turn(&mut *session, &mut state, &game_dir);
-                        turn::persist_vfs_after_turn(&mut *session, &state, &game_dir);
+                        let quit = ingame_io::resolve_pending(&mut *session, &mut mapper, &mut state, &game_dir, &ifid, map_view(last_panes.map));
                         if quit { break 'event_loop state.exit_target.into(); }
                     }
                     OverlayAct::TextEntryCancel => {
                         // A cancelled CreateFile leaves pending_filename set with no
                         // dialog open → resolve_filename_request treats it as NULL.
                         state.overlays.text_entry = None;
-                        let quit = resolve_ingame_dialog(&mut *session, &mut mapper, &mut state, &game_dir, &ifid, map_view(last_panes.map))
-                            || resolve_filename_request(&mut *session, &mut mapper, &mut state, &game_dir, &ifid, map_view(last_panes.map));
-                        turn::persist_aux_after_turn(&mut *session, &mut state, &game_dir);
-                        turn::persist_vfs_after_turn(&mut *session, &state, &game_dir);
+                        let quit = ingame_io::resolve_pending(&mut *session, &mut mapper, &mut state, &game_dir, &ifid, map_view(last_panes.map));
                         if quit { break 'event_loop state.exit_target.into(); }
                     }
                     OverlayAct::ConfirmDelete(confirmed) => {
@@ -2885,10 +2763,7 @@ fn run_event_loop(boot: startup::BootResult, launched_from_library: bool) -> Run
                                         handle_save_as(
                                             value, &game_dir, &ifid, &mut mapper, &mut *session, &mut state, true,
                                         );
-                                        let quit = resolve_ingame_dialog(&mut *session, &mut mapper, &mut state, &game_dir, &ifid, map_view(last_panes.map))
-                                            || resolve_filename_request(&mut *session, &mut mapper, &mut state, &game_dir, &ifid, map_view(last_panes.map));
-                                        turn::persist_aux_after_turn(&mut *session, &mut state, &game_dir);
-                                        turn::persist_vfs_after_turn(&mut *session, &state, &game_dir);
+                                        let quit = ingame_io::resolve_pending(&mut *session, &mut mapper, &mut state, &game_dir, &ifid, map_view(last_panes.map));
                                         if quit { break 'event_loop state.exit_target.into(); }
                                     }
                                     // Cancelled: the save-name dialog is untouched behind
@@ -4265,107 +4140,17 @@ fn run_event_loop(boot: startup::BootResult, launched_from_library: bool) -> Run
                 let load_info = state.overlays.saves.as_ref().and_then(|s| {
                     s.entries.get(s.scroll.selected).map(|e| (e.path.clone(), e.name.clone(), e.trigger))
                 });
-
-                // In-game restore of a GAME save — a bare .qzl from another
-                // interpreter, or a .lanthorn that lanthorn's own @save wrote
-                // (SQ-0531): feed the descriptor-PC bytes back into the
-                // suspended VM, completing the @restore. When they came out of
-                // an archive, its map/transcript/screen ride along too. A host
-                // Save State picked here instead falls through below to a full
-                // session resume (SQ-0227 Task 3).
-                if state.ingame_io == Some(app::session::PendingIo::Restore)
-                    && load_info.as_ref().is_some_and(|(_, _, t)| t.is_portable())
-                {
-                    let Some((path, entry_name, _)) = load_info else { continue };
-                    state.overlays.saves = None;
-                    state.ingame_io = None;
-                    let result = match app::archive::read_quetzal_from_file(&path) {
-                        Ok(bytes) => {
-                            // Reinstate the archive's session state BEFORE resuming,
-                            // so the game's own post-restore output lands at the end
-                            // of the restored scrollback instead of being wiped by it.
-                            if !app::persist_files::is_game_save(&path) {
-                                match app::archive::load_archive(&path) {
-                                    Ok(ac) => apply_archive_state(ac, &mut *session, &mut mapper, &mut state),
-                                    Err(e) => state.push_notice(&format!("[Save State sidecars unreadable: {}]", e)),
-                                }
-                            } else {
-                                // A bare .qzl carries no screen, so the restored
-                                // game's layout width has to be assumed
-                                // (`note_bare_quetzal_width`, SQ-0681). Raised on
-                                // the attempt: `resume_restore` reports a refused
-                                // save only as the game's own "Failed.", and the
-                                // guard only ever widens the declared screen.
-                                app::engine_helpers::note_bare_quetzal_width(&mut *session);
-                            }
-                            state.push_notice(&format!("[Game restored from {}]", entry_name));
-                            session.resume_restore(Some(&bytes))
-                        }
-                        Err(e) => {
-                            state.push_notice(&format!("[Restore failed: {}]", e));
-                            session.resume_restore(None)
-                        }
-                    };
-                    let quit = turn::finish_resumed_turn(result, &mut mapper, &mut state, &mut *session, &game_dir, &ifid, map_view(last_panes.map)).quit;
-                    turn::persist_aux_after_turn(&mut *session, &mut state, &game_dir);
-                    turn::persist_vfs_after_turn(&mut *session, &state, &game_dir);
-                    if let Some(io) = state.ingame_io {
-                        open_ingame_saves(io, &game_dir, &mut state);
-                    }
-                    if quit { break 'event_loop state.exit_target.into(); }
-                    continue;
-                }
-
-                // Host Load (also reached for a .lanthorn picked while an
-                // in-game @restore is pending: that fully resumes, abandoning
-                // the pending call; on failure the pending @restore is still
-                // answered with resume_restore(None) so the VM isn't left
-                // blocked waiting for a result).
-                let ingame_restore_pending = state.ingame_io == Some(app::session::PendingIo::Restore);
-                if let Some((path, entry_name, _)) = load_info {
-                    match restore_from_file(&path, &mut *session) {
-                        Ok(RestoreOutcome::DescriptorCompleted(ac)) => {
-                            state.overlays.saves = None;
-                            // An in-game @save archive carries the whole session
-                            // alongside its game bytes (SQ-0531); a bare .qzl has
-                            // nothing but the bytes.
-                            if let Some(ac) = ac {
-                                state.ingame_io = None;
-                                state.pending_filename = None;
-                                apply_archive_state(*ac, &mut *session, &mut mapper, &mut state);
-                            }
-                            reobserve_location(&mut state, &mut mapper, &*session, map_view(last_panes.map));
-                            state.push_notice(&format!("[Game restored from {}]", entry_name));
-                        }
-                        Ok(RestoreOutcome::Resumed(ac)) => {
-                            state.ingame_io = None;
-                            // A restore abandons any suspended create_by_prompt in the
-                            // session, so the host-side request must not outlive it and
-                            // fire a spurious resume_filename turn.
-                            state.pending_filename = None;
-                            apply_archive_state(*ac, &mut *session, &mut mapper, &mut state);
-                            // Re-observe current location.
-                            reobserve_location(&mut state, &mut mapper, &*session, map_view(last_panes.map));
-                            state.push_notice(&format!("[Loaded save: {}]", entry_name));
-                            state.overlays.saves = None;
-                        }
-                        Err(e) => {
-                            state.push_notice(&format!("[Load failed: {}]", e));
-                            if ingame_restore_pending {
-                                state.overlays.saves = None;
-                                state.ingame_io = None;
-                                let result = session.resume_restore(None);
-                                let quit = turn::finish_resumed_turn(result, &mut mapper, &mut state, &mut *session, &game_dir, &ifid, map_view(last_panes.map)).quit;
-                                turn::persist_aux_after_turn(&mut *session, &mut state, &game_dir);
-                                turn::persist_vfs_after_turn(&mut *session, &state, &game_dir);
-                                if let Some(io) = state.ingame_io {
-                                    open_ingame_saves(io, &game_dir, &mut state);
-                                }
-                                if quit { break 'event_loop state.exit_target.into(); }
-                                continue;
-                            }
-                        }
-                    }
+                // Which kind of load this is — an in-game @restore answered with a
+                // game save, or a host load that resumes the whole session — is the
+                // library's rule (`host::persist::load_save`, SQ-1539).
+                if let Some((path, entry_name, trigger)) = load_info {
+                    let loaded = app::host::persist::load_save(
+                        &mut *session, &mut mapper, &mut state,
+                        (&path, &entry_name, trigger),
+                        &game_dir, &ifid, map_view(last_panes.map),
+                    );
+                    if loaded.quit { break 'event_loop state.exit_target.into(); }
+                    if loaded.answered_game { continue; }
                 }
             }
 
@@ -4501,10 +4286,7 @@ fn run_event_loop(boot: startup::BootResult, launched_from_library: bool) -> Run
 
         // After dispatch: resume an in-game (v4+) save/restore whose dialog was
         // just confirmed (flag-hop) or cancelled (overlay closed without confirm).
-        let quit = resolve_ingame_dialog(&mut *session, &mut mapper, &mut state, &game_dir, &ifid, map_view(last_panes.map))
-            || resolve_filename_request(&mut *session, &mut mapper, &mut state, &game_dir, &ifid, map_view(last_panes.map));
-        turn::persist_aux_after_turn(&mut *session, &mut state, &game_dir);
-        turn::persist_vfs_after_turn(&mut *session, &state, &game_dir);
+        let quit = ingame_io::resolve_pending(&mut *session, &mut mapper, &mut state, &game_dir, &ifid, map_view(last_panes.map));
         if quit {
             break 'event_loop state.exit_target.into();
         }
@@ -5063,59 +4845,6 @@ mod tests {
         // The cap must leave room beyond the fixed grace, or the extension is a
         // no-op; both are consts, so this is checked at compile time.
         const { assert!(TERM_WATCHDOG_HARD_CAP_MS > TERM_WATCHDOG_GRACE_MS) };
-    }
-
-    // ── SQ-0650: game clocks must not be starved by a busy event stream ────────
-
-    #[test]
-    fn deadline_due_only_once_armed_and_elapsed() {
-        let now = std::time::Instant::now();
-        assert!(!super::deadline_due(None, now), "not armed: never due");
-        assert!(
-            super::deadline_due(Some(now - std::time::Duration::from_millis(1)), now),
-            "elapsed deadline is due"
-        );
-        assert!(super::deadline_due(Some(now), now), "exactly at the deadline is due");
-        assert!(
-            !super::deadline_due(Some(now + std::time::Duration::from_secs(1)), now),
-            "a future deadline is not due yet"
-        );
-    }
-
-    /// The Glulx timer arm of the clock dispatch, driven with a non-Glulx engine:
-    /// an elapsed deadline must DISARM and report a redraw regardless of which
-    /// engine is running, which is what makes the loop-top dispatch safe to run on
-    /// every path. (The engine-specific delivery is covered by the Glulx suites.)
-    #[test]
-    fn due_game_clocks_disarm_an_elapsed_glulx_timer() {
-        let mut state = app::state::AppState::default();
-        let mut mapper = mapper::mapper::Mapper::default();
-        let mut engine = ClocklessEngine;
-        state.glulx_timer_next_fire = Some(std::time::Instant::now() - std::time::Duration::from_millis(5));
-
-        let (redraw, quit) = super::dispatch_due_game_clocks(
-            &mut state,
-            &mut mapper,
-            &mut engine,
-            std::path::Path::new("/nonexistent"),
-            Rect::default(),
-        );
-        assert!(redraw, "a fired timer repaints");
-        assert!(!quit);
-        assert!(state.glulx_timer_next_fire.is_none(), "an elapsed deadline must disarm, not refire every tick");
-
-        // A future deadline is left alone.
-        let future = std::time::Instant::now() + std::time::Duration::from_secs(30);
-        state.glulx_timer_next_fire = Some(future);
-        let (redraw, _) = super::dispatch_due_game_clocks(
-            &mut state,
-            &mut mapper,
-            &mut engine,
-            std::path::Path::new("/nonexistent"),
-            Rect::default(),
-        );
-        assert!(!redraw, "nothing due: no repaint");
-        assert_eq!(state.glulx_timer_next_fire, Some(future), "still armed");
     }
 
     /// Minimal engine that is neither a Z-machine nor a Glulx session, so the

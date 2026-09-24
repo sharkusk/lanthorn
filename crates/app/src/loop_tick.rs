@@ -92,9 +92,9 @@ pub(crate) fn poll_glulx_resize(
                 *resize_dirty = None;
                 *vm_story_size = Some(cur);
                 redraw = true; // Glulx graphics repaint at the new size
-                if let Some(gs) = session.as_any_mut().downcast_mut::<GlulxSession>() {
-                    gs.resize(cur.0 as u32, cur.1 as u32);
-                }
+                // The resize itself is the library's (SQ-1539); the settle timer
+                // above is the TUI's, because only a drag needs one.
+                app::host::screen::resize_glulx(session, cur);
             }
         }
     }
@@ -231,62 +231,19 @@ pub(crate) fn requery_picker_if_settled(
     true
 }
 
-/// Report the story pane's REAL size to the Z-machine (ZMSD §8.4 — SQ-0532/A-F1).
-///
-/// §8.4: the interpreter "may change the exact dimensions whenever it likes but
-/// must write the current height (in lines) and width (in characters) into bytes
-/// $20 and $21 in the header." Uses last frame's story rect (one-frame lag is
-/// fine) and runs BEFORE the draw so the frame that follows already renders the
-/// upper window at the width the game was just told about.
-///
-/// Unlike [`poll_glulx_resize`] there is no settle timer: this writes two header
-/// bytes rather than running the game's re-layout code, so it is free to track
-/// every intermediate size during a drag. It also carries no cached "last
-/// applied" size — it compares against what the header currently SAYS, so a fresh
-/// boot after `@restart` (whose new `Machine` re-seeds the fallback) is corrected
-/// on the next pass without the restart path having to know about any of this.
-///
-/// Skipped for v6, whose fixed 640×400 pixel screen is scaled into the pane
-/// rather than measured from it, and for v1–3, which have no such header fields.
-/// Returns `true` when the header changed (the upper window's width follows it).
-///
-/// What is declared is [`declared_story_screen_dims`], not the raw pane
-/// measurement: the width is floored at the columns the story booted with
-/// (SQ-0679) — whatever `GameSession::boot_screen_cols` says THIS session
-/// actually booted at, 80 by default or a narrower/wider pre-boot-seeded pane
-/// (SQ-0680) — so narrowing the pane can never move a v4/v5 status routine's
-/// baked-in field columns outside the window.
-///
-/// [`declared_story_screen_dims`]: app::render::screen::declared_story_screen_dims
+/// Report the story pane's REAL size to the Z-machine (ZMSD §8.4 — SQ-0532/A-F1),
+/// from last frame's story rect (one-frame lag is fine). Runs BEFORE the draw so
+/// the frame that follows already renders the upper window at the width the game
+/// was just told about. The rule — which versions, the SQ-0679 width floor, the
+/// compare against what the header says — is the library's
+/// [`app::host::screen::sync_zvm_screen_dims`] (SQ-1539); this only measures.
+/// Returns `true` when the header changed.
 pub(crate) fn poll_zvm_screen_dims(
     session: &mut dyn Engine,
     state: &AppState,
     last_panes: &crate::PaneRects,
 ) -> bool {
-    let Some(gs) = session.as_any().downcast_ref::<app::session::GameSession>() else {
-        return false;
-    };
-    let version = gs.machine.mem.version();
-    if version < 4 || version == 6 {
-        return false;
-    }
-    let Some((rows, cols)) = app::render::screen::declared_story_screen_dims(
-        last_panes.story,
-        state,
-        version,
-        gs.boot_screen_cols,
-    ) else {
-        return false;
-    };
-    let current = (
-        gs.machine.mem.read_byte(0x20) as u16,
-        gs.machine.mem.read_byte(0x21) as u16,
-    );
-    if current == (rows.min(255), cols.min(255)) {
-        return false;
-    }
-    session.set_screen_dims(rows, cols);
-    true
+    app::host::screen::sync_zvm_screen_dims(session, state, (last_panes.story.width, last_panes.story.height))
 }
 
 /// Keep header bytes $2C/$2D describing the colours the player actually sees
@@ -512,108 +469,6 @@ pub(crate) fn settle_picture_pacing(state: &mut AppState, session: &mut dyn Engi
     state.picture_pace_next = None;
     app::engine_helpers::zvm_session_opt_mut(session)
         .is_some_and(|gs| gs.settle_paced_pictures())
-}
-
-/// Refresh the engine input-mode flags and re-arm the timed-input / Glk-timer
-/// deadlines. Returns `true` only for a prompt-visibility transition (the timer
-/// re-arm never forces a redraw).
-pub(crate) fn refresh_engine_input(
-    state: &mut AppState,
-    session: &mut dyn Engine,
-) -> bool {
-    let mut redraw = false;
-
-    // Each new Glulx line-input request says what the input line should now hold
-    // (Glk spec §4.2 `initlen`): text the game pre-loaded, editable, or nothing.
-    // advent.blb's toolbar needs both — clicking Examine must leave "Examine " at
-    // the prompt for the player to finish, while clicking a verb over an
-    // already-typed noun runs that command itself and asks again empty, which must
-    // not strand the noun at the prompt. Either way the game has just consumed or
-    // cancelled the previous line, so its answer is authoritative and replaces
-    // whatever the app was showing. (SQ-0562, SQ-0565)
-    if let Some(text) = app::engine_helpers::glulx_session_opt_mut(session)
-        .and_then(|gs| gs.take_line_seed())
-    {
-        if state.input.value != text {
-            state.input.clear();
-            state.input.insert_str(&text);
-            redraw = true;
-        }
-    }
-    // ...and keep the game's buffer holding what the player has actually typed.
-    // Glk lends the interpreter that buffer for the whole request so a cancel can
-    // report the partial input; advent.blb's toolbar cancels on every button press
-    // and preserves what it finds there, so a stale buffer made every later button
-    // re-insert the FIRST verb — text the player may have already deleted. Written
-    // after the seed above so a fresh prefill lands in the buffer too. (SQ-0565)
-    if let Some(gs) = app::engine_helpers::glulx_session_opt_mut(session) {
-        gs.sync_line_input(&state.input.value);
-    }
-
-    // The Z-machine twin (SQ-1419): ZMSD §15 `read`'s pre-loaded input line
-    // (v5+ — "if byte 1 contains a positive value at the start of the input,
-    // then read assumes that number of characters are left over from an
-    // interrupted previous input"), which TerpEtude option 12 and Beyond
-    // Zork's "AGAIN" both rely on. One-shot per request (see
-    // `GameSession::take_line_seed`), so it never re-clobbers what the
-    // player has since typed — unlike Glulx there is no live buffer to keep
-    // in sync afterwards: the whole displayed line is handed back to
-    // `Machine::supply_line` as one string when the player submits.
-    if let Some(text) =
-        app::engine_helpers::zvm_session_opt_mut(session).and_then(|gs| gs.take_line_seed())
-    {
-        state.input.clear();
-        state.input.insert_str(&text);
-        redraw = true;
-    }
-
-    // Update char_mode flag so the renderer hides the prompt during read_char.
-    let prev_char_mode = state.char_mode;
-    let prev_event_wait = state.event_wait;
-    state.char_mode = matches!(session.pending_input(), app::session::InputKind::Char);
-    // A Glulx timer/mouse/hyperlink-only glk_select: hide the prompt too (no
-    // typed input is requested), but unlike char_mode do NOT forward keys to
-    // the game — the timer clock / click delivers the event instead.
-    state.event_wait = matches!(session.pending_input(), app::session::InputKind::Event);
-    // A prompt-visibility transition changes the frame even with no new input.
-    if state.char_mode != prev_char_mode || state.event_wait != prev_event_wait {
-        redraw = true;
-    }
-
-    // Re-arm the timed-input deadline each iteration. Only while the game is
-    // actually awaiting input (no dialog/overlay/prompt covering the pane) and
-    // honoring timers; `pending_timeout()` is `None` for an untimed read, so
-    // this is a no-op for the vast majority of games (regression guard). Timed
-    // input is a Z-machine-only concept (ZMSD): `zvm_session_opt` is `None` for
-    // a Glulx engine, so the timer never arms there.
-    let timer_interval = app::engine_helpers::zvm_session_opt(session)
-        .and_then(|s| s.pending_timeout())
-        .map(|(t, _)| Duration::from_millis(t as u64 * 100));
-    let should_arm = state.config.honor_timed_input
-        && !state.any_overlay_open()
-        && timer_interval.is_some();
-    state.input_deadline = app::host::turn::next_input_deadline(
-        state.input_deadline,
-        should_arm,
-        timer_interval.unwrap_or(Duration::ZERO),
-        std::time::Instant::now(),
-    );
-
-    // Re-arm the Glulx Glk timer-events clock (glk_request_timer_events) — the
-    // Glulx analogue of `input_deadline`, and independent of it. Armed only
-    // when a Glulx game has requested a timer interval and no overlay covers
-    // the pane; uses the same arm-once semantics (`next_input_deadline`) so the
-    // deadline holds steady until it fires (the fire path below re-arms fresh).
-    let glk_timer_interval = app::engine_helpers::glulx_session_opt(session).and_then(|s| s.timer_interval());
-    let should_arm_glk_timer = !state.any_overlay_open() && glk_timer_interval.is_some();
-    state.glulx_timer_next_fire = app::host::turn::next_input_deadline(
-        state.glulx_timer_next_fire,
-        should_arm_glk_timer,
-        glk_timer_interval.unwrap_or(Duration::ZERO),
-        std::time::Instant::now(),
-    );
-
-    redraw
 }
 
 /// Refill the command band from the engine, once per loop tick: its object

@@ -268,9 +268,10 @@ fn pre_boot_host_screen(
 /// The story pane a `(cols, rows)` terminal gives `state`, in character cells —
 /// the `host_screen` a boot is seeded with.
 ///
-/// The terminal-free half of the TUI's `startup::host_story_screen`, which asks
-/// the LIVE terminal for its size and then this; a RESTART asks the same question
-/// of the real `AppState` (SQ-1061). `None` for a zero-area frame.
+/// The launch asks it of a throwaway state before the session exists; a RESTART
+/// ([`super::reset::reset_game`]) asks the same question of the real `AppState`
+/// (SQ-1061). The TUI passes its live terminal size to both. `None` for a
+/// zero-area frame.
 pub fn story_screen_in(state: &AppState, (term_cols, term_rows): (u16, u16)) -> Option<(u16, u16)> {
     let frame = Rect::new(0, 0, term_cols, term_rows);
     if frame.width == 0 || frame.height == 0 {
