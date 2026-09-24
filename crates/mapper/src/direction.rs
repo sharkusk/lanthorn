@@ -408,6 +408,40 @@ pub fn grid_offset(d: Direction) -> Option<(i32, i32)> {
     }
 }
 
+/// Which portal FAMILY a non-planar direction belongs to (SQ-1555) — one variant per
+/// direction [`grid_offset`] returns `None` for, so a host can badge a portal by what kind of
+/// passage it is (a staircase reads differently from a doorway) without re-deriving the family
+/// from the bare [`Direction`] itself.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum PortalKind {
+    Up,
+    Down,
+    In,
+    Out,
+    /// Any other non-planar direction `grid_offset` stops at — today only [`Direction::Unknown`],
+    /// but a named or custom exit added later lands here too without a new match arm.
+    Other,
+}
+
+/// The exact predicate [`crate::layer::planar_region`] cuts a layer walk on: `Some` for every
+/// direction [`grid_offset`] has no offset for (Up/Down/In/Out/Unknown), `None` for the eight
+/// compass directions. Shared here so the layout, the layer logic and a renderer can never
+/// disagree about what counts as a portal (SQ-1555) — unlike [`is_portal`] above, which
+/// deliberately excludes `Unknown` for a different purpose (evidence that a passage really
+/// leads somewhere, not merely that its direction is unresolved).
+pub fn portal_kind(d: Direction) -> Option<PortalKind> {
+    if grid_offset(d).is_some() {
+        return None;
+    }
+    Some(match d {
+        Direction::Up => PortalKind::Up,
+        Direction::Down => PortalKind::Down,
+        Direction::In => PortalKind::In,
+        Direction::Out => PortalKind::Out,
+        _ => PortalKind::Other,
+    })
+}
+
 /// Layout-only directional offset: like [`grid_offset`], but Up/Down also carry a
 /// vertical N/S offset (Up → north, Down → south). Used ONLY by the layout,
 /// placement, and directional-scoring code so up/down lay out like N/S. Rendering,
@@ -443,6 +477,32 @@ pub fn opposite(d: Direction) -> Direction {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// SQ-1555: `portal_kind` must agree with `grid_offset` for every direction — `Some` exactly
+    /// where `grid_offset` is `None` — since `planar_region` cuts a layer walk on `grid_offset`
+    /// and the layout/renderer read portal-ness through `portal_kind`. Falsify by narrowing
+    /// `portal_kind` back to Up/Down only and this fails on `In`/`Out`/`Unknown`.
+    #[test]
+    fn portal_kind_agrees_with_grid_offset_for_every_direction() {
+        let all = [
+            Direction::N, Direction::S, Direction::E, Direction::W,
+            Direction::NE, Direction::NW, Direction::SE, Direction::SW,
+            Direction::Up, Direction::Down, Direction::In, Direction::Out, Direction::Unknown,
+        ];
+        for d in all {
+            assert_eq!(
+                portal_kind(d).is_some(),
+                grid_offset(d).is_none(),
+                "portal_kind and grid_offset disagree on {d:?}"
+            );
+        }
+        assert_eq!(portal_kind(Direction::Up), Some(PortalKind::Up));
+        assert_eq!(portal_kind(Direction::Down), Some(PortalKind::Down));
+        assert_eq!(portal_kind(Direction::In), Some(PortalKind::In));
+        assert_eq!(portal_kind(Direction::Out), Some(PortalKind::Out));
+        assert_eq!(portal_kind(Direction::Unknown), Some(PortalKind::Other));
+        assert_eq!(portal_kind(Direction::N), None);
+    }
 
     #[test]
     fn parses_compass_and_long_forms() {
