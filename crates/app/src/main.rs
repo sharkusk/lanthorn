@@ -23,8 +23,7 @@ use app::archive::load_archive;
 use app::input::{
     apply_action, apply_text_entry, key_to_command, live_slash_context, mouse_to_action, Action, KeyResolve,
 };
-use app::tidy::should_bg_tidy;
-use app::persist_files::{list_saves, restore_game};
+use app::persist_files::restore_game;
 use app::render::dialog::{DialogRects, DialogStyle};
 use app::render::hints_panel::{hint_input_action, hint_key_routes, HintInputAct, HintKeyKind, HintsPanelRects};
 use app::render::command_band::draw_command_band;
@@ -45,7 +44,6 @@ use app::render::hintbar::{hint_bar, ANIM_HINTS, GAME_HINTS};
 use app::slash;
 use app::state::{AppState, FbMode, FileBrowserState, Focus, Layout, SavesState};
 
-mod ingame_io;
 mod lifecycle;
 mod loop_tick;
 mod overlays;
@@ -53,9 +51,14 @@ mod picker_ui;
 mod reset;
 mod slash_dispatch;
 mod startup;
-mod turn;
 
 use crate::slash_dispatch::dispatch_slash_outcome;
+// The per-turn apply and the in-game file requests live in the library now
+// (SQ-1538); named here so the loop and its sibling modules keep calling them
+// as `turn::…` / `ingame_io::…`.
+use app::host::{ingame_io, turn};
+use app::host::ingame_io::combined_saves;
+use app::host::turn::{format_rfc3339, reobserve_location};
 use crate::ingame_io::{
     delete_save_confirmed, handle_save_as, open_ingame_saves, resolve_filename_request,
     resolve_ingame_dialog,
@@ -1726,8 +1729,8 @@ fn dispatch_due_game_clocks(
             state.input_deadline = None;
             redraw = true; // interrupt ran → repaint any output
             if turn::apply_game_driven_result(
-                state, mapper, &result, game_dir, map_rect, &*session, app::pager::Driver::Timeout,
-            ) {
+                state, mapper, &result, game_dir, map_view(map_rect), &*session, app::pager::Driver::Timeout,
+            ).quit {
                 return (redraw, true);
             }
         }
@@ -1741,8 +1744,8 @@ fn dispatch_due_game_clocks(
         if let Some(gs) = glulx_session_opt_mut(session) {
             let result = gs.deliver_timer();
             if turn::apply_game_driven_result(
-                state, mapper, &result, game_dir, map_rect, &*session, app::pager::Driver::Timeout,
-            ) {
+                state, mapper, &result, game_dir, map_view(map_rect), &*session, app::pager::Driver::Timeout,
+            ).quit {
                 return (redraw, true);
             }
         }
@@ -1752,33 +1755,11 @@ fn dispatch_due_game_clocks(
     if !done.is_empty() {
         redraw = true; // finish-routine output / channel state changed
     }
+    // What a finished sound runs — its finish routine or Glk sound-notify — is the
+    // library's rule (SQ-1538); the device is only what noticed it finish.
     for id in done {
-        // Always forget the number->id mapping for a finished sound, even one
-        // with no finish routine.
-        state.sound_ids.retain(|_, v| *v != id);
-        if let Some(routine) = state.sound_routines.remove(&id) {
-            if routine != 0 {
-                if let Some(zs) = zvm_session_opt_mut(session) {
-                    let result = zs.run_sound_finish(routine);
-                    if turn::apply_game_driven_result(
-                        state, mapper, &result, game_dir, map_rect, &*session, app::pager::Driver::Timeout,
-                    ) {
-                        return (redraw, true);
-                    }
-                }
-            }
-        }
-        // Glulx sound-notify: a finished channel delivers Evtype_SoundNotify.
-        if let Some((snd, notify)) = state.glulx_sound_notify.remove(&id) {
-            state.glulx_channels.retain(|_, v| *v != id);
-            if let Some(gs) = glulx_session_opt_mut(session) {
-                let result = gs.sound_notify(snd, notify);
-                if turn::apply_game_driven_result(
-                    state, mapper, &result, game_dir, map_rect, &*session, app::pager::Driver::Timeout,
-                ) {
-                    return (redraw, true);
-                }
-            }
+        if app::host::sound::sound_finished(state, mapper, session, id, game_dir, map_view(map_rect)) {
+            return (redraw, true);
         }
     }
     // Glulx Sound2 volume-ramp completion: a gradual set_volume_ext whose
@@ -1802,8 +1783,8 @@ fn dispatch_due_game_clocks(
         if let Some(gs) = glulx_session_opt_mut(session) {
             let result = gs.volume_notify(notify);
             if turn::apply_game_driven_result(
-                state, mapper, &result, game_dir, map_rect, &*session, app::pager::Driver::Timeout,
-            ) {
+                state, mapper, &result, game_dir, map_view(map_rect), &*session, app::pager::Driver::Timeout,
+            ).quit {
                 return (redraw, true);
             }
         }
@@ -2235,7 +2216,7 @@ fn run_event_loop(boot: startup::BootResult, launched_from_library: bool) -> Run
         // Before the poll, so the job it schedules is picked up on the next pass
         // rather than sitting a whole frame longer than it has to.
         needs_redraw |=
-            loop_tick::catch_up_deferred_map_layout(&mut state, &mapper, &mut bg_tidy_counter);
+            turn::catch_up_deferred_map_layout(&mut state, &mapper, &mut bg_tidy_counter);
         needs_redraw |= loop_tick::poll_tidy_jobs(&mut state, &mut mapper, &last_panes);
         needs_redraw |= state.poll_render_job();
         needs_redraw |= state.poll_v6_encode_job();
@@ -2843,8 +2824,8 @@ fn run_event_loop(boot: startup::BootResult, launched_from_library: bool) -> Run
                             handle_save_as(
                                 value, &game_dir, &ifid, &mut mapper, &mut *session, &mut state, false,
                             );
-                            let quit = resolve_ingame_dialog(&mut *session, &mut mapper, &mut state, &game_dir, &ifid, last_panes.map)
-                                || resolve_filename_request(&mut *session, &mut mapper, &mut state, &game_dir, &ifid, last_panes.map);
+                            let quit = resolve_ingame_dialog(&mut *session, &mut mapper, &mut state, &game_dir, &ifid, map_view(last_panes.map))
+                                || resolve_filename_request(&mut *session, &mut mapper, &mut state, &game_dir, &ifid, map_view(last_panes.map));
                             turn::persist_aux_after_turn(&mut *session, &mut state, &game_dir);
                             turn::persist_vfs_after_turn(&mut *session, &state, &game_dir);
                             if quit { break 'event_loop state.exit_target.into(); }
@@ -2852,8 +2833,8 @@ fn run_event_loop(boot: startup::BootResult, launched_from_library: bool) -> Run
                     }
                     OverlayAct::SaveNameCancel => {
                         state.overlays.save_name_dialog = None;
-                        let quit = resolve_ingame_dialog(&mut *session, &mut mapper, &mut state, &game_dir, &ifid, last_panes.map)
-                            || resolve_filename_request(&mut *session, &mut mapper, &mut state, &game_dir, &ifid, last_panes.map);
+                        let quit = resolve_ingame_dialog(&mut *session, &mut mapper, &mut state, &game_dir, &ifid, map_view(last_panes.map))
+                            || resolve_filename_request(&mut *session, &mut mapper, &mut state, &game_dir, &ifid, map_view(last_panes.map));
                         turn::persist_aux_after_turn(&mut *session, &mut state, &game_dir);
                         turn::persist_vfs_after_turn(&mut *session, &state, &game_dir);
                         if quit { break 'event_loop state.exit_target.into(); }
@@ -2864,8 +2845,8 @@ fn run_event_loop(boot: startup::BootResult, launched_from_library: bool) -> Run
                         if let Some(dlg) = state.overlays.text_entry.take() {
                             apply_text_entry(dlg, &mut state, &mut mapper);
                         }
-                        let quit = resolve_ingame_dialog(&mut *session, &mut mapper, &mut state, &game_dir, &ifid, last_panes.map)
-                            || resolve_filename_request(&mut *session, &mut mapper, &mut state, &game_dir, &ifid, last_panes.map);
+                        let quit = resolve_ingame_dialog(&mut *session, &mut mapper, &mut state, &game_dir, &ifid, map_view(last_panes.map))
+                            || resolve_filename_request(&mut *session, &mut mapper, &mut state, &game_dir, &ifid, map_view(last_panes.map));
                         turn::persist_aux_after_turn(&mut *session, &mut state, &game_dir);
                         turn::persist_vfs_after_turn(&mut *session, &state, &game_dir);
                         if quit { break 'event_loop state.exit_target.into(); }
@@ -2874,8 +2855,8 @@ fn run_event_loop(boot: startup::BootResult, launched_from_library: bool) -> Run
                         // A cancelled CreateFile leaves pending_filename set with no
                         // dialog open → resolve_filename_request treats it as NULL.
                         state.overlays.text_entry = None;
-                        let quit = resolve_ingame_dialog(&mut *session, &mut mapper, &mut state, &game_dir, &ifid, last_panes.map)
-                            || resolve_filename_request(&mut *session, &mut mapper, &mut state, &game_dir, &ifid, last_panes.map);
+                        let quit = resolve_ingame_dialog(&mut *session, &mut mapper, &mut state, &game_dir, &ifid, map_view(last_panes.map))
+                            || resolve_filename_request(&mut *session, &mut mapper, &mut state, &game_dir, &ifid, map_view(last_panes.map));
                         turn::persist_aux_after_turn(&mut *session, &mut state, &game_dir);
                         turn::persist_vfs_after_turn(&mut *session, &state, &game_dir);
                         if quit { break 'event_loop state.exit_target.into(); }
@@ -2904,8 +2885,8 @@ fn run_event_loop(boot: startup::BootResult, launched_from_library: bool) -> Run
                                         handle_save_as(
                                             value, &game_dir, &ifid, &mut mapper, &mut *session, &mut state, true,
                                         );
-                                        let quit = resolve_ingame_dialog(&mut *session, &mut mapper, &mut state, &game_dir, &ifid, last_panes.map)
-                                            || resolve_filename_request(&mut *session, &mut mapper, &mut state, &game_dir, &ifid, last_panes.map);
+                                        let quit = resolve_ingame_dialog(&mut *session, &mut mapper, &mut state, &game_dir, &ifid, map_view(last_panes.map))
+                                            || resolve_filename_request(&mut *session, &mut mapper, &mut state, &game_dir, &ifid, map_view(last_panes.map));
                                         turn::persist_aux_after_turn(&mut *session, &mut state, &game_dir);
                                         turn::persist_vfs_after_turn(&mut *session, &state, &game_dir);
                                         if quit { break 'event_loop state.exit_target.into(); }
@@ -2955,7 +2936,7 @@ fn run_event_loop(boot: startup::BootResult, launched_from_library: bool) -> Run
                     OverlayAct::LaunchResume => {
                         if let Some((save, lines, kinds, screen)) = state.pending_resume.take() {
                             state.overlays.launch_dialog = false;
-                            turn::apply_launch_resume(&save, lines, kinds, screen, &mut *session, &mut mapper, &mut state, &last_panes, &arc_file);
+                            turn::apply_launch_resume(&save, lines, kinds, screen, &mut *session, &mut mapper, &mut state, map_view(last_panes.map), &arc_file);
                         }
                     }
                     OverlayAct::LaunchNewGame => {
@@ -3449,8 +3430,8 @@ fn run_event_loop(boot: startup::BootResult, launched_from_library: bool) -> Run
                             })
                             {
                                 if turn::apply_game_driven_result(
-                                    &mut state, &mut mapper, &result, &game_dir, last_panes.map, &*session, app::pager::Driver::PlayerInput,
-                                ) {
+                                    &mut state, &mut mapper, &result, &game_dir, map_view(last_panes.map), &*session, app::pager::Driver::PlayerInput,
+                                ).quit {
                                     break 'event_loop state.exit_target.into();
                                 }
                             }
@@ -3510,8 +3491,8 @@ fn run_event_loop(boot: startup::BootResult, launched_from_library: bool) -> Run
                                 // The read ended on a listed terminating
                                 // character, not a newline (SQ-0881).
                                 &cmd, false, result, &mut state, &mut mapper, &mut *session,
-                                &game_dir, &ifid, &arc_file, last_panes.map, &mut bg_tidy_counter,
-                            ) {
+                                &game_dir, &ifid, &arc_file, map_view(last_panes.map), &mut bg_tidy_counter,
+                            ).quit {
                                 break 'event_loop state.exit_target.into();
                             }
                             continue 'event_loop;
@@ -3638,8 +3619,8 @@ fn run_event_loop(boot: startup::BootResult, launched_from_library: bool) -> Run
                                     ) {
                                         let result = gs.deliver_hyperlink(win, link);
                                         if turn::apply_game_driven_result(
-                                            &mut state, &mut mapper, &result, &game_dir, last_panes.map, &*session, app::pager::Driver::PlayerInput,
-                                        ) {
+                                            &mut state, &mut mapper, &result, &game_dir, map_view(last_panes.map), &*session, app::pager::Driver::PlayerInput,
+                                        ).quit {
                                             break 'event_loop state.exit_target.into();
                                         }
                                         continue 'event_loop;
@@ -3666,8 +3647,8 @@ fn run_event_loop(boot: startup::BootResult, launched_from_library: bool) -> Run
                             if let Some((win, vx, vy)) = target {
                                 let result = gs.deliver_mouse(win, vx, vy);
                                 if turn::apply_game_driven_result(
-                                    &mut state, &mut mapper, &result, &game_dir, last_panes.map, &*session, app::pager::Driver::PlayerInput,
-                                ) {
+                                    &mut state, &mut mapper, &result, &game_dir, map_view(last_panes.map), &*session, app::pager::Driver::PlayerInput,
+                                ).quit {
                                     break 'event_loop state.exit_target.into();
                                 }
                                 continue 'event_loop;
@@ -3916,8 +3897,8 @@ fn run_event_loop(boot: startup::BootResult, launched_from_library: bool) -> Run
                                     z.set_mouse(gy, gx); // engine stores (y, x)
                                     let result = z.submit_char(254); // ZSCII single-click (§3.8)
                                     if turn::apply_game_driven_result(
-                                        &mut state, &mut mapper, &result, &game_dir, last_panes.map, &*session, app::pager::Driver::PlayerInput,
-                                    ) {
+                                        &mut state, &mut mapper, &result, &game_dir, map_view(last_panes.map), &*session, app::pager::Driver::PlayerInput,
+                                    ).quit {
                                         break 'event_loop state.exit_target.into();
                                     }
                                     continue 'event_loop;
@@ -3954,8 +3935,8 @@ fn run_event_loop(boot: startup::BootResult, launched_from_library: bool) -> Run
                                     };
                                     if turn::finish_command_turn(
                                         &cmd, true, result, &mut state, &mut mapper, &mut *session,
-                                        &game_dir, &ifid, &arc_file, last_panes.map, &mut bg_tidy_counter,
-                                    ) {
+                                        &game_dir, &ifid, &arc_file, map_view(last_panes.map), &mut bg_tidy_counter,
+                                    ).quit {
                                         break 'event_loop state.exit_target.into();
                                     }
                                     continue 'event_loop;
@@ -4103,8 +4084,8 @@ fn run_event_loop(boot: startup::BootResult, launched_from_library: bool) -> Run
                 let result = session.submit(&cmd);
                 if turn::finish_command_turn(
                     &cmd, true, result, &mut state, &mut mapper, &mut *session,
-                    &game_dir, &ifid, &arc_file, last_panes.map, &mut bg_tidy_counter,
-                ) {
+                    &game_dir, &ifid, &arc_file, map_view(last_panes.map), &mut bg_tidy_counter,
+                ).quit {
                     break 'event_loop state.exit_target.into();
                 }
             }
@@ -4187,7 +4168,7 @@ fn run_event_loop(boot: startup::BootResult, launched_from_library: bool) -> Run
                                 // a restore take back a word printed after the save.
                                 app::input::refresh_seen_words(&mut state, &*session);
                                 // After restore, re-observe current location.
-                                reobserve_location(&mut state, &mut mapper, &*session, last_panes.map);
+                                reobserve_location(&mut state, &mut mapper, &*session, map_view(last_panes.map));
                                 state.push_notice(&format!(
                                     "[Game restored from {}]",
                                     arc_file.display()
@@ -4266,7 +4247,7 @@ fn run_event_loop(boot: startup::BootResult, launched_from_library: bool) -> Run
                         match restore_game(&path, &mut zvm_session_mut(&mut *session).machine) {
                             Ok(()) => {
                                 // Re-observe current location (same as RestoreGame/SavesLoad).
-                                reobserve_location(&mut state, &mut mapper, &*session, last_panes.map);
+                                reobserve_location(&mut state, &mut mapper, &*session, map_view(last_panes.map));
                                 state.push_notice(&format!("[Imported: {}]", path.display()));
                             }
                             Err(e) => {
@@ -4325,7 +4306,7 @@ fn run_event_loop(boot: startup::BootResult, launched_from_library: bool) -> Run
                             session.resume_restore(None)
                         }
                     };
-                    let quit = turn::finish_resumed_turn(result, &mut mapper, &mut state, &mut *session, &game_dir, &ifid, last_panes.map);
+                    let quit = turn::finish_resumed_turn(result, &mut mapper, &mut state, &mut *session, &game_dir, &ifid, map_view(last_panes.map)).quit;
                     turn::persist_aux_after_turn(&mut *session, &mut state, &game_dir);
                     turn::persist_vfs_after_turn(&mut *session, &state, &game_dir);
                     if let Some(io) = state.ingame_io {
@@ -4353,7 +4334,7 @@ fn run_event_loop(boot: startup::BootResult, launched_from_library: bool) -> Run
                                 state.pending_filename = None;
                                 apply_archive_state(*ac, &mut *session, &mut mapper, &mut state);
                             }
-                            reobserve_location(&mut state, &mut mapper, &*session, last_panes.map);
+                            reobserve_location(&mut state, &mut mapper, &*session, map_view(last_panes.map));
                             state.push_notice(&format!("[Game restored from {}]", entry_name));
                         }
                         Ok(RestoreOutcome::Resumed(ac)) => {
@@ -4364,7 +4345,7 @@ fn run_event_loop(boot: startup::BootResult, launched_from_library: bool) -> Run
                             state.pending_filename = None;
                             apply_archive_state(*ac, &mut *session, &mut mapper, &mut state);
                             // Re-observe current location.
-                            reobserve_location(&mut state, &mut mapper, &*session, last_panes.map);
+                            reobserve_location(&mut state, &mut mapper, &*session, map_view(last_panes.map));
                             state.push_notice(&format!("[Loaded save: {}]", entry_name));
                             state.overlays.saves = None;
                         }
@@ -4374,7 +4355,7 @@ fn run_event_loop(boot: startup::BootResult, launched_from_library: bool) -> Run
                                 state.overlays.saves = None;
                                 state.ingame_io = None;
                                 let result = session.resume_restore(None);
-                                let quit = turn::finish_resumed_turn(result, &mut mapper, &mut state, &mut *session, &game_dir, &ifid, last_panes.map);
+                                let quit = turn::finish_resumed_turn(result, &mut mapper, &mut state, &mut *session, &game_dir, &ifid, map_view(last_panes.map)).quit;
                                 turn::persist_aux_after_turn(&mut *session, &mut state, &game_dir);
                                 turn::persist_vfs_after_turn(&mut *session, &state, &game_dir);
                                 if let Some(io) = state.ingame_io {
@@ -4520,8 +4501,8 @@ fn run_event_loop(boot: startup::BootResult, launched_from_library: bool) -> Run
 
         // After dispatch: resume an in-game (v4+) save/restore whose dialog was
         // just confirmed (flag-hop) or cancelled (overlay closed without confirm).
-        let quit = resolve_ingame_dialog(&mut *session, &mut mapper, &mut state, &game_dir, &ifid, last_panes.map)
-            || resolve_filename_request(&mut *session, &mut mapper, &mut state, &game_dir, &ifid, last_panes.map);
+        let quit = resolve_ingame_dialog(&mut *session, &mut mapper, &mut state, &game_dir, &ifid, map_view(last_panes.map))
+            || resolve_filename_request(&mut *session, &mut mapper, &mut state, &game_dir, &ifid, map_view(last_panes.map));
         turn::persist_aux_after_turn(&mut *session, &mut state, &game_dir);
         turn::persist_vfs_after_turn(&mut *session, &state, &game_dir);
         if quit {
@@ -4621,65 +4602,6 @@ fn run_event_loop(boot: startup::BootResult, launched_from_library: bool) -> Run
 
 // ── Utilities ─────────────────────────────────────────────────────────────────
 
-/// Whether the game echoed the just-submitted command itself at the start of its
-/// turn output (e.g. CounterfeitMonkey prints the command back in bold). Compared
-/// case-insensitively against the leading non-whitespace text, and only when the
-/// echo ends at a boundary (so `go` doesn't match a response starting `gospel`),
-/// so we don't add a second, redundant echo. An empty command never matches.
-fn game_echoes_command(transcript: &str, cmd: &str) -> bool {
-    let cmd = cmd.trim();
-    if cmd.is_empty() {
-        return false;
-    }
-    let mut head = transcript.trim_start().chars();
-    for cc in cmd.chars() {
-        match head.next() {
-            Some(hc) if hc.eq_ignore_ascii_case(&cc) => {}
-            _ => return false,
-        }
-    }
-    // The command must be followed by a boundary, not more word characters.
-    match head.next() {
-        None => true,
-        Some(c) => !c.is_alphanumeric(),
-    }
-}
-
-/// The current story's saves for the saves manager: `.lanthorn` Save States and
-/// `.qzl` game saves in `game_dir` merged into one list, sorted newest-first by
-/// save time. RFC3339 timestamps sort chronologically as strings; untimestamped/
-/// legacy saves (empty timestamp) sort to the bottom.
-fn combined_saves(game_dir: &std::path::Path) -> Vec<app::persist_files::SaveInfo> {
-    let mut entries = list_saves(game_dir);
-    entries.extend(app::persist_files::list_qzl(game_dir));
-    entries.sort_by(|a, b| b.saved_at.cmp(&a.saved_at));
-    entries
-}
-
-/// Format a Unix timestamp (seconds since epoch) as an RFC3339 UTC string.
-fn format_rfc3339(secs: u64) -> String {
-    let sec = secs % 60;
-    let min = (secs / 60) % 60;
-    let hour = (secs / 3600) % 24;
-    let days = secs / 86400;
-    let (year, month, day) = days_to_ymd_main(days);
-    format!("{:04}-{:02}-{:02}T{:02}:{:02}:{:02}Z", year, month, day, hour, min, sec)
-}
-
-fn days_to_ymd_main(mut days: u64) -> (u64, u64, u64) {
-    days += 719468;
-    let era = days / 146097;
-    let doe = days % 146097;
-    let yoe = (doe - doe / 1460 + doe / 36524 - doe / 146096) / 365;
-    let y = yoe + era * 400;
-    let doy = doe - (365 * yoe + yoe / 4 - yoe / 100);
-    let mp = (5 * doy + 2) / 153;
-    let d = doy - (153 * mp + 2) / 5 + 1;
-    let m = if mp < 10 { mp + 3 } else { mp - 9 };
-    let y = if m <= 2 { y + 1 } else { y };
-    (y, m, d)
-}
-
 /// Return (width, height) of the map pane, defaulting to (80, 24) when zero.
 fn map_pane_dims(area: Rect) -> (u16, u16) {
     let w = if area.width == 0 { 80 } else { area.width };
@@ -4687,40 +4609,11 @@ fn map_pane_dims(area: Rect) -> (u16, u16) {
     (w, h)
 }
 
-/// Re-observe the VM's current location after a restore/resume: fold the room into the
-/// map, deselect the viewed layer, select the room, and recenter the map pane on it.
-/// Produces no transcript output. Shared by every host restore/resume arm.
-fn reobserve_location(
-    state: &mut AppState,
-    mapper: &mut Mapper,
-    session: &dyn Engine,
-    map_rect: Rect,
-) {
-    // Every caller is a restore/resume/import: the live state now equals a saved
-    // one, so there is no unsaved progress to warn about on quit.
-    state.unsaved_progress = false;
-    // The caller has just swapped in a restored/imported mapper (or is about to
-    // re-observe into it); invalidate the map render memo so the loaded map shows
-    // this frame instead of the pre-restore one. Unconditional so even the
-    // no-current-location early-return below still invalidates. (SQ-0305)
-    state.bump_graph_gen();
-    // The restored game is not the one the death watch was watching: a death outstanding in the
-    // live session says nothing about the saved one, and the re-observation below is itself a room
-    // change with no passage behind it. Cleared before the early return, so a restore into a game
-    // that reports no location does not carry the old one's death either. (SQ-0671, SQ-0673)
-    state.death_watch = Default::default();
-    let Some(snap) = session.current_location() else { return };
-    let rid = snap.number as mapper::graph::RoomId;
-    let restore_result = TurnResult::observation(snap);
-    apply_turn(mapper, "", &restore_result, &mut state.death_watch);
-    state.set_viewed_layer(None);
-    state.select_room(Some(rid));
-    if let Some(room) = mapper.graph.room(rid) {
-        if let Some(pos) = room.pos {
-            let (pw, ph) = map_pane_dims(map_rect);
-            state.recenter_on(pos, pw, ph);
-        }
-    }
+/// The TUI's map pane as the library's per-turn `map_view` (SQ-1538): always a
+/// view, sized by [`map_pane_dims`], so a turn recenters exactly as it did when
+/// it took the `Rect` itself.
+fn map_view(area: Rect) -> Option<(u16, u16)> {
+    Some(map_pane_dims(area))
 }
 
 /// Build a `DialogStyle` from the current app colors.
@@ -4919,35 +4812,6 @@ fn scroll_for_match(match_visible_pos: usize, total_visible: usize, pane_rows: u
 }
 
 // ── Tests ─────────────────────────────────────────────────────────────────────
-
-/// Minimal v4 story: `read_char` (store->G0) at 0x40, then `@save` (store
-/// form, ->G0) at 0x44, then `quit` at 0x46. Mirrors session.rs's
-/// (crate-private) `read_char_then_save_v4` fixture, duplicated here
-/// since this test lives in the separate `app` *binary* crate. Shared by
-/// `engine_helpers`'s restore-dispatch test and `turn`'s resume tests — both
-/// t-session, which is why this lives outside `mod tests` below (that mod is
-/// t-misc) with its own gate matching its actual (and only) consumers.
-#[cfg(all(test, feature = "t-session"))]
-pub(crate) fn read_char_then_save_v4_story() -> Vec<u8> {
-    let mut buf = vec![0u8; 0x0800];
-    buf[0x00] = 4; // version 4 (0OP save/restore store form lives here)
-    buf[0x04] = 0x04; buf[0x05] = 0x00; // high_mem_base = 0x0400
-    buf[0x06] = 0x00; buf[0x07] = 0x40; // initial_pc = 0x0040
-    buf[0x08] = 0x00; buf[0x09] = 0x80; // dictionary = 0x0080 (empty)
-    buf[0x0080] = 0; buf[0x0081] = 4; buf[0x0082] = 0; buf[0x0083] = 0;
-    buf[0x0A] = 0x01; buf[0x0B] = 0x00; // object_table = 0x0100
-    buf[0x0C] = 0x03; buf[0x0D] = 0x00; // global_vars = 0x0300
-    buf[0x0E] = 0x04; buf[0x0F] = 0x00; // static_mem_base = 0x0400
-    buf[0x18] = 0x00; buf[0x19] = 0x60; // abbrev_table = 0x0060
-    buf[0x0040] = 0xF6; // VAR read_char
-    buf[0x0041] = 0x7F; // type: small(01), omit(11), omit(11), omit(11)
-    buf[0x0042] = 1;    // operand: device=1
-    buf[0x0043] = 0x10; // store -> G0
-    buf[0x0044] = 0xB5; // 0OP:0x05 save (store form)
-    buf[0x0045] = 0x10; // store -> G0
-    buf[0x0046] = 0xBA; // quit
-    buf
-}
 
 #[cfg(all(test, feature = "t-misc"))]
 mod tests {
@@ -5445,7 +5309,7 @@ mod tests {
 
     #[test]
     fn game_echoes_command_detects_self_echo() {
-        use super::game_echoes_command;
+        use app::host::turn::game_echoes_command;
         // CounterfeitMonkey shape: the turn output starts with the command (bold),
         // then the response — case-insensitive, boundary-terminated.
         assert!(game_echoes_command("yes\n\nGood, you're conscious.", "yes"));

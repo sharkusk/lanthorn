@@ -164,6 +164,25 @@ caller of it: there is one copy of each rule.
   terminal-only half (raw mode, the alternate screen, the `Terminal`, the
   keep-it prompt for a fetched story, printing a story that quit at boot).
   `tests/suites/host_boot.rs` boots all three engines with no terminal.
+- **The per-turn apply** (`host::turn`, SQ-1538) — `finish_command_turn`,
+  `apply_game_driven_result` and `finish_resumed_turn`: echo, transcript, map
+  (declared exits, Glulx room re-keying, the death-watch rollback), pager, save
+  bookkeeping. The only terminal fact it ever took was the map pane's `Rect`, used
+  to recenter; it is now `map_view: Option<(cols, rows)>`. Each returns a
+  `TurnOutcome` — `quit`, plus a `Paging` report (would the pager arm, is `[more]`
+  suppressed, which transcript line this turn's output starts on) for a host that
+  paginates by its own viewport; the TUI's pager itself stays render-driven. The
+  in-game SAVE/RESTORE/filename requests a turn can open (`host::ingame_io`)
+  moved with it.
+- **Sound** (`host::sound`, SQ-1538) — which resource plays, on which channel, with
+  which finish routine or Glk notify waiting on it stays in
+  `AppState::play_turn_sounds` / `play_glulx_sound_ops`; only the noise is the
+  host's, through the `SoundSink` on `AppState::audio`. The TUI's sink is
+  `audio::AudioBackend`, opened lazily on the first sound played (SQ-1423); a
+  headless host installs its own before the first turn and reports each finished
+  sound through `sound_finished`, which runs the routine exactly as the TUI does
+  when its device reports one. `tests/suites/host_turn.rs` drives Zork I into the
+  grue and a hand-assembled `@sound_effect` story through a recording sink.
 
 ## Three engines, one renderer — and Glk only for Glulx
 

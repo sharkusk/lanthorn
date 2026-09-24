@@ -17,12 +17,22 @@
 //! headless host leaves at its default.
 //!
 //! - [`boot`] — boot a story to its first prompt and hand back a ready session.
+//! - [`turn`] — apply a finished turn: transcript, map, sound, pager, saves.
+//! - [`sound`] — the [`SoundSink`](sound::SoundSink) a host plays sound through,
+//!   and [`sound_finished`](sound::sound_finished) for reporting one back.
+//! - [`ingame_io`] — the game's own SAVE/RESTORE and filename requests.
 
 pub mod boot;
+pub mod ingame_io;
+pub mod sound;
+pub mod turn;
 
 pub use boot::{
     boot_story, random_seed_line, resolve_pict_blorb, story_screen_in, BootError, BootHooks,
     BootRequest, BootedStory, LaunchFlags, QuietBoot, TerminalFacts,
+};
+pub use turn::{
+    apply_game_driven_result, finish_command_turn, finish_resumed_turn, Paging, TurnOutcome,
 };
 
 use crate::engine::Engine;

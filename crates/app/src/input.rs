@@ -2612,7 +2612,7 @@ fn apply_action_inner(action: Action, state: &mut AppState, mapper: &mut Mapper)
             if !state.config.enable_sound {
                 state.reset_sound_sidecars();
             } else if state.audio.is_none() {
-                state.audio = Some(audio::AudioBackend::new(state.config.volume));
+                state.audio = Some(crate::host::sound::default_sound_sink(state.config.volume));
             }
             // Sync the running Glulx VM's Sound gestalt (applied by the event loop).
             state.pending_vm_sound = Some(state.config.enable_sound);
@@ -3512,7 +3512,7 @@ fn apply_action_inner(action: Action, state: &mut AppState, mapper: &mut Mapper)
                 if let Some(b) = state.audio.as_mut() {
                     b.set_volume(state.config.volume);
                 } else if state.config.enable_sound {
-                    state.audio = Some(audio::AudioBackend::new(state.config.volume));
+                    state.audio = Some(crate::host::sound::default_sound_sink(state.config.volume));
                 }
                 if !state.config.enable_sound {
                     state.reset_sound_sidecars();

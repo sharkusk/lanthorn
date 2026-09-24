@@ -2837,9 +2837,14 @@ pub struct AppState {
     pub anim_build_job: Option<AnimBuildJob>,
     /// In-flight one-shot story-border flash, if any. Armed by a beep event; expires after SOUND_PULSE_MS.
     pub sound_pulse: Option<SoundPulse>,
-    /// Host audio backend, present when audio was enabled at launch. `None` when
-    /// disabled or when construction was skipped.
-    pub audio: Option<audio::AudioBackend>,
+    /// Where this story's sounds go (SQ-1538): the host's [`SoundSink`]. `None`
+    /// until the first sound actually plays, when the TUI opens its output device
+    /// ([`default_sound_sink`], SQ-1423); a host that delivers sound elsewhere
+    /// installs its own sink here before the first turn, and it is never replaced.
+    ///
+    /// [`SoundSink`]: crate::host::sound::SoundSink
+    /// [`default_sound_sink`]: crate::host::sound::default_sound_sink
+    pub audio: Option<Box<dyn crate::host::sound::SoundSink>>,
     /// The Blorb holding this story's `Snd ` resources, resolved at launch.
     pub sound_blorb: Option<blorb::Blorb>,
     /// Sounds the story's own MEDIUM carries, by effect number (SQ-0907). Populated
@@ -3995,9 +4000,9 @@ impl AppState {
                 // is empty and there is nothing to stop.
                 0 => {
                     if matches!(ev.effect, 3 | 4) {
-                        if let Some(backend) = self.audio.as_mut() {
+                        if let Some(sink) = self.audio.as_mut() {
                             for (_, id) in self.sound_ids.drain() {
-                                backend.stop(id);
+                                sink.stop(id);
                             }
                         }
                     }
@@ -4010,12 +4015,16 @@ impl AppState {
                 // 2 = play, so the compensation is gone with it).
                 1 | 2 => {
                     let freq = if ev.number == 1 { 800.0 } else { 400.0 };
-                    self.audio.get_or_insert_with(|| audio::AudioBackend::new(volume)).play_tone(freq, 150, ev.volume);
+                    self.audio
+                        .get_or_insert_with(|| crate::host::sound::default_sound_sink(volume))
+                        .tone(freq, 150, ev.volume);
                 }
                 n => match ev.effect {
                     3 => {
                         if let Some(id) = self.sound_ids.remove(&n) {
-                            self.audio.get_or_insert_with(|| audio::AudioBackend::new(volume)).stop(id);
+                            self.audio
+                                .get_or_insert_with(|| crate::host::sound::default_sound_sink(volume))
+                                .stop(id);
                         }
                     }
                     1 => {} // prepare: decode on start
@@ -4024,10 +4033,16 @@ impl AppState {
                         // `/play-sound` diagnostic — see `resolve_sound`.
                         let played = resolve_sound(&self.disk_sounds, self.sound_blorb.as_ref(), n)
                             .and_then(|(bytes, kind, _)| {
-                                sound_kind_to_format(kind).and_then(|fmt| {
+                                sound_kind_to_format(kind).and_then(|format| {
                                     self.audio
-                                        .get_or_insert_with(|| audio::AudioBackend::new(volume))
-                                        .play_sample(bytes, fmt, ev.volume, ev.repeats)
+                                        .get_or_insert_with(|| crate::host::sound::default_sound_sink(volume))
+                                        .play(crate::host::sound::SampleStart {
+                                            resource: u32::from(n),
+                                            bytes,
+                                            format,
+                                            level: crate::host::sound::SampleLevel::ZVolume(ev.volume),
+                                            repeats: ev.repeats,
+                                        })
                                 })
                             });
                         if let Some(id) = played {
@@ -4065,16 +4080,24 @@ impl AppState {
                     // Playing on a busy channel stops the old sound first; the
                     // replaced sound fires no notify.
                     if let Some(old) = self.glulx_channels.remove(&chan) {
-                        if let Some(backend) = self.audio.as_mut() { backend.stop(old); }
+                        if let Some(sink) = self.audio.as_mut() { sink.stop(old); }
                         self.glulx_sound_notify.remove(&old);
                     }
                     let Some(reps) = glk_repeats_to_audio(repeats) else { continue };
                     if let Some(blorb) = &self.sound_blorb {
                         if let Some((bytes, kind)) = blorb.sound(snd) {
-                            if let Some(fmt) = sound_kind_to_format(kind) {
+                            if let Some(format) = sound_kind_to_format(kind) {
                                 let gain = glk_volume_to_gain(vol);
-                                let backend = self.audio.get_or_insert_with(|| audio::AudioBackend::new(volume));
-                                if let Some(id) = backend.play_sample_gain(bytes, fmt, gain, reps) {
+                                let sink = self
+                                    .audio
+                                    .get_or_insert_with(|| crate::host::sound::default_sound_sink(volume));
+                                if let Some(id) = sink.play(crate::host::sound::SampleStart {
+                                    resource: snd,
+                                    bytes,
+                                    format,
+                                    level: crate::host::sound::SampleLevel::Gain(gain),
+                                    repeats: reps,
+                                }) {
                                     self.glulx_channels.insert(chan, id);
                                     // A fresh sound starts at the channel's snapshot
                                     // volume; cancel any ramp left over from a prior
@@ -4089,7 +4112,7 @@ impl AppState {
                                     // not "empty", so no finish-notify fires until it
                                     // is unpaused and actually plays out.
                                     if paused {
-                                        if let Some(backend) = self.audio.as_mut() { backend.pause(id); }
+                                        if let Some(sink) = self.audio.as_mut() { sink.pause(id); }
                                     }
                                 }
                             }
@@ -4098,13 +4121,13 @@ impl AppState {
                 }
                 SchannelOp::Stop { chan } => {
                     if let Some(id) = self.glulx_channels.remove(&chan) {
-                        if let Some(backend) = self.audio.as_mut() { backend.stop(id); }
+                        if let Some(sink) = self.audio.as_mut() { sink.stop(id); }
                         self.glulx_sound_notify.remove(&id);
                     }
                 }
                 SchannelOp::Destroy { chan } => {
                     if let Some(id) = self.glulx_channels.remove(&chan) {
-                        if let Some(backend) = self.audio.as_mut() { backend.stop(id); }
+                        if let Some(sink) = self.audio.as_mut() { sink.stop(id); }
                         self.glulx_sound_notify.remove(&id);
                     }
                     // A destroyed channel can never complete a pending ramp.
@@ -4115,7 +4138,7 @@ impl AppState {
                 SchannelOp::SetVolume { chan, vol } => {
                     let gain = glk_volume_to_gain(vol);
                     if let Some(&id) = self.glulx_channels.get(&chan) {
-                        if let Some(backend) = self.audio.as_mut() { backend.set_sample_gain(id, gain); }
+                        if let Some(sink) = self.audio.as_mut() { sink.set_gain(id, gain); }
                     }
                     // A plain set_volume is an immediate change; it interrupts any
                     // in-progress ramp (whose notify is then dropped, per spec §8.3).
@@ -4125,12 +4148,12 @@ impl AppState {
                 }
                 SchannelOp::Pause { chan } => {
                     if let Some(&id) = self.glulx_channels.get(&chan) {
-                        if let Some(backend) = self.audio.as_mut() { backend.pause(id); }
+                        if let Some(sink) = self.audio.as_mut() { sink.pause(id); }
                     }
                 }
                 SchannelOp::Unpause { chan } => {
                     if let Some(&id) = self.glulx_channels.get(&chan) {
-                        if let Some(backend) = self.audio.as_mut() { backend.unpause(id); }
+                        if let Some(sink) = self.audio.as_mut() { sink.unpause(id); }
                     }
                 }
                 SchannelOp::SetVolumeExt { chan, vol, duration_ms, notify } => {
@@ -4142,7 +4165,7 @@ impl AppState {
                     if duration_ms == 0 {
                         // Immediate change: jump the sink and current gain to target.
                         if let Some(&id) = self.glulx_channels.get(&chan) {
-                            if let Some(backend) = self.audio.as_mut() { backend.set_sample_gain(id, target); }
+                            if let Some(sink) = self.audio.as_mut() { sink.set_gain(id, target); }
                         }
                         self.glulx_gain.insert(chan, target);
                     } else {
@@ -4202,7 +4225,7 @@ impl AppState {
             self.glulx_gain.insert(chan, gain);
             if let Some(&id) = self.glulx_channels.get(&chan) {
                 if let Some(b) = self.audio.as_mut() {
-                    b.set_sample_gain(id, gain);
+                    b.set_gain(id, gain);
                 }
             }
             if elapsed >= ramp.duration_ms {
@@ -6066,7 +6089,7 @@ mod tests {
         let mut state = AppState::default();
         state.config.enable_sound = true;
         audio::disable_output_for_tests(); // silent backend: no real device to open/tear down
-        state.audio = Some(audio::AudioBackend::new(50));
+        state.audio = Some(Box::new(audio::AudioBackend::new(50)));
         // Seed the channel's current gain (as a prior play/set_volume would).
         state.glulx_gain.insert(1, 1.0);
         // A ramped set_volume_ext installs a ramp from the current gain to target
@@ -6106,7 +6129,7 @@ mod tests {
         let mut state = AppState::default();
         state.config.enable_sound = true;
         audio::disable_output_for_tests(); // silent backend: no real device to open/tear down
-        state.audio = Some(audio::AudioBackend::new(50));
+        state.audio = Some(Box::new(audio::AudioBackend::new(50)));
         // A ramped set_volume_ext with a nonzero notify schedules a pending
         // volume-notify keyed by channel (no live sound needed).
         state.play_glulx_sound_ops(&[SchannelOp::SetVolumeExt { chan: 1, vol: 0x8000, duration_ms: 1000, notify: 7 }]);

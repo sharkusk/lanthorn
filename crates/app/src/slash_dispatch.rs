@@ -17,7 +17,7 @@ use ratatui::layout::Rect;
 use app::engine_helpers::{apply_archive_state, restore_from_file, zvm_session_opt, RestoreOutcome};
 use crate::reset::reset_game;
 use crate::{
-    combined_saves, format_rfc3339, handle_map_export, open_hints, reobserve_location,
+    combined_saves, format_rfc3339, handle_map_export, map_view, open_hints, reobserve_location,
     scroll_for_match, should_prompt_save_on_quit, toggle_style_watch,
 };
 
@@ -312,14 +312,22 @@ pub(crate) fn dispatch_slash_outcome(
             if let Some((bytes, kind, from_medium)) = picked {
                 report.resource = Some((kind, bytes.len()));
                 report.from_medium = from_medium;
-                if let Some(fmt) = app::state::sound_kind_to_format(kind) {
-                    report.format = Some(fmt);
+                if let Some(format) = app::state::sound_kind_to_format(kind) {
+                    report.format = Some(format);
                     // `/play-sound` is an explicit request to play something, so
                     // it opens the (otherwise lazy, SQ-1423) device itself rather
                     // than silently doing nothing the first time it's run.
                     let volume = state.config.volume;
-                    let backend = state.audio.get_or_insert_with(|| audio::AudioBackend::new(volume));
-                    report.sound_id = backend.play_sample(&bytes, fmt, 8, 1);
+                    let sink = state
+                        .audio
+                        .get_or_insert_with(|| app::host::sound::default_sound_sink(volume));
+                    report.sound_id = sink.play(app::host::sound::SampleStart {
+                        resource: n,
+                        bytes: &bytes,
+                        format,
+                        level: app::host::sound::SampleLevel::ZVolume(8),
+                        repeats: 1,
+                    });
                 }
             }
             for line in app::state::format_play_sound_report(&report) {
@@ -411,12 +419,12 @@ pub(crate) fn dispatch_slash_outcome(
                             if let Some(ac) = ac {
                                 apply_archive_state(*ac, &mut *session, mapper, state);
                             }
-                            reobserve_location(state, mapper, &*session, map_rect);
+                            reobserve_location(state, mapper, &*session, map_view(map_rect));
                             state.set_status("restored");
                         }
                         Ok(RestoreOutcome::Resumed(ac)) => {
                             apply_archive_state(*ac, &mut *session, mapper, state);
-                            reobserve_location(state, mapper, &*session, map_rect);
+                            reobserve_location(state, mapper, &*session, map_view(map_rect));
                             state.set_status("loaded");
                         }
                         Err(e) => state.set_status(format!("load failed: {}", e)),

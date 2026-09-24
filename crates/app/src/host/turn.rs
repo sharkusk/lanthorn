@@ -1,36 +1,168 @@
-//! Turn lifecycle: apply a completed game turn to the UI + mapper, run post-turn
-//! bookkeeping / persistence, and post-process resumed and game-driven turns.
-//! Extracted verbatim from `main.rs` (SQ-0306) as a pure move — no behavior
-//! change. Helper fns these rely on stay in `main.rs` (referenced via `crate::`);
-//! the Wave 1 invariant calls (`graph_gen` bumps after `apply_turn`, transcript
+//! The per-turn apply (SQ-1538): what a finished turn does to the transcript,
+//! the map, the sound, the `[more]` pager and the save bookkeeping — for a
+//! submitted command, a resumed in-game save/restore, and a game-driven turn
+//! (a keypress read, a timed-input interrupt, a Glk timer, a sound routine).
+//!
+//! Moved out of the binary's `turn.rs` (itself extracted from `main.rs` by
+//! SQ-0306) so a host that is not a terminal applies a turn by the same rules
+//! the TUI does. None of it ever called crossterm; what tied it to the terminal
+//! was a `ratatui::layout::Rect` for the map pane, used only to recenter the map
+//! on the current room. That is now `map_view` — the pane's `(cols, rows)`, or
+//! `None` for a host that draws no map — and playback goes through the state's
+//! [`SoundSink`](super::sound::SoundSink) rather than straight to a device. The
+//! Wave 1 invariant calls (`graph_gen` bumps after `apply_turn`, transcript
 //! generation bumps inside `push_*`) move intact inside the bodies.
+//!
+//! Every entry point returns a [`TurnOutcome`]: whether the game ended, and the
+//! pager's verdict on the output, so a host that paginates by its own viewport
+//! knows where a pause belongs.
 
 use std::time::Duration;
 
 use mapper::mapper::Mapper;
-use ratatui::layout::Rect;
 
-use app::archive::load_archive;
-use app::engine::Engine;
-use app::host::{flush_screen_trace, flush_v6_trace};
-use app::tidy::{cleanup_overlaps_layer_silent, tidy_layer_silent};
-use app::session::{apply_turn, TurnResult};
-use app::state::{AppState, SoundPulse, TidyJob, TidyKind, TranscriptKind};
-use app::storage::default_state_path;
+use crate::archive::load_archive;
+use crate::engine::Engine;
+use crate::host::{flush_screen_trace, flush_v6_trace};
+use crate::tidy::{cleanup_overlaps_layer_silent, should_bg_tidy, tidy_layer_silent};
+use crate::session::{apply_turn, InputKind, TurnResult};
+use crate::state::{AppState, SoundPulse, TidyJob, TidyKind, TranscriptKind};
+use crate::storage::default_state_path;
 
-use app::engine_helpers::{restore_error_msg, zvm_session_opt, zvm_session_opt_mut};
-use crate::ingame_io::{open_filename_modal, open_ingame_saves};
-use crate::{
-    format_rfc3339, game_echoes_command, map_pane_dims, reobserve_location, should_bg_tidy,
-    PaneRects,
-};
+use crate::engine_helpers::{restore_error_msg, zvm_session_opt, zvm_session_opt_mut};
+use super::ingame_io::{open_filename_modal, open_ingame_saves};
 
-/// Apply a completed game-turn `result` from a submitted command line: echo the
-/// command, push its transcript, advance the mapper, run post-turn bookkeeping /
-/// auto-save / background tidy, and recenter on the current room. Shared by the
-/// normal `SubmitCommand` path and the terminator-key submit gate (SQ-0188).
-/// Returns `true` if the app should exit after this turn.
-#[allow(clippy::too_many_arguments)]
+/// What a turn left for the host to act on. `#[must_use]`: a dropped `quit` is
+/// a game that ended while the host kept waiting for input.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+#[must_use]
+pub struct TurnOutcome {
+    /// The game ended cleanly (`@quit`, `glk_exit`) and the session should close.
+    /// A VM fault is NOT a quit — the game halts and the host stays up.
+    pub quit: bool,
+    /// The `[more]` pager's verdict on this turn's output.
+    pub paging: Paging,
+}
+
+/// The `[more]` pager's verdict on one turn, for a host that paginates by its
+/// own viewport (SQ-1538). The TUI's pager ([`crate::pager`]) measures wrapped
+/// rows at the next frame; this is the same decision in transcript LINES, which
+/// is what a host with a different layout can use.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub struct Paging {
+    /// The pager would arm for this output ([`crate::pager::should_arm`]): the
+    /// game is now waiting on a line or a key and nothing vetoes `[more]`. A
+    /// host whose viewport cannot show everything from `first_line` on pauses
+    /// there first.
+    pub would_arm: bool,
+    /// The v6 "never print [MORE]" veto is in force ([`crate::pager::more_suppressed`],
+    /// ZMSD §8.8.3.2.6) — which is also why `would_arm` is false.
+    pub more_suppressed: bool,
+    /// The first transcript line (`AppState::transcript` index) this turn's
+    /// output landed on: where a paginating host's pause belongs.
+    pub first_line: usize,
+}
+
+impl Paging {
+    /// The verdict for output that began at `first_line`, with the game now
+    /// waiting on `pending`.
+    fn after(first_line: usize, pending: InputKind, session: &dyn Engine) -> Paging {
+        let more_suppressed = crate::pager::more_suppressed(session);
+        Paging {
+            would_arm: crate::pager::should_arm(pending, more_suppressed),
+            more_suppressed,
+            first_line,
+        }
+    }
+}
+
+/// Recenter the map pane on `rid` if the host shows a map (`map_view` is its
+/// `(cols, rows)`) and the room has been placed.
+fn recenter_on_room(state: &mut AppState, mapper: &Mapper, rid: mapper::graph::RoomId, map_view: Option<(u16, u16)>) {
+    if let (Some(pos), Some((pw, ph))) = (mapper.graph.room(rid).and_then(|r| r.pos), map_view) {
+        state.recenter_on(pos, pw, ph);
+    }
+}
+
+/// Whether the game echoed the just-submitted command itself at the start of its
+/// turn output (e.g. CounterfeitMonkey prints the command back in bold). Compared
+/// case-insensitively against the leading non-whitespace text, and only when the
+/// echo ends at a boundary (so `go` doesn't match a response starting `gospel`),
+/// so we don't add a second, redundant echo. An empty command never matches.
+pub fn game_echoes_command(transcript: &str, cmd: &str) -> bool {
+    let cmd = cmd.trim();
+    if cmd.is_empty() {
+        return false;
+    }
+    let mut head = transcript.trim_start().chars();
+    for cc in cmd.chars() {
+        match head.next() {
+            Some(hc) if hc.eq_ignore_ascii_case(&cc) => {}
+            _ => return false,
+        }
+    }
+    // The command must be followed by a boundary, not more word characters.
+    match head.next() {
+        None => true,
+        Some(c) => !c.is_alphanumeric(),
+    }
+}
+
+/// Format a Unix timestamp (seconds since epoch) as an RFC3339 UTC string.
+pub fn format_rfc3339(secs: u64) -> String {
+    let sec = secs % 60;
+    let min = (secs / 60) % 60;
+    let hour = (secs / 3600) % 24;
+    let days = secs / 86400;
+    let (year, month, day) = days_to_ymd(days);
+    format!("{:04}-{:02}-{:02}T{:02}:{:02}:{:02}Z", year, month, day, hour, min, sec)
+}
+
+fn days_to_ymd(mut days: u64) -> (u64, u64, u64) {
+    days += 719468;
+    let era = days / 146097;
+    let doe = days % 146097;
+    let yoe = (doe - doe / 1460 + doe / 36524 - doe / 146096) / 365;
+    let y = yoe + era * 400;
+    let doy = doe - (365 * yoe + yoe / 4 - yoe / 100);
+    let mp = (5 * doy + 2) / 153;
+    let d = doy - (153 * mp + 2) / 5 + 1;
+    let m = if mp < 10 { mp + 3 } else { mp - 9 };
+    let y = if m <= 2 { y + 1 } else { y };
+    (y, m, d)
+}
+
+/// Re-observe the VM's current location after a restore/resume: fold the room into the
+/// map, deselect the viewed layer, select the room, and recenter the map pane on it.
+/// Produces no transcript output. Shared by every host restore/resume arm.
+pub fn reobserve_location(
+    state: &mut AppState,
+    mapper: &mut Mapper,
+    session: &dyn Engine,
+    map_view: Option<(u16, u16)>,
+) {
+    // Every caller is a restore/resume/import: the live state now equals a saved
+    // one, so there is no unsaved progress to warn about on quit.
+    state.unsaved_progress = false;
+    // The caller has just swapped in a restored/imported mapper (or is about to
+    // re-observe into it); invalidate the map render memo so the loaded map shows
+    // this frame instead of the pre-restore one. Unconditional so even the
+    // no-current-location early-return below still invalidates. (SQ-0305)
+    state.bump_graph_gen();
+    // The restored game is not the one the death watch was watching: a death outstanding in the
+    // live session says nothing about the saved one, and the re-observation below is itself a room
+    // change with no passage behind it. Cleared before the early return, so a restore into a game
+    // that reports no location does not carry the old one's death either. (SQ-0671, SQ-0673)
+    state.death_watch = Default::default();
+    let Some(snap) = session.current_location() else { return };
+    let rid = snap.number as mapper::graph::RoomId;
+    let restore_result = TurnResult::observation(snap);
+    apply_turn(mapper, "", &restore_result, &mut state.death_watch);
+    state.set_viewed_layer(None);
+    state.select_room(Some(rid));
+    recenter_on_room(state, mapper, rid, map_view);
+}
+
 /// **A line read that ended on a terminating character echoed no newline**, so
 /// the host must not invent one (SQ-0881).
 ///
@@ -50,12 +182,12 @@ use crate::{
 /// echo, and no output. A terminator that ends a line the player DID type still
 /// echoes that text, and a game that prints in response still gets its line —
 /// this silences a turn that was already silent, and nothing else.
-pub(crate) fn silent_terminator_turn(
+pub fn silent_terminator_turn(
     cmd: &str,
     ended_on_newline: bool,
     result: &TurnResult,
 ) -> bool {
-    use app::session::TranscriptElem;
+    use crate::session::TranscriptElem;
     !ended_on_newline
         && cmd.is_empty()
         && result.transcript.is_empty()
@@ -66,7 +198,17 @@ pub(crate) fn silent_terminator_turn(
             .all(|e| matches!(e, TranscriptElem::Text { text, .. } if text.is_empty()))
 }
 
-pub(crate) fn finish_command_turn(
+/// Apply a completed game-turn `result` from a submitted command line: echo the
+/// command, push its transcript, advance the mapper, run post-turn bookkeeping /
+/// auto-save / background tidy, and recenter on the current room. Shared by the
+/// normal `SubmitCommand` path and the terminator-key submit gate (SQ-0188).
+///
+/// `ended_on_newline` is whether the read ended on Enter rather than a
+/// terminating character (see [`silent_terminator_turn`]); `map_view` is the map
+/// pane's `(cols, rows)` to recenter in, or `None` for a host with no map;
+/// `bg_tidy_counter` is the host's debounce counter for background map tidies.
+#[allow(clippy::too_many_arguments)]
+pub fn finish_command_turn(
     cmd: &str,
     ended_on_newline: bool,
     mut result: TurnResult,
@@ -76,9 +218,9 @@ pub(crate) fn finish_command_turn(
     game_dir: &std::path::Path,
     ifid: &str,
     arc_file: &std::path::Path,
-    map_area: Rect,
+    map_view: Option<(u16, u16)>,
     bg_tidy_counter: &mut u32,
-) -> bool {
+) -> TurnOutcome {
     // The player has typed again, so anything the shadow is still working on for
     // an earlier turn is stale (SQ-1124).
     state.begin_turn();
@@ -115,8 +257,10 @@ pub(crate) fn finish_command_turn(
     } else if result.transcript_elems.is_empty() {
         state.push_transcript_runs(&result.transcript, TranscriptKind::Story, &result.transcript_runs);
     } else {
-        app::state::apply_transcript_elems(state, &result.transcript_elems);
+        crate::state::apply_transcript_elems(state, &result.transcript_elems);
     }
+    // Where this turn's output begins, for the pager report below.
+    let mut first_line = before_push;
     if merge_echo && state.transcript.len() > before_push {
         // Fold the game's own echo (its first output line) onto the `>` prompt.
         // The game printed the echo in the default colour; preserve the current
@@ -126,6 +270,7 @@ pub(crate) fn finish_command_turn(
         if let Some((fg, bg)) = prevailing {
             state.fill_line_default_colours(before_push - 1, fg, bg);
         }
+        first_line = before_push - 1;
     }
     apply_turn_events(state, &result);
     flush_screen_trace(&state.config.user_dir, session, state.config.trace.screen);
@@ -136,13 +281,14 @@ pub(crate) fn finish_command_turn(
     // exclusion is gone: a clear preserves scrollback and re-anchors, so the rows
     // this turn added already measure the post-clear repaint alone (fits → no
     // pager; overflows → page it). The next render measures the rows added and
-    // engages if it overflowed. See `app::pager` for the full table.
+    // engages if it overflowed. See `crate::pager` for the full table.
     state.pager.arm_after_turn(
         state.last_transcript_total_rows,
         session.pending_input(),
-        app::pager::more_suppressed(&*session),
-        app::pager::Driver::PlayerInput,
+        crate::pager::more_suppressed(&*session),
+        crate::pager::Driver::PlayerInput,
     );
+    let paging = Paging::after(first_line, session.pending_input(), &*session);
     if let Some(note) = &result.info {
         state.push_transcript(note);
     }
@@ -152,10 +298,10 @@ pub(crate) fn finish_command_turn(
     // transcript, so the offer reads underneath the refusal it answers rather
     // than above it — and only for a turn that printed something, because a turn
     // that printed nothing rejected nothing. Silence is the usual outcome; see
-    // `app::vocab` for the four gates it has to pass first.
+    // `crate::vocab` for the four gates it has to pass first.
     let printed = !silent
         && (!result.transcript.trim().is_empty() || !result.transcript_elems.is_empty());
-    app::vocab::offer_vocabulary(state, &*session, cmd, printed);
+    crate::vocab::offer_vocabulary(state, &*session, cmd, printed);
 
     // Capture room + connection counts before apply_turn, to detect
     // whether THIS turn actually changed the graph (a non-mutating
@@ -169,17 +315,17 @@ pub(crate) fn finish_command_turn(
     // back the rooms mapped during the learning window; re-key them so they are
     // the same nodes afterwards instead of duplicates the player walks back into.
     // Empty on every other turn, and always empty for the Z-machine.
-    if let Some(g) = app::engine_helpers::glulx_session_opt_mut(&mut *session) {
+    if let Some(g) = crate::engine_helpers::glulx_session_opt_mut(&mut *session) {
         for (name, addr) in g.take_room_remap() {
-            let old_id = app::roomid::synthetic_room_id(&name);
-            let new_id = app::roomid::glulx_room_id(addr);
+            let old_id = crate::roomid::synthetic_room_id(&name);
+            let new_id = crate::roomid::glulx_room_id(addr);
             mapper.rekey_room(old_id, new_id); // Mapper-level: also re-keys arrived_via (SQ-0632)
         }
     }
 
     // What `apply_turn` is about to record as tried, captured while the room typed in is still
     // the current one — the rollback below needs to know which record is this turn's (SQ-0671).
-    let attempted = app::session::tried_record_for(mapper, cmd);
+    let attempted = crate::session::tried_record_for(mapper, cmd);
     // …and the room they are LEAVING, which is only knowable here for the same reason and which
     // the return probe needs as the room a way back has to lead to (SQ-0785).
     let room_before = mapper.graph.current();
@@ -190,7 +336,7 @@ pub(crate) fn finish_command_turn(
     // pure function with neither). SQ-1314: `None` for a move made off the compass — see the
     // function's own docs.
     result.declared_exit =
-        app::random_exit_probe::declared_exit_for_command(cmd, room_before, |o, d| session.declared_exit(o, d));
+        crate::random_exit_probe::declared_exit_for_command(cmd, room_before, |o, d| session.declared_exit(o, d));
 
     apply_turn(mapper, cmd, &result, &mut state.death_watch);
 
@@ -198,11 +344,11 @@ pub(crate) fn finish_command_turn(
     // taken back and the direction stays untried (`·`, not `×`). Fires for the turn that
     // CONTAINED the fatal move even when the death is only admitted a turn later, after the
     // player answers a resurrection prompt. (SQ-0671)
-    app::session::rollback_tried_on_death(
+    crate::session::rollback_tried_on_death(
         mapper,
         &mut state.death_watch,
         attempted,
-        app::session::turn_reports_death(&result.transcript),
+        crate::session::turn_reports_death(&result.transcript),
     );
 
     // Breadcrumb for the maze view (SQ-0666): where the player has just been. Recorded from the
@@ -217,18 +363,18 @@ pub(crate) fn finish_command_turn(
     // `post_turn_bookkeeping` below (SQ-1178). Valid for all three because
     // nothing from here to the next command mutates the VM: every call into
     // the session in between reads through `&dyn Engine`.
-    let mut turn_save = app::engine::TurnSave::default();
+    let mut turn_save = crate::engine::TurnSave::default();
 
     // Look for the way back, in a silent copy of the game (SQ-0785). Off by default; arms only
     // for a crossing the map has no return path for, and ends any search a move has outrun.
-    app::return_probe::arm_return_search(state, mapper, &*session, cmd, room_before, &mut turn_save);
+    crate::return_probe::arm_return_search(state, mapper, &*session, cmd, room_before, &mut turn_save);
 
     // SQ-1257 Phase 2: this move's own edge was minted (or not) already, by `apply_turn` above.
     // Which reseeded shadow this turn earns — a first walk, an upgrade, or a suspicion left
     // pending — is `random_exit_probe`'s own decision, and lives there in ONE place: five real-
     // story harnesses mirror this call and every one of them used to restate the gate by hand
     // (SQ-1314). `room_before` is the only fact this scope has that it does not.
-    app::random_exit_probe::arm_for_finished_turn(
+    crate::random_exit_probe::arm_for_finished_turn(
         state,
         &*session,
         mapper,
@@ -256,14 +402,14 @@ pub(crate) fn finish_command_turn(
     // resume completes (the turn is still in flight).
     if let Some(io) = result.pending_io {
         open_ingame_saves(io, game_dir, state);
-        return false;
+        return TurnOutcome { quit: false, paging };
     }
 
     // Game create_by_prompt: open the filename modal and defer bookkeeping until the
     // resume completes (the turn is still in flight, like the save/restore path).
     if let Some(req) = session.pending_filename() {
         open_filename_modal(req, &*session, state);
-        return false;
+        return TurnOutcome { quit: false, paging };
     }
 
     // Computed here, BEFORE bookkeeping, so a clean game-driven quit
@@ -323,12 +469,7 @@ pub(crate) fn finish_command_turn(
     if let Some(snap) = &result.location {
         let rid = snap.number as mapper::graph::RoomId;
         state.select_room(Some(rid));
-        if let Some(room) = mapper.graph.room(rid) {
-            if let Some(pos) = room.pos {
-                let (pw, ph) = map_pane_dims(map_area);
-                state.recenter_on(pos, pw, ph);
-            }
-        }
+        recenter_on_room(state, mapper, rid, map_view);
     }
 
     // Scott Adams games auto-terminate via the VM's quit (opcode 63) on win or
@@ -336,14 +477,14 @@ pub(crate) fn finish_command_turn(
     // and raise the game-over dialog (the final message stays in the transcript
     // behind it). Every other engine keeps exiting on a clean quit.
     // (`should_exit` was computed above, before bookkeeping — see there.)
-    let is_scott = app::engine_helpers::engine_tag(session) == "scott";
+    let is_scott = crate::engine_helpers::engine_tag(session) == "scott";
 
     // SQ-0439: the map may have something to say about the move just made — that a set of rooms
     // wants a layer of its own. Deliberately at the END of the turn and never mid-one: the two
     // early returns above are the in-flight cases (the game is waiting on a save/restore or on a
     // filename), and `offer_layer_suggestion` stands down for a modal the player asked for.
     if !should_exit {
-        app::input::offer_layer_suggestion(state, mapper);
+        crate::input::offer_layer_suggestion(state, mapper);
     }
 
     // If the debug inspector is open, refresh its snapshot from the VM state
@@ -354,7 +495,7 @@ pub(crate) fn finish_command_turn(
         }
     }
 
-    intercept_scott_game_over(should_exit, is_scott, state)
+    TurnOutcome { quit: intercept_scott_game_over(should_exit, is_scott, state), paging }
 }
 
 /// Fold a Scott clean quit into the game-over overlay. When the turn would exit
@@ -374,7 +515,7 @@ pub(crate) fn finish_command_turn(
 /// all, rather than one spawned and thrown away. The layer keeps growing — a new
 /// room was already dead-reckoned into place by `apply_turn` — but nothing
 /// re-derives where the rooms already there sit. See `tidy::layer_is_frozen`.
-pub(crate) fn schedule_map_maintenance(
+pub fn schedule_map_maintenance(
     state: &mut AppState,
     mapper: &Mapper,
     new_room: bool,
@@ -382,7 +523,7 @@ pub(crate) fn schedule_map_maintenance(
     bg_tidy_counter: &mut u32,
 ) {
     let changed = new_room || new_conn;
-    if !app::tidy::should_schedule_tidy(&mapper.graph, state.active_layer(&mapper.graph), changed) {
+    if !crate::tidy::should_schedule_tidy(&mapper.graph, state.active_layer(&mapper.graph), changed) {
         return;
     }
     // Nobody can see the map, so nothing here is worth a main-thread cost (SQ-1136).
@@ -397,7 +538,7 @@ pub(crate) fn schedule_map_maintenance(
     // the way back settles however many turns went by. This is the same trade
     // SQ-0671 made for a frozen maze layer, which schedules no job at all rather
     // than spawning one to throw away.
-    if state.layout != app::state::Layout::Split {
+    if state.layout != crate::state::Layout::Split {
         state.map_layout_deferred = true;
         return;
     }
@@ -429,6 +570,40 @@ pub(crate) fn schedule_map_maintenance(
         Some(TidyJob { handle, layer: active_layer, gen, started: std::time::Instant::now(), kind });
 }
 
+/// Pay off the layout debt a hidden map ran up, once its pane is back (SQ-1136).
+///
+/// The counterpart to `turn::schedule_map_maintenance`'s early return. One job
+/// settles any number of deferred turns, because a relayout derives every
+/// position from the graph and not from the turns that built it — which is what
+/// makes deferring sound in the first place.
+///
+/// Two conditions beyond the flag. The pane must be **visible**, or this would
+/// undo the whole optimisation on the very tick that set the flag. And no job may
+/// already be in flight: `schedule_map_maintenance` assigns over `state.tidy_job`,
+/// which drops the running handle and detaches its thread, so a catch-up that
+/// barged in would cost the very work it is trying to schedule. The debt keeps
+/// until the next tick instead — it is a flag, and waiting costs nothing.
+///
+/// Returns true when a job was scheduled, so the caller can redraw.
+pub fn catch_up_deferred_map_layout(
+    state: &mut AppState,
+    mapper: &Mapper,
+    bg_tidy_counter: &mut u32,
+) -> bool {
+    if !state.map_layout_deferred
+        || state.layout != crate::state::Layout::Split
+        || state.tidy_job.is_some()
+    {
+        return false;
+    }
+    state.map_layout_deferred = false;
+    // `new_room = true` so this asks for a FULL relayout rather than a cleanup:
+    // the deferred stretch may have added many rooms, and dead reckoning is
+    // exactly what a full pass exists to straighten out.
+    schedule_map_maintenance(state, mapper, true, true, bg_tidy_counter);
+    true
+}
+
 fn intercept_scott_game_over(should_exit: bool, is_scott: bool, state: &mut AppState) -> bool {
     if should_exit && is_scott {
         state.overlays.game_over = true;
@@ -454,7 +629,7 @@ fn post_turn_bookkeeping(
     conns_before: usize,
     ifid: &str,
     arc_file: &std::path::Path,
-    turn_save: &mut app::engine::TurnSave,
+    turn_save: &mut crate::engine::TurnSave,
 ) {
     // A background archive write from an earlier turn can fail after this
     // turn has already moved on (SQ-1184) — surface it now rather than lose
@@ -472,7 +647,7 @@ fn post_turn_bookkeeping(
         // The record owns its bytes — it outlives the turn and is serialized
         // into the archive — so it copies them out of the shared turn snapshot
         // (SQ-1178): a memcpy, where a second `save_state` was the cost.
-        app::history::record_turn(
+        crate::history::record_turn(
             &mut state.history,
             state.turns,
             cmd,
@@ -484,12 +659,12 @@ fn post_turn_bookkeeping(
         // Bound retained turns (SQ-1185): `TurnRecord::save` is a full VM
         // snapshot, so left uncapped this grows without limit over an
         // arbitrarily long session.
-        app::history::cap_history(&mut state.history, state.config.history_turns);
+        crate::history::cap_history(&mut state.history, state.config.history_turns);
     }
 
     // ── Inventory tracking ────────────────────────────────────────
     {
-        use app::inventory::{detect_player_obj, parse_inventory_output};
+        use crate::inventory::{detect_player_obj, parse_inventory_output};
 
         let current_loc = session.current_location()
             .map(|s| s.number)
@@ -536,10 +711,10 @@ fn post_turn_bookkeeping(
     // can split prose the way the story's parser does and say which of the pieces
     // its dictionary holds — and the transcript this reads changes once a turn,
     // which is exactly this often.
-    app::input::refresh_seen_words(state, session);
+    crate::input::refresh_seen_words(state, session);
     // …and the words for the things that are actually here, which change with
     // the room and are the ones a player cannot guess (SQ-1042).
-    app::input::refresh_scope_words(state, session);
+    crate::input::refresh_scope_words(state, session);
 
     // Per-turn auto-save (when enabled). The build-and-write happens on a
     // background worker thread (SQ-1184): everything gathered here is either
@@ -556,9 +731,9 @@ fn post_turn_bookkeeping(
     // race the exit path's clearing write — a background write that lands
     // AFTER it would silently put the resume point right back.
     if state.config.auto_save && !state.game_ended {
-        let (location, score) = app::engine_helpers::save_summary(session, state);
-        let meta = app::archive::Meta {
-            format_version: app::archive::CURRENT_FORMAT_VERSION,
+        let (location, score) = crate::engine_helpers::save_summary(session, state);
+        let meta = crate::archive::Meta {
+            format_version: crate::archive::CURRENT_FORMAT_VERSION,
             ifid: Some(ifid.to_string()),
             name: None,
             turns: state.turns,
@@ -570,26 +745,26 @@ fn post_turn_bookkeeping(
             ),
             location,
             score,
-            trigger: app::archive::SaveTrigger::HostState,
+            trigger: crate::archive::SaveTrigger::HostState,
         };
         // v6 graphics canvases ride along so a resumed v6 story's pictures redraw
         // (SQ-0516); empty for non-v6 sessions, leaving the archive layout unchanged.
         // Must run here, on the main thread: it needs `&mut dyn Engine`.
-        let (v6_pics, v6_display, v6_ground, v6_diags) = app::engine_helpers::v6_save_payload(session);
+        let (v6_pics, v6_display, v6_ground, v6_diags) = crate::engine_helpers::v6_save_payload(session);
         for d in &v6_diags { state.note_v6_save(d); }
         // The same turn snapshot history and the return probe read (SQ-1178):
         // the word refreshers and inventory tracking above read through
         // `&dyn Engine`, so the VM here is byte-identical to the VM there.
         let save = turn_save.get(&*session);
         let screen = zvm_session_opt(session).map(|z| z.machine.screen.clone());
-        let job = app::archive_worker::ArchiveJob {
+        let job = crate::archive_worker::ArchiveJob {
             path: arc_file.to_path_buf(),
             mapper_graph: mapper.graph.clone(),
             save,
             screen,
             aux: session.aux_data().clone(),
             meta,
-            session: app::archive::SessionRecord::of(state).snapshot(),
+            session: crate::archive::SessionRecord::of(state).snapshot(),
             pictures: v6_pics,
             display: v6_display,
             ground: v6_ground,
@@ -602,7 +777,7 @@ fn post_turn_bookkeeping(
 /// already covered by the per-turn auto-save (`save_archive_meta` embeds it);
 /// global mode writes the per-game file here.  `Ask` opens the first-use
 /// prompt dialog (Task 6) and leaves `aux_dirty` set for the dialog to resolve.
-pub(crate) fn persist_aux_after_turn(
+pub fn persist_aux_after_turn(
     session: &mut dyn Engine,
     state: &mut AppState,
     game_dir: &std::path::Path,
@@ -611,14 +786,14 @@ pub(crate) fn persist_aux_after_turn(
         return;
     }
     match state.config.aux_storage {
-        app::config::AuxStorage::Global => {
-            let _ = app::aux_store::write_global_aux(game_dir, session.aux_data());
+        crate::config::AuxStorage::Global => {
+            let _ = crate::aux_store::write_global_aux(game_dir, session.aux_data());
             session.clear_aux_dirty();
         }
-        app::config::AuxStorage::Archive => {
+        crate::config::AuxStorage::Archive => {
             session.clear_aux_dirty(); // archive auto-save already embedded it
         }
-        app::config::AuxStorage::Ask => {
+        crate::config::AuxStorage::Ask => {
             state.overlays.aux_prompt = true; // resolve in the dialog; leave aux_dirty set
             state.overlays.dialog_focus = 0;
         }
@@ -628,7 +803,7 @@ pub(crate) fn persist_aux_after_turn(
 /// Flush the Glulx Glk file VFS to its per-story sidecar when it changed this
 /// turn. Dirty-gated; a no-op for the Z-machine (whose `vfs_dirty` default is
 /// always false). Mirrors `persist_aux_after_turn`.
-pub(crate) fn persist_vfs_after_turn(
+pub fn persist_vfs_after_turn(
     session: &mut dyn Engine,
     state: &AppState,
     game_dir: &std::path::Path,
@@ -637,9 +812,9 @@ pub(crate) fn persist_vfs_after_turn(
         return;
     }
     let bytes = session.vfs_bytes();
-    let _ = app::vfs_store::write_vfs(game_dir, &bytes);
+    let _ = crate::vfs_store::write_vfs(game_dir, &bytes);
     session.clear_vfs_dirty();
-    app::trace::hostio(&state.config.user_dir, state.config.trace.hostio,
+    crate::trace::hostio(&state.config.user_dir, state.config.trace.hostio,
         format!("vfs_write({} bytes)", bytes.len()));
 }
 
@@ -648,16 +823,17 @@ pub(crate) fn persist_vfs_after_turn(
 /// *chained* in-game I/O if the resume itself suspended on another
 /// `@save`/`@restore`. Returns true if the app should quit. Mirrors the
 /// post-turn block in the `submit` path.
-pub(crate) fn finish_resumed_turn(
+pub fn finish_resumed_turn(
     result: TurnResult,
     mapper: &mut Mapper,
     state: &mut AppState,
     session: &mut dyn Engine,
     game_dir: &std::path::Path,
     ifid: &str,
-    map_area: Rect,
-) -> bool {
+    map_view: Option<(u16, u16)>,
+) -> TurnOutcome {
     state.begin_turn(); // see `finish_command_turn` (SQ-1124)
+    let first_line = state.transcript.len();
     state.push_transcript(&result.transcript);
     apply_turn_events(state, &result);
     if let Some(note) = &result.info {
@@ -670,28 +846,23 @@ pub(crate) fn finish_resumed_turn(
     apply_turn(mapper, "", &result, &mut state.death_watch);
     // The resumed half of a turn can be where the death lands; it names no direction of its own,
     // so only the move still held from the submit path can be rolled back. (SQ-0671)
-    app::session::rollback_tried_on_death(
+    crate::session::rollback_tried_on_death(
         mapper,
         &mut state.death_watch,
         None,
-        app::session::turn_reports_death(&result.transcript),
+        crate::session::turn_reports_death(&result.transcript),
     );
     state.graph_gen = state.graph_gen.wrapping_add(1);
     // The resumed half of a turn can be a crossing too, and it is certainly a place a search
     // can be outrun (SQ-0785). It names no direction, so the fallback order applies.
     // The snapshot it takes is the one `post_turn_bookkeeping` below shares (SQ-1178).
-    let mut turn_save = app::engine::TurnSave::default();
-    app::return_probe::arm_return_search(state, mapper, session, "", room_before, &mut turn_save);
+    let mut turn_save = crate::engine::TurnSave::default();
+    crate::return_probe::arm_return_search(state, mapper, session, "", room_before, &mut turn_save);
     state.set_viewed_layer(None);
     if let Some(snap) = &result.location {
         let rid = snap.number as mapper::graph::RoomId;
         state.select_room(Some(rid));
-        if let Some(room) = mapper.graph.room(rid) {
-            if let Some(pos) = room.pos {
-                let (pw, ph) = map_pane_dims(map_area);
-                state.recenter_on(pos, pw, ph);
-            }
-        }
+        recenter_on_room(state, mapper, rid, map_view);
     }
     // Captured before the partial move below (of `result.pending_io`) makes a
     // subsequent whole-struct borrow of `result` a borrow-checker error.
@@ -712,7 +883,9 @@ pub(crate) fn finish_resumed_turn(
         let arc_file = default_state_path(game_dir);
         post_turn_bookkeeping(state, mapper, &mut *session, &result, "", rooms_before, conns_before, ifid, &arc_file, &mut turn_save);
     }
-    should_exit
+    // A resumed turn arms no pager (it never did); the report still says where
+    // its output began and whether a pager could have armed.
+    TurnOutcome { quit: should_exit, paging: Paging::after(first_line, session.pending_input(), &*session) }
 }
 
 /// Apply a pending resume: restore the VM save, set transcript, re-observe location.
@@ -725,15 +898,16 @@ pub(crate) fn finish_resumed_turn(
 /// says it is "dead post-unification: keys now route through `SlashOutcome::Load`",
 /// and it has itself already drifted from the helper — so the citation pointed at
 /// code no key reaches.
-pub(crate) fn apply_launch_resume(
-    save: &app::engine::EngineSave,
+#[allow(clippy::too_many_arguments)]
+pub fn apply_launch_resume(
+    save: &crate::engine::EngineSave,
     lines: Vec<String>,
     kinds: Vec<TranscriptKind>,
     screen: Option<zvm::screen::ScreenState>,
     session: &mut dyn Engine,
     mapper: &mut Mapper,
     state: &mut AppState,
-    last_panes: &PaneRects,
+    map_view: Option<(u16, u16)>,
     arc_file: &std::path::Path,
 ) {
     match session.restore_state(save) {
@@ -741,34 +915,34 @@ pub(crate) fn apply_launch_resume(
             // Inline transcript images from the same archive the stashed lines came
             // from (parallel to `lines`); re-attached after the sidecar reset below
             // so a resumed transcript renders its embedded art (SQ-0518).
-            let mut resumed_images: Vec<Option<app::inline_image::InlineImage>> = Vec::new();
+            let mut resumed_images: Vec<Option<crate::inline_image::InlineImage>> = Vec::new();
             // What the archive is missing because it predates the screen (SQ-1401)
             // or paint-log (SQ-1403) format bump — SQ-1410.
-            let mut restore_degradation: Option<app::archive::RestoreDegradation> = None;
+            let mut restore_degradation: Option<crate::archive::RestoreDegradation> = None;
             // The resumed game's map is part of its archive state — load it alongside.
             if let Ok(ac) = load_archive(arc_file) {
                 // The v6 screen: rebuilt from the archived display list under the
                 // archived palette when there is one (SQ-0588), else from canvas
                 // PNGs. Ahead of the map move below, which consumes `ac` in part.
                 // No-op for non-v6 archives and for Glulx (SQ-0516).
-                app::engine_helpers::apply_v6_pictures(&mut *session, &ac);
+                crate::engine_helpers::apply_v6_pictures(&mut *session, &ac);
                 *mapper = ac.mapper;
                 // Restore the turn counter from the same archive the map came from.
                 // The launch-resume stash omits it, so without this the count would
                 // reset to 0 on resume (SQ-0260) — mirrors the interactive restore.
                 state.turns = ac.meta.turns;
                 // Hand Glulx back the room it was saved in (SQ-0523); no-op for zvm.
-                app::engine_helpers::seed_resumed_location(&mut *session, &ac.meta);
+                crate::engine_helpers::seed_resumed_location(&mut *session, &ac.meta);
                 resumed_images = ac.transcript_images;
-                restore_degradation = Some(app::archive::RestoreDegradation::from_format_version(
+                restore_degradation = Some(crate::archive::RestoreDegradation::from_format_version(
                     ac.meta.format_version,
-                    app::engine_helpers::is_v6_session(&*session),
+                    crate::engine_helpers::is_v6_session(&*session),
                 ));
             }
             // Reinstate the saved screen too (mirrors the auto-load path, zvm-only),
             // so a once-split game's upper window/status line shows after resuming.
             if let Some(scr) = screen {
-                if let Some(z) = zvm_session_opt_mut(&mut *session) { app::session::restore_screen(z, scr); }
+                if let Some(z) = zvm_session_opt_mut(&mut *session) { crate::session::restore_screen(z, scr); }
             }
             state.transcript = lines;
             state.clear_anchor = None;
@@ -776,7 +950,7 @@ pub(crate) fn apply_launch_resume(
             // The launch-resume stash carries no style runs; keep the parallel
             // vecs length-synced (unstyled, left/no-indent rows).
             state.transcript_runs = vec![Vec::new(); state.transcript.len()];
-            state.transcript_para = vec![app::state::ParaFmt::default(); state.transcript.len()];
+            state.transcript_para = vec![crate::state::ParaFmt::default(); state.transcript.len()];
             state.reset_transcript_sidecars();
             // Re-attach inline images after the sidecar reset. Guard length: the
             // archive's images parallel ac.transcript, which equals the stashed
@@ -786,14 +960,14 @@ pub(crate) fn apply_launch_resume(
             }
             // The scraped word set is derived from the transcript and never
             // archived, so rebuild it from the resumed one (SQ-1135).
-            app::input::refresh_seen_words(state, &*session);
+            crate::input::refresh_seen_words(state, &*session);
             // Re-observe current location (same as Action::RestoreGame).
-            reobserve_location(state, mapper, &*session, last_panes.map);
+            reobserve_location(state, mapper, &*session, map_view);
             state.push_notice("[Game resumed from save.]");
             // After `state.transcript = lines` above, not before: this line must
             // survive as the last one on screen (SQ-1410).
             if let Some(degradation) = restore_degradation {
-                app::engine_helpers::push_restore_degradation_notice(state, degradation);
+                crate::engine_helpers::push_restore_degradation_notice(state, degradation);
             }
         }
         Err(e) => {
@@ -834,14 +1008,14 @@ fn should_exit_on_turn(result: &TurnResult, state: &AppState) -> bool {
 /// name is tracked for the built-in location story rule.
 fn apply_turn_events(state: &mut AppState, result: &TurnResult) {
     for line in &result.diagnostics {
-        state.push_transcript_kind(line, app::state::TranscriptKind::Warning);
+        state.push_transcript_kind(line, crate::state::TranscriptKind::Warning);
     }
     if let Some(lines) = &result.fault {
         let crash = state.colors.theme.get("transcript_crash").style;
         for line in lines {
-            state.push_transcript_styled(line, app::state::TranscriptKind::Warning, crash);
+            state.push_transcript_styled(line, crate::state::TranscriptKind::Warning, crash);
         }
-        state.push_transcript_styled("(game halted)", app::state::TranscriptKind::Warning, crash);
+        state.push_transcript_styled("(game halted)", crate::state::TranscriptKind::Warning, crash);
         // A gvm runtime fault ends the game via a silent Quit; if the app then
         // exits before this transcript is rendered, the error would vanish. Record
         // it durably so a "silent" crash always leaves a trace.
@@ -852,8 +1026,8 @@ fn apply_turn_events(state: &mut AppState, result: &TurnResult) {
         state.set_status("VM fault — the game has halted; you can review the map/transcript or quit.");
     }
     if let Some(kind) = result.sounds.iter().rev().find_map(|ev| match ev.number {
-        1 => Some(app::state::BeepKind::High),
-        2 => Some(app::state::BeepKind::Low),
+        1 => Some(crate::state::BeepKind::High),
+        2 => Some(crate::state::BeepKind::Low),
         _ => None,
     }) {
         state.sound_pulse = Some(SoundPulse { kind, started: std::time::Instant::now() });
@@ -877,15 +1051,15 @@ fn apply_turn_events(state: &mut AppState, result: &TurnResult) {
 /// change. Deliberately skips `post_turn_bookkeeping` (history/inventory/
 /// auto-save): this is not a completed player turn. Returns `true` if the game
 /// quit (the caller should break the event loop).
-pub(crate) fn apply_game_driven_result(
+pub fn apply_game_driven_result(
     state: &mut AppState,
     mapper: &mut Mapper,
     result: &TurnResult,
     game_dir: &std::path::Path,
-    map_area: Rect,
+    map_view: Option<(u16, u16)>,
     session: &dyn Engine,
-    driver: app::pager::Driver,
-) -> bool {
+    driver: crate::pager::Driver,
+) -> TurnOutcome {
     state.begin_turn(); // see `finish_command_turn` (SQ-1124)
     if result.erase_lower {
         // A game-driven screen clear is a menu redraw navigated by keystrokes —
@@ -902,6 +1076,7 @@ pub(crate) fn apply_game_driven_result(
     // Whether this turn's output CONTINUED the transcript's last pre-turn row
     // instead of opening one below it — the pager needs it (below).
     let mut continued_row = false;
+    let pre_len = state.transcript.len();
     if result.transcript_elems.is_empty() {
         // Output the game printed where the cursor already was stays on the line it
         // was already on (SQ-0726, generalised in SQ-0804) — see
@@ -920,7 +1095,7 @@ pub(crate) fn apply_game_driven_result(
             );
         }
     } else {
-        app::state::apply_transcript_elems(state, &result.transcript_elems);
+        crate::state::apply_transcript_elems(state, &result.transcript_elems);
     }
     apply_turn_events(state, result);
     if let Some(note) = &result.info {
@@ -930,16 +1105,18 @@ pub(crate) fn apply_game_driven_result(
     // turn. A `read_char` that dumps more than a screenful — a hint page, a "press
     // any key" dump, a menu repaint that overflows — must show its FIRST screenful
     // and let the player page, and the paging keys are swallowed by the pager
-    // rather than answering the pending read (see `app::pager` and the char-input
+    // rather than answering the pending read (see `crate::pager` and the char-input
     // gate in main.rs). `driver` keeps a timed-input interrupt / Glk timer /
     // sound-finish routine from reloading the baseline or dismissing an active
     // pager — a timeout is not a keystroke.
     state.pager.arm_after_turn(
-        app::pager::baseline_before(state.last_transcript_total_rows, continued_row),
+        crate::pager::baseline_before(state.last_transcript_total_rows, continued_row),
         session.pending_input(),
-        app::pager::more_suppressed(session),
+        crate::pager::more_suppressed(session),
         driver,
     );
+    let first_line = if continued_row { pre_len.saturating_sub(1) } else { pre_len };
+    let paging = Paging::after(first_line, session.pending_input(), session);
     // apply_turn: this input doesn't carry direction info (no text command to
     // parse), but we still observe any location change so the map stays in sync.
     let rooms_before = mapper.graph.rooms().count();
@@ -949,17 +1126,17 @@ pub(crate) fn apply_game_driven_result(
     // A keypress can be the turn a death is finally admitted on ("press any key" after the
     // banner). It names no direction of its own, so the rollback can only be for the move the
     // player is still standing on the wrong side of. (SQ-0671)
-    app::session::rollback_tried_on_death(
+    crate::session::rollback_tried_on_death(
         mapper,
         &mut state.death_watch,
         None,
-        app::session::turn_reports_death(&result.transcript),
+        crate::session::turn_reports_death(&result.transcript),
     );
     // Game-initiated (v4+) save/restore: open the saves dialog in in-game mode
     // and defer the rest of the turn.
     if let Some(io) = result.pending_io {
         open_ingame_saves(io, game_dir, state);
-        return false;
+        return TurnOutcome { quit: false, paging };
     }
     // Game `create_by_prompt`: open the filename modal and defer the rest, exactly
     // as `finish_command_turn` and `finish_resumed_turn` do. A Glulx game can ask
@@ -970,7 +1147,7 @@ pub(crate) fn apply_game_driven_result(
     // discarded against a machine that could never advance. (SQ-0657)
     if let Some(req) = session.pending_filename() {
         open_filename_modal(req, session, state);
-        return false;
+        return TurnOutcome { quit: false, paging };
     }
     // Bump the graph generation ONLY when this game-driven turn actually changed
     // the routed geometry (a room/connection added). A char-input keypress —
@@ -988,19 +1165,14 @@ pub(crate) fn apply_game_driven_result(
     // A game-driven turn can move the player too — a timer, a menu selection, a teleport — so it
     // both arms a search and ends one that has been outrun (SQ-0785). This path deliberately
     // skips `post_turn_bookkeeping`, so there is nobody to share the turn snapshot with.
-    app::return_probe::arm_return_search(
-        state, mapper, session, "", room_before, &mut app::engine::TurnSave::default(),
+    crate::return_probe::arm_return_search(
+        state, mapper, session, "", room_before, &mut crate::engine::TurnSave::default(),
     );
     // Select and recenter on the current room if it changed.
     if let Some(snap) = &result.location {
         let rid = snap.number as mapper::graph::RoomId;
         state.select_room(Some(rid));
-        if let Some(room) = mapper.graph.room(rid) {
-            if let Some(pos) = room.pos {
-                let (pw, ph) = map_pane_dims(map_area);
-                state.recenter_on(pos, pw, ph);
-            }
-        }
+        recenter_on_room(state, mapper, rid, map_view);
     }
 
     // If the debug inspector is open, refresh its snapshot from the VM state
@@ -1011,7 +1183,7 @@ pub(crate) fn apply_game_driven_result(
         }
     }
 
-    should_exit_on_turn(result, state)
+    TurnOutcome { quit: should_exit_on_turn(result, state), paging }
 }
 
 /// Decide the timed-input deadline for this loop iteration. `should_arm` is true
@@ -1022,7 +1194,7 @@ pub(crate) fn apply_game_driven_result(
 /// true and the interrupt would never fire. Disarm (`None`) when not applicable;
 /// the run loop also clears the deadline to `None` right after firing, so the next
 /// armed iteration re-arms fresh at `now + interval`.
-pub(crate) fn next_input_deadline(
+pub fn next_input_deadline(
     current: Option<std::time::Instant>,
     should_arm: bool,
     interval: Duration,
@@ -1038,7 +1210,7 @@ pub(crate) fn next_input_deadline(
 #[cfg(all(test, feature = "t-session"))]
 mod tests {
     use super::silent_terminator_turn;
-    use app::session::{TranscriptElem, TurnResult};
+    use crate::session::{TranscriptElem, TurnResult};
 
     fn blank_turn() -> TurnResult {
         TurnResult::default()
@@ -1100,7 +1272,7 @@ mod tests {
     /// the test below and take the map's layout with it.
     #[test]
     fn a_visible_map_schedules_its_layout_as_it_always_did() {
-        use app::state::{AppState, Layout};
+        use crate::state::{AppState, Layout};
         let mut s = AppState::default();
         s.layout = Layout::Split;
         let m = walked();
@@ -1113,7 +1285,7 @@ mod tests {
     /// The optimisation itself: no clone, no thread, just a note that one is owed.
     #[test]
     fn a_hidden_map_defers_its_layout_instead_of_cloning_the_graph() {
-        use app::state::{AppState, Layout};
+        use crate::state::{AppState, Layout};
         let mut s = AppState::default();
         s.layout = Layout::TranscriptFull;
         let m = walked();
@@ -1127,7 +1299,7 @@ mod tests {
     /// a single relayout, because a relayout reads the graph and not the history.
     #[test]
     fn showing_the_map_again_settles_the_whole_deferred_stretch_with_one_job() {
-        use app::state::{AppState, Layout};
+        use crate::state::{AppState, Layout};
         let mut s = AppState::default();
         s.layout = Layout::TranscriptFull;
         let mut m = walked();
@@ -1142,17 +1314,17 @@ mod tests {
         // Still hidden: the catch-up must not fire, or the optimisation undoes
         // itself on the very tick that deferred the work.
         assert!(
-            !crate::loop_tick::catch_up_deferred_map_layout(&mut s, &m, &mut counter),
+            !super::catch_up_deferred_map_layout(&mut s, &m, &mut counter),
             "a hidden pane collects no debt"
         );
         assert!(s.map_layout_deferred, "and the debt survives to be paid later");
 
         s.layout = Layout::Split;
-        assert!(crate::loop_tick::catch_up_deferred_map_layout(&mut s, &m, &mut counter));
+        assert!(super::catch_up_deferred_map_layout(&mut s, &m, &mut counter));
         assert!(s.tidy_job.is_some(), "one job settles the lot");
         assert!(!s.map_layout_deferred, "and the debt is cleared");
         assert!(
-            !crate::loop_tick::catch_up_deferred_map_layout(&mut s, &m, &mut counter),
+            !super::catch_up_deferred_map_layout(&mut s, &m, &mut counter),
             "it is a debt marker, not a queue: it does not fire twice"
         );
     }
@@ -1162,7 +1334,7 @@ mod tests {
     /// thread — so firing here would cost the very work it means to schedule.
     #[test]
     fn a_catch_up_waits_for_an_in_flight_tidy_rather_than_clobbering_it() {
-        use app::state::{AppState, Layout};
+        use crate::state::{AppState, Layout};
         let mut s = AppState::default();
         let m = walked();
         let mut counter = 0u32;
@@ -1177,7 +1349,7 @@ mod tests {
         assert!(s.tidy_job.is_some());
 
         assert!(
-            !crate::loop_tick::catch_up_deferred_map_layout(&mut s, &m, &mut counter),
+            !super::catch_up_deferred_map_layout(&mut s, &m, &mut counter),
             "the catch-up stands down while a job is in flight"
         );
         assert!(s.map_layout_deferred, "and keeps the debt for the next tick");
@@ -1194,14 +1366,14 @@ mod tests {
         v6: Option<Vec<String>>,
         /// A suspended `glk_fileref_create_by_prompt`, as a Glulx session reports
         /// one after a turn's drive stopped on `NeedFilename` (SQ-0657).
-        filename_req: Option<app::session::FilenameReq>,
+        filename_req: Option<crate::session::FilenameReq>,
     }
 
-    impl app::engine::Engine for TraceOnlyEngine {
-        fn submit(&mut self, _command: &str) -> app::session::TurnResult {
+    impl crate::engine::Engine for TraceOnlyEngine {
+        fn submit(&mut self, _command: &str) -> crate::session::TurnResult {
             unreachable!("not exercised by this test")
         }
-        fn submit_key(&mut self, _key: app::engine::KeyInput) -> Option<app::session::TurnResult> {
+        fn submit_key(&mut self, _key: crate::engine::KeyInput) -> Option<crate::session::TurnResult> {
             unreachable!("not exercised by this test")
         }
         fn take_transcript(&mut self) -> String {
@@ -1213,34 +1385,34 @@ mod tests {
             false
         }
 
-        fn pending_input(&self) -> app::session::InputKind {
+        fn pending_input(&self) -> crate::session::InputKind {
             // A game-driven turn ends on a keypress read (menu navigation, "press
             // any key"), which is what `apply_game_driven_result` asks about when
             // it arms the [more] pager (SQ-0539).
-            app::session::InputKind::Char
+            crate::session::InputKind::Char
         }
-        fn resume_save(&mut self, _wrote_ok: bool) -> app::session::TurnResult {
+        fn resume_save(&mut self, _wrote_ok: bool) -> crate::session::TurnResult {
             unreachable!("not exercised by this test")
         }
-        fn resume_restore(&mut self, _data: Option<&[u8]>) -> app::session::TurnResult {
+        fn resume_restore(&mut self, _data: Option<&[u8]>) -> crate::session::TurnResult {
             unreachable!("not exercised by this test")
         }
-        fn pending_filename(&self) -> Option<app::session::FilenameReq> {
+        fn pending_filename(&self) -> Option<crate::session::FilenameReq> {
             self.filename_req
         }
         fn has_quit(&self) -> bool {
             false
         }
-        fn screen(&self) -> app::engine::ScreenModel {
+        fn screen(&self) -> crate::engine::ScreenModel {
             unreachable!("not exercised by this test")
         }
-        fn save_state(&self) -> app::engine::EngineSave {
+        fn save_state(&self) -> crate::engine::EngineSave {
             unreachable!("not exercised by this test")
         }
-        fn restore_state(&mut self, _save: &app::engine::EngineSave) -> Result<(), app::engine::EngineError> {
+        fn restore_state(&mut self, _save: &crate::engine::EngineSave) -> Result<(), crate::engine::EngineError> {
             unreachable!("not exercised by this test")
         }
-        fn restore_game_save(&mut self, _bytes: &[u8]) -> Result<(), app::engine::EngineError> {
+        fn restore_game_save(&mut self, _bytes: &[u8]) -> Result<(), crate::engine::EngineError> {
             unreachable!("not exercised by this test")
         }
         fn take_screen_trace(&mut self) -> Vec<String> {
@@ -1259,7 +1431,7 @@ mod tests {
             false
         }
         fn clear_aux_dirty(&mut self) {}
-        fn current_location(&self) -> Option<app::engine::LocationInfo> {
+        fn current_location(&self) -> Option<crate::engine::LocationInfo> {
             None
         }
         fn as_any(&self) -> &dyn std::any::Any {
@@ -1388,38 +1560,37 @@ mod tests {
     // it from the archive (like the interactive restore) instead of leaving it 0.
     #[test]
     fn launch_resume_restores_the_turn_counter_sq0260() {
-        use app::engine::Engine;
-        use app::session::GameSession;
+        use crate::engine::Engine;
+        use crate::session::GameSession;
 
         // A Save State (.lanthorn) written with a non-zero turn count.
-        let sess = GameSession::new(crate::read_char_then_save_v4_story(), true, false, None).expect("new");
+        let sess = GameSession::new(crate::engine_helpers::tests::read_char_then_save_v4_story(), true, false, None).expect("new");
         let save = sess.save_state();
         let arc = std::env::temp_dir().join(format!("bm-sq260-{}.lanthorn", std::process::id()));
-        let meta = app::archive::Meta {
-            format_version: app::archive::CURRENT_FORMAT_VERSION,
+        let meta = crate::archive::Meta {
+            format_version: crate::archive::CURRENT_FORMAT_VERSION,
             ifid: None,
             name: None,
             turns: 42,
             saved_at: String::new(),
             location: None,
             score: None,
-            trigger: app::archive::SaveTrigger::HostState,
+            trigger: crate::archive::SaveTrigger::HostState,
         };
-        app::archive::save_archive_meta(
+        crate::archive::save_archive_meta(
             &arc, &mapper::mapper::Mapper::default(), &save, None,
             &std::collections::BTreeMap::new(), meta, &[], &[], &[], &[], &[], &[],
         ).expect("write .lanthorn with turns=42");
 
         // Fresh session + default state (turns start at 0), then launch-resume.
-        let mut fresh = GameSession::new(crate::read_char_then_save_v4_story(), true, false, None).expect("new");
-        let mut state = app::state::AppState::default();
+        let mut fresh = GameSession::new(crate::engine_helpers::tests::read_char_then_save_v4_story(), true, false, None).expect("new");
+        let mut state = crate::state::AppState::default();
         let mut mapper = mapper::mapper::Mapper::default();
-        let panes = crate::PaneRects::default();
         assert_eq!(state.turns, 0, "a fresh AppState starts at turn 0");
 
         super::apply_launch_resume(
             &save, Vec::new(), Vec::new(), None,
-            &mut fresh, &mut mapper, &mut state, &panes, &arc,
+            &mut fresh, &mut mapper, &mut state, None, &arc,
         );
 
         assert_eq!(state.turns, 42, "launch resume restores the saved turn count (SQ-0260)");
@@ -1435,9 +1606,9 @@ mod tests {
     // Skips cleanly when the gitignored Zork0 asset is absent.
     #[test]
     fn launch_resume_restores_v6_pictures_sq0516() {
-        use app::engine::Engine;
-        use app::graphics::PictSource;
-        use app::session::GameSession;
+        use crate::engine::Engine;
+        use crate::graphics::PictSource;
+        use crate::session::GameSession;
 
         let story_path = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"))
             .join("../../stories/zork0-r393-s890714.z6");
@@ -1465,19 +1636,19 @@ mod tests {
         assert!(src_canvas_count > 0, "Zork0 boot draws graphics canvases");
         let save = src.save_state();
         let arc = std::env::temp_dir().join(format!("bm-sq516-{}.lanthorn", std::process::id()));
-        let meta = app::archive::Meta {
-            format_version: app::archive::CURRENT_FORMAT_VERSION,
+        let meta = crate::archive::Meta {
+            format_version: crate::archive::CURRENT_FORMAT_VERSION,
             ifid: None,
             name: None,
             turns: 0,
             saved_at: String::new(),
             location: None,
             score: None,
-            trigger: app::archive::SaveTrigger::HostState,
+            trigger: crate::archive::SaveTrigger::HostState,
         };
-        app::archive::save_archive_meta_pics(
+        crate::archive::save_archive_meta_pics(
             &arc, &mapper::mapper::Mapper::default(), &save, Some(&src.machine.screen),
-            &src.machine.aux_data, meta, &app::archive::SessionRecord::empty(), &src.pictures_png(), None, None,
+            &src.machine.aux_data, meta, &crate::archive::SessionRecord::empty(), &src.pictures_png(), None, None,
         )
         .expect("write v6 .lanthorn with pictures");
 
@@ -1486,13 +1657,12 @@ mod tests {
         fresh.pictures_canvas.clear();
         assert!(fresh.pictures_canvas.is_empty(), "canvas cleared before resume");
 
-        let mut state = app::state::AppState::default();
+        let mut state = crate::state::AppState::default();
         let mut mapper = mapper::mapper::Mapper::default();
-        let panes = crate::PaneRects::default();
 
         super::apply_launch_resume(
             &save, Vec::new(), Vec::new(), Some(src.machine.screen.clone()),
-            &mut fresh, &mut mapper, &mut state, &panes, &arc,
+            &mut fresh, &mut mapper, &mut state, None, &arc,
         );
 
         assert_eq!(
@@ -1530,7 +1700,7 @@ mod tests {
         }
     }
 
-    fn game_driven_result(location: Option<app::engine::LocationInfo>) -> super::TurnResult {
+    fn game_driven_result(location: Option<crate::engine::LocationInfo>) -> super::TurnResult {
         super::TurnResult {
             transcript: String::new(),
             transcript_runs: Vec::new(),
@@ -1567,21 +1737,21 @@ mod tests {
         // in scrollback — while pre-menu content is preserved.
         let tmp = std::env::temp_dir().join(format!("lanthorn-collapse-{}", std::process::id()));
         std::fs::create_dir_all(&tmp).unwrap();
-        let mut state = app::state::AppState::default();
+        let mut state = crate::state::AppState::default();
         state.config.user_dir = tmp.clone();
         let mut m = mapper::mapper::Mapper::default();
-        let rect = ratatui::layout::Rect::new(0, 0, 20, 20);
+        let rect = Some((20u16, 20u16));
         let eng = TraceOnlyEngine { line: None, v6: None, filename_req: None };
 
         state.push_transcript("room description"); // pre-menu content
 
         // First menu draw (a clearing turn): appends MENU v1.
-        super::apply_game_driven_result(&mut state, &mut m, &clearing_result("MENU v1"), &tmp, rect, &eng, app::pager::Driver::PlayerInput);
+        let _ = super::apply_game_driven_result(&mut state, &mut m, &clearing_result("MENU v1"), &tmp, rect, &eng, crate::pager::Driver::PlayerInput);
         assert!(state.transcript.iter().any(|l| l.contains("MENU v1")));
         let len_after_v1 = state.transcript.len();
 
         // Second draw (an arrow keypress): collapses v1, appends MENU v2.
-        super::apply_game_driven_result(&mut state, &mut m, &clearing_result("MENU v2"), &tmp, rect, &eng, app::pager::Driver::PlayerInput);
+        let _ = super::apply_game_driven_result(&mut state, &mut m, &clearing_result("MENU v2"), &tmp, rect, &eng, crate::pager::Driver::PlayerInput);
         assert!(!state.transcript.iter().any(|l| l.contains("MENU v1")), "v1 must be collapsed, not stacked");
         assert!(state.transcript.iter().any(|l| l.contains("MENU v2")), "v2 present");
         assert!(state.transcript.iter().any(|l| l.contains("room description")), "pre-menu content preserved");
@@ -1603,16 +1773,16 @@ mod tests {
         // decides fits-vs-overflows.
         let tmp = std::env::temp_dir().join(format!("lanthorn-pagerarm-{}", std::process::id()));
         std::fs::create_dir_all(&tmp).unwrap();
-        let mut state = app::state::AppState::default();
+        let mut state = crate::state::AppState::default();
         state.config.user_dir = tmp.clone();
         let mut m = mapper::mapper::Mapper::default();
-        let rect = ratatui::layout::Rect::new(0, 0, 20, 20);
+        let rect = Some((20u16, 20u16));
         let eng = TraceOnlyEngine { line: None, v6: None, filename_req: None }; // pending_input() == Char
         state.last_transcript_total_rows = 12;
 
-        super::apply_game_driven_result(
+        let _ = super::apply_game_driven_result(
             &mut state, &mut m, &clearing_result("MENU"), &tmp, rect, &eng,
-            app::pager::Driver::PlayerInput,
+            crate::pager::Driver::PlayerInput,
         );
         assert_eq!(
             state.pager.pending_before_rows, Some(12),
@@ -1622,18 +1792,18 @@ mod tests {
         // A timeout-driven turn on top must NOT reload that baseline (mirrors the
         // engine's v6 line-count rule: keystrokes reload, timeouts don't).
         state.last_transcript_total_rows = 40;
-        super::apply_game_driven_result(
+        let _ = super::apply_game_driven_result(
             &mut state, &mut m, &clearing_result("TICK"), &tmp, rect, &eng,
-            app::pager::Driver::Timeout,
+            crate::pager::Driver::Timeout,
         );
         assert_eq!(state.pager.pending_before_rows, Some(12), "a timeout is not a keystroke");
 
         // And an already-showing pager is never re-parked mid-catch-up.
         state.pager.active = true;
         state.pager.disarm();
-        super::apply_game_driven_result(
+        let _ = super::apply_game_driven_result(
             &mut state, &mut m, &clearing_result("TICK 2"), &tmp, rect, &eng,
-            app::pager::Driver::Timeout,
+            crate::pager::Driver::Timeout,
         );
         assert!(state.pager.pending_before_rows.is_none(), "no re-arm while [more] is up");
         assert!(state.pager.active, "and a timeout never dismisses it");
@@ -1650,22 +1820,22 @@ mod tests {
         // still must bump so the map updates.
         let tmp = std::env::temp_dir().join(format!("lanthorn-gdr-{}", std::process::id()));
         std::fs::create_dir_all(&tmp).unwrap();
-        let mut state = app::state::AppState::default();
+        let mut state = crate::state::AppState::default();
         state.config.user_dir = tmp.clone();
         let mut m = mapper::mapper::Mapper::default();
         m.observe(1, "Lab", None); // a known, placed room
         let gen0 = state.graph_gen;
-        let rect = ratatui::layout::Rect::new(0, 0, 20, 20);
+        let rect = Some((20u16, 20u16));
         let eng = TraceOnlyEngine { line: None, v6: None, filename_req: None };
 
         // Re-reporting the SAME room (a menu keystroke) must not re-route.
-        let same = game_driven_result(Some(app::engine::LocationInfo { number: 1, parent: 0, name: "Lab".into() }));
-        super::apply_game_driven_result(&mut state, &mut m, &same, &tmp, rect, &eng, app::pager::Driver::PlayerInput);
+        let same = game_driven_result(Some(crate::engine::LocationInfo { number: 1, parent: 0, name: "Lab".into() }));
+        let _ = super::apply_game_driven_result(&mut state, &mut m, &same, &tmp, rect, &eng, crate::pager::Driver::PlayerInput);
         assert_eq!(state.graph_gen, gen0, "re-reporting a known room must not bump graph_gen");
 
         // Revealing a NEW room must bump (the map has to update).
-        let moved = game_driven_result(Some(app::engine::LocationInfo { number: 2, parent: 0, name: "Hall".into() }));
-        super::apply_game_driven_result(&mut state, &mut m, &moved, &tmp, rect, &eng, app::pager::Driver::PlayerInput);
+        let moved = game_driven_result(Some(crate::engine::LocationInfo { number: 2, parent: 0, name: "Hall".into() }));
+        let _ = super::apply_game_driven_result(&mut state, &mut m, &moved, &tmp, rect, &eng, crate::pager::Driver::PlayerInput);
         assert_ne!(state.graph_gen, gen0, "a new room on a game-driven turn must bump graph_gen");
 
         let _ = std::fs::remove_dir_all(&tmp);
@@ -1682,32 +1852,32 @@ mod tests {
         // machine that could not advance — permanently wedged, with only a quit out.
         let tmp = std::env::temp_dir().join(format!("lanthorn-gdfn-{}", std::process::id()));
         std::fs::create_dir_all(&tmp).unwrap();
-        let mut state = app::state::AppState::default();
+        let mut state = crate::state::AppState::default();
         state.config.user_dir = tmp.clone();
         let mut m = mapper::mapper::Mapper::default();
-        let rect = ratatui::layout::Rect::new(0, 0, 20, 20);
+        let rect = Some((20u16, 20u16));
         // fmode Write → a name-entry prompt (the TRANSCRIPT ON shape).
         let eng = TraceOnlyEngine {
             line: None,
             v6: None,
-            filename_req: Some(app::session::FilenameReq { usage: 0x02, fmode: 0x01 }),
+            filename_req: Some(crate::session::FilenameReq { usage: 0x02, fmode: 0x01 }),
         };
 
         let quit = super::apply_game_driven_result(
             &mut state, &mut m, &game_driven_result(None), &tmp, rect, &eng,
-            app::pager::Driver::PlayerInput,
-        );
+            crate::pager::Driver::PlayerInput,
+        ).quit;
 
         assert!(!quit, "a filename request defers the turn, it does not end the app");
         assert_eq!(
             state.pending_filename,
-            Some(app::session::FilenameReq { usage: 0x02, fmode: 0x01 }),
+            Some(crate::session::FilenameReq { usage: 0x02, fmode: 0x01 }),
             "the request must be recorded so the run loop's resolver can answer it",
         );
         assert!(
             matches!(
                 &state.overlays.text_entry,
-                Some(d) if d.kind == app::state::TextEntryKind::CreateFile
+                Some(d) if d.kind == crate::state::TextEntryKind::CreateFile
             ),
             "a create-file prompt must be open — without it nothing can ever call resume_filename",
         );
@@ -1717,7 +1887,7 @@ mod tests {
 
     #[test]
     fn should_exit_on_turn_gates_on_clean_quit_only() {
-        let mut state = app::state::AppState::default();
+        let mut state = crate::state::AppState::default();
 
         // Clean glk_exit: quit, no fault, not already halted → exit.
         let clean = fault_test_result(true, None);
@@ -1750,17 +1920,17 @@ mod tests {
     /// is the proof it did not.
     #[test]
     fn a_clean_quit_sets_game_ended_and_skips_its_own_per_turn_auto_save_sq1342() {
-        let dir = app::scratch_dir("sq1342-quit-skips-autosave");
-        let mut state = app::state::AppState::default();
+        let dir = crate::scratch_dir("sq1342-quit-skips-autosave");
+        let mut state = crate::state::AppState::default();
         state.config.auto_save = true;
         let mut mapper = mapper::mapper::Mapper::default();
         let mut eng = TraceOnlyEngine { line: None, v6: None, filename_req: None };
-        let rect = ratatui::layout::Rect::new(0, 0, 20, 20);
+        let rect = Some((20u16, 20u16));
         let arc_file = dir.join("default.lanthorn");
 
         let quit_result = fault_test_result(true, None); // clean glk_exit
         let should_exit =
-            super::finish_resumed_turn(quit_result, &mut mapper, &mut state, &mut eng, &dir, "TEST-IFID", rect);
+            super::finish_resumed_turn(quit_result, &mut mapper, &mut state, &mut eng, &dir, "TEST-IFID", rect).quit;
 
         assert!(should_exit, "a clean quit must still signal exit");
         assert!(state.game_ended, "should_exit_on_turn true must set game_ended (SQ-1342)");
@@ -1782,25 +1952,25 @@ mod tests {
     /// `state.game_ended = should_exit` line is exercised on its FALSE branch too.
     #[test]
     fn a_non_quit_game_driven_turn_leaves_game_ended_false_and_still_auto_saves_sq1342() {
-        use app::session::GameSession;
+        use crate::session::GameSession;
 
-        let dir = app::scratch_dir("sq1342-nonquit-still-autosaves");
+        let dir = crate::scratch_dir("sq1342-nonquit-still-autosaves");
         let arc_file = dir.join("default.lanthorn");
-        let mut sess = GameSession::new(crate::read_char_then_save_v4_story(), true, false, None).expect("new");
-        let mut state = app::state::AppState::default();
+        let mut sess = GameSession::new(crate::engine_helpers::tests::read_char_then_save_v4_story(), true, false, None).expect("new");
+        let mut state = crate::state::AppState::default();
         state.config.auto_save = true;
         let mut mapper = mapper::mapper::Mapper::default();
-        let rect = ratatui::layout::Rect::new(0, 0, 20, 20);
+        let rect = Some((20u16, 20u16));
 
         let not_quit = game_driven_result(None);
         let should_exit =
-            super::finish_resumed_turn(not_quit, &mut mapper, &mut state, &mut sess, &dir, "TEST-IFID", rect);
+            super::finish_resumed_turn(not_quit, &mut mapper, &mut state, &mut sess, &dir, "TEST-IFID", rect).quit;
 
         assert!(!should_exit, "a non-quit turn must not exit");
         assert!(!state.game_ended, "a host-driven session must never see game_ended set (SQ-1342)");
 
         state.archive_worker.flush();
-        let ac = app::archive::load_archive(&arc_file).expect("per-turn auto-save must still write");
+        let ac = crate::archive::load_archive(&arc_file).expect("per-turn auto-save must still write");
         assert!(!ac.save.is_empty(), "the per-turn auto-save must still be a real, resumable save");
 
         let _ = std::fs::remove_dir_all(&dir);
@@ -1809,7 +1979,7 @@ mod tests {
     // ── Scott-only game-over interception ────────────────────────────────────
     #[test]
     fn scott_clean_quit_raises_game_over_and_stays_alive() {
-        let mut state = app::state::AppState::default();
+        let mut state = crate::state::AppState::default();
 
         // A Scott engine on a quitting turn: raise the overlay, keep the app alive.
         let stay = super::intercept_scott_game_over(true, true, &mut state);
@@ -1818,13 +1988,13 @@ mod tests {
         assert_eq!(state.overlays.dialog_focus, 0, "focus starts on the first button");
 
         // A non-Scott engine on a quitting turn: exit as before, no overlay.
-        let mut state2 = app::state::AppState::default();
+        let mut state2 = crate::state::AppState::default();
         let exit = super::intercept_scott_game_over(true, false, &mut state2);
         assert!(exit, "a non-Scott clean quit still exits the app");
         assert!(!state2.overlays.game_over, "non-Scott never opens the game-over dialog");
 
         // A Scott engine on a non-quitting turn: no exit, no overlay.
-        let mut state3 = app::state::AppState::default();
+        let mut state3 = crate::state::AppState::default();
         let exit3 = super::intercept_scott_game_over(false, true, &mut state3);
         assert!(!exit3, "a non-quitting turn never exits");
         assert!(!state3.overlays.game_over, "a non-quitting turn never opens the dialog");
@@ -1834,8 +2004,8 @@ mod tests {
     fn apply_turn_events_halts_and_logs_on_fault() {
         // The other half of the `lanthorn-test-<pid>` collision — see
         // `persist_files::tests::save_then_load_round_trips` (SQ-1131).
-        let tmp = app::scratch_dir("turn-fault-log");
-        let mut state = app::state::AppState::default();
+        let tmp = crate::scratch_dir("turn-fault-log");
+        let mut state = crate::state::AppState::default();
         state.config.user_dir = tmp.clone();
 
         let result = fault_test_result(true, Some(vec!["some fault line".to_string()]));
@@ -1863,33 +2033,33 @@ mod tests {
     /// the overlay here.
     #[test]
     fn per_turn_auto_save_never_prompts_even_when_the_slot_already_has_a_different_save() {
-        use app::engine::Engine;
-        use app::session::GameSession;
+        use crate::engine::Engine;
+        use crate::session::GameSession;
 
         let dir = std::env::temp_dir().join(format!("bm-sq0648-autosave-{}", std::process::id()));
         std::fs::create_dir_all(&dir).unwrap();
         let arc_file = dir.join("default.lanthorn");
 
         // Pre-seed the slot as if from an earlier session.
-        let seed_sess = GameSession::new(crate::read_char_then_save_v4_story(), true, false, None).expect("new");
-        let seed_meta = app::archive::Meta {
-            format_version: app::archive::CURRENT_FORMAT_VERSION,
+        let seed_sess = GameSession::new(crate::engine_helpers::tests::read_char_then_save_v4_story(), true, false, None).expect("new");
+        let seed_meta = crate::archive::Meta {
+            format_version: crate::archive::CURRENT_FORMAT_VERSION,
             ifid: None, name: None, turns: 1, saved_at: String::new(), location: None, score: None,
-            trigger: app::archive::SaveTrigger::HostState,
+            trigger: crate::archive::SaveTrigger::HostState,
         };
-        app::archive::save_archive_meta(
+        crate::archive::save_archive_meta(
             &arc_file, &mapper::mapper::Mapper::default(), &seed_sess.save_state(), None,
             &std::collections::BTreeMap::new(), seed_meta, &[], &[], &[], &[], &[], &[],
         ).expect("seed default.lanthorn");
         let before = std::fs::read(&arc_file).unwrap();
 
-        let mut sess = GameSession::new(crate::read_char_then_save_v4_story(), true, false, None).expect("new");
-        let mut state = app::state::AppState::default();
+        let mut sess = GameSession::new(crate::engine_helpers::tests::read_char_then_save_v4_story(), true, false, None).expect("new");
+        let mut state = crate::state::AppState::default();
         state.config.auto_save = true;
         let mapper = mapper::mapper::Mapper::default();
         let result = game_driven_result(None);
 
-        super::post_turn_bookkeeping(&mut state, &mapper, &mut sess, &result, "look", 0, 0, "TEST-IFID", &arc_file, &mut app::engine::TurnSave::default());
+        super::post_turn_bookkeeping(&mut state, &mapper, &mut sess, &result, "look", 0, 0, "TEST-IFID", &arc_file, &mut crate::engine::TurnSave::default());
         // The write now happens on the background archive worker (SQ-1184);
         // flush before asserting on disk.
         state.archive_worker.flush();

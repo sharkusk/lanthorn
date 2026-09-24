@@ -19,6 +19,8 @@ mod sq1462_hint_echo_contrast;
 
 #[path = "suites/host_boot.rs"]
 mod host_boot;
+#[path = "suites/host_turn.rs"]
+mod host_turn;
 
 #[path = "suites/adf_disk_image.rs"]
 mod adf_disk_image;

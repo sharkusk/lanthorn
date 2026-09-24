@@ -2,23 +2,35 @@
 //! open/resolve helpers that serve game-initiated SAVE/RESTORE and filename
 //! requests (everything except the dialog RENDERING, which lives in render/).
 //! Extracted verbatim from `main.rs` (SQ-0306) as a pure move — no behavior
-//! change. `finish_resumed_turn` and the `combined_saves`/persistence helpers
-//! stay in their homes and are reached via `crate::`.
+//! change — and into the library with the per-turn apply that opens these
+//! requests (SQ-1538), since a turn cannot be applied without them. The
+//! "dialogs" are `AppState` overlays, which a host that draws none can still
+//! answer: set the flag-hop the dialog would have set and call the resolver.
 
-use app::archive::SaveTrigger;
-use app::engine::Engine;
-use app::persist_files::{delete_save, save_named};
-use app::state::{AppState, SavesState};
+use crate::archive::SaveTrigger;
+use crate::engine::Engine;
+use crate::persist_files::{delete_save, save_named};
+use crate::state::{AppState, SavesState};
 use mapper::mapper::Mapper;
-use ratatui::layout::Rect;
 
-use app::engine_helpers::zvm_session_opt;
-use crate::{combined_saves, turn};
+use crate::engine_helpers::zvm_session_opt;
+use super::turn;
+
+/// The current story's saves for the saves manager: `.lanthorn` Save States and
+/// `.qzl` game saves in `game_dir` merged into one list, sorted newest-first by
+/// save time. RFC3339 timestamps sort chronologically as strings; untimestamped/
+/// legacy saves (empty timestamp) sort to the bottom.
+pub fn combined_saves(game_dir: &std::path::Path) -> Vec<crate::persist_files::SaveInfo> {
+    let mut entries = crate::persist_files::list_saves(game_dir);
+    entries.extend(crate::persist_files::list_qzl(game_dir));
+    entries.sort_by(|a, b| b.saved_at.cmp(&a.saved_at));
+    entries
+}
 
 /// Resolve the confirm-delete dialog for the selected save. `confirmed` deletes
 /// it (refreshing the open saves list); otherwise the save is kept. Byte-identical
 /// to the retired y/n `handle_saves_prompt`. (SQ-0307)
-pub(crate) fn delete_save_confirmed(
+pub fn delete_save_confirmed(
     path: &std::path::Path,
     confirmed: bool,
     dir: &std::path::Path,
@@ -63,7 +75,7 @@ pub(crate) fn delete_save_confirmed(
 /// original submit (so a colliding target opens the confirm overlay instead
 /// of silently clobbering the existing save — SQ-0648) and `true` when
 /// resuming after the player has already confirmed the overwrite.
-pub(crate) fn handle_save_as(
+pub fn handle_save_as(
     buf: String,
     dir: &std::path::Path,
     ifid: &str,
@@ -72,13 +84,13 @@ pub(crate) fn handle_save_as(
     state: &mut AppState,
     force: bool,
 ) {
-    let ingame = state.ingame_io == Some(app::session::PendingIo::Save);
+    let ingame = state.ingame_io == Some(crate::session::PendingIo::Save);
     if buf.is_empty() {
         state.push_notice("[Save name cannot be empty]".to_string().as_str());
         // In-game: stay pending — re-open the dialog so the user can retry.
         if ingame {
-            state.overlays.save_name_dialog = Some(app::state::SaveNameDialog::new(
-                app::persist_files::default_save_name(),
+            state.overlays.save_name_dialog = Some(crate::state::SaveNameDialog::new(
+                crate::persist_files::default_save_name(),
                 true,
             ));
         }
@@ -92,14 +104,14 @@ pub(crate) fn handle_save_as(
     // the same typed text, since the caller may already have cleared it) so
     // Cancel needs no recovery. `force` skips this once the player has answered.
     if !force {
-        if let Ok(path) = app::persist_files::named_save_path(dir, &buf) {
-            if let Some(existing_name) = app::persist_files::existing_save_display_name(&path) {
-                state.overlays.confirm_overwrite_save = Some(app::state::ConfirmOverwriteSave {
+        if let Ok(path) = crate::persist_files::named_save_path(dir, &buf) {
+            if let Some(existing_name) = crate::persist_files::existing_save_display_name(&path) {
+                state.overlays.confirm_overwrite_save = Some(crate::state::ConfirmOverwriteSave {
                     path,
                     existing_name,
-                    pending: app::state::PendingOverwrite::SaveAs,
+                    pending: crate::state::PendingOverwrite::SaveAs,
                 });
-                state.overlays.save_name_dialog = Some(app::state::SaveNameDialog::new(buf, ingame));
+                state.overlays.save_name_dialog = Some(crate::state::SaveNameDialog::new(buf, ingame));
                 state.overlays.dialog_focus = 1; // Cancel default
                 return;
             }
@@ -111,14 +123,14 @@ pub(crate) fn handle_save_as(
     // longer a lesser save. What differs is the game bytes riding inside, and
     // `Meta::trigger` is what records which convention they follow.
     let trigger = if ingame { SaveTrigger::Ingame } else { SaveTrigger::HostState };
-    let save = app::persist_files::game_save_bytes(&*session, trigger);
-    let (location, score) = app::engine_helpers::save_summary(&*session, state);
+    let save = crate::persist_files::game_save_bytes(&*session, trigger);
+    let (location, score) = crate::engine_helpers::save_summary(&*session, state);
     // SQ-0588: the display list travels with every host save, not just the
     // auto-save paths — an archive written without it restores art that can never
     // be recoloured.
-    let (v6_pics, v6_display, v6_ground, v6_diags) = app::engine_helpers::v6_save_payload(&mut *session);
+    let (v6_pics, v6_display, v6_ground, v6_diags) = crate::engine_helpers::v6_save_payload(&mut *session);
     for d in &v6_diags { state.note_v6_save(d); }
-    let result = save_named(dir, ifid, &buf, trigger, mapper, &save, zvm_session_opt(&*session).map(|z| &z.machine.screen), &v6_pics, v6_display.as_ref(), v6_ground.as_deref(), session.aux_data(), state.turns, location, score, &app::archive::SessionRecord::of(state));
+    let result = save_named(dir, ifid, &buf, trigger, mapper, &save, zvm_session_opt(&*session).map(|z| &z.machine.screen), &v6_pics, v6_display.as_ref(), v6_ground.as_deref(), session.aux_data(), state.turns, location, score, &crate::archive::SessionRecord::of(state));
     match result {
         Ok(()) => {
             state.push_notice(&format!("[Saved as: {}]", buf));
@@ -144,8 +156,8 @@ pub(crate) fn handle_save_as(
             state.push_notice(&format!("[Save failed: {}]", e));
             // In-game: stay pending — re-open the dialog so the user can retry.
             if ingame {
-                state.overlays.save_name_dialog = Some(app::state::SaveNameDialog::new(
-                    app::persist_files::default_save_name(),
+                state.overlays.save_name_dialog = Some(crate::state::SaveNameDialog::new(
+                    crate::persist_files::default_save_name(),
                     true,
                 ));
             }
@@ -156,12 +168,12 @@ pub(crate) fn handle_save_as(
 /// Open the saves dialog in "in-game" mode for a game-initiated save/restore.
 /// SAVE: prompt for a save name (reuses the save-name dialog). RESTORE: open the
 /// saves list, including plain *.qzl files alongside *.lanthorn saves.
-pub(crate) fn open_ingame_saves(
-    io: app::session::PendingIo,
+pub fn open_ingame_saves(
+    io: crate::session::PendingIo,
     game_dir: &std::path::Path,
     state: &mut AppState,
 ) {
-    use app::session::PendingIo;
+    use crate::session::PendingIo;
     state.ingame_io = Some(io);
     state.overlays.dialog_focus = 0;
     match io {
@@ -169,8 +181,8 @@ pub(crate) fn open_ingame_saves(
             // The game asked to SAVE: ask where via the save-name dialog. On submit
             // -> resume_save(true); on cancel -> resume_save(false) (handled in the
             // cancel resolver, which now watches save_name_dialog).
-            state.overlays.save_name_dialog = Some(app::state::SaveNameDialog::new(
-                app::persist_files::default_save_name(),
+            state.overlays.save_name_dialog = Some(crate::state::SaveNameDialog::new(
+                crate::persist_files::default_save_name(),
                 true,
             ));
         }
@@ -186,21 +198,21 @@ pub(crate) fn open_ingame_saves(
 /// (1) a flag-hopped successful SAVE resumes the VM; (2) an in-game overlay that
 /// closed without a confirm is treated as a cancel and resumes with failure.
 /// Re-opens the dialog for a chained request. Returns true if the app should quit.
-pub(crate) fn resolve_ingame_dialog(
+pub fn resolve_ingame_dialog(
     session: &mut dyn Engine,
     mapper: &mut Mapper,
     state: &mut AppState,
     game_dir: &std::path::Path,
     ifid: &str,
-    map_area: Rect,
+    map_view: Option<(u16, u16)>,
 ) -> bool {
-    use app::session::PendingIo;
+    use crate::session::PendingIo;
 
     // (1) SAVE confirmed in handle_save_as (flag-hop): resume here.
     if let Some(wrote_ok) = state.ingame_resume_save.take() {
         state.ingame_io = None;
         let result = session.resume_save(wrote_ok);
-        let quit = turn::finish_resumed_turn(result, mapper, state, session, game_dir, ifid, map_area);
+        let quit = turn::finish_resumed_turn(result, mapper, state, session, game_dir, ifid, map_view).quit;
         if let Some(io) = state.ingame_io {
             open_ingame_saves(io, game_dir, state);
         }
@@ -220,7 +232,7 @@ pub(crate) fn resolve_ingame_dialog(
                 PendingIo::Restore => session.resume_restore(None),
             };
             state.push_notice("[In-game save/restore cancelled]");
-            let quit = turn::finish_resumed_turn(result, mapper, state, session, game_dir, ifid, map_area);
+            let quit = turn::finish_resumed_turn(result, mapper, state, session, game_dir, ifid, map_view).quit;
             if let Some(io) = state.ingame_io {
                 open_ingame_saves(io, game_dir, state);
             }
@@ -235,18 +247,18 @@ pub(crate) fn resolve_ingame_dialog(
 /// prompt (write / append / read-write), a file picker (read with existing files —
 /// Task 5), or an immediate cancel (read with no files). Sets AppState; the resolver
 /// later calls `resume_filename`.
-pub(crate) fn open_filename_modal(req: app::session::FilenameReq, session: &dyn Engine, state: &mut AppState) {
+pub fn open_filename_modal(req: crate::session::FilenameReq, session: &dyn Engine, state: &mut AppState) {
     state.pending_filename = Some(req);
-    match app::state::filename_modal_for(req, session.file_names().len()) {
-        app::state::FilenameModal::NamePrompt => {
+    match crate::state::filename_modal_for(req, session.file_names().len()) {
+        crate::state::FilenameModal::NamePrompt => {
             state.overlays.dialog_focus = 0;
             state.overlays.text_entry =
-                Some(app::state::TextEntryDialog::new(app::state::TextEntryKind::CreateFile, ""));
+                Some(crate::state::TextEntryDialog::new(crate::state::TextEntryKind::CreateFile, ""));
         }
-        app::state::FilenameModal::Picker => {
-            state.overlays.file_picker = Some(app::state::FilePickerState::new(session.file_names()));
+        crate::state::FilenameModal::Picker => {
+            state.overlays.file_picker = Some(crate::state::FilePickerState::new(session.file_names()));
         }
-        app::state::FilenameModal::AutoCancel => {
+        crate::state::FilenameModal::AutoCancel => {
             state.pending_filename = None;
             state.filename_submitted = Some(None);
         }
@@ -257,18 +269,18 @@ pub(crate) fn open_filename_modal(req: app::session::FilenameReq, session: &dyn 
 /// via the flag-hop (`state.filename_submitted`), or cancelled by closing the modal
 /// (Esc leaves `pending_filename` set with no CreateFile prompt open). Mirrors
 /// `resolve_ingame_dialog`. Returns true if the app should quit.
-pub(crate) fn resolve_filename_request(
+pub fn resolve_filename_request(
     session: &mut dyn Engine,
     mapper: &mut Mapper,
     state: &mut AppState,
     game_dir: &std::path::Path,
     ifid: &str,
-    map_area: Rect,
+    map_view: Option<(u16, u16)>,
 ) -> bool {
     if let Some(choice) = state.filename_submitted.take() {
         state.pending_filename = None;
         let result = session.resume_filename(choice);
-        let quit = turn::finish_resumed_turn(result, mapper, state, session, game_dir, ifid, map_area);
+        let quit = turn::finish_resumed_turn(result, mapper, state, session, game_dir, ifid, map_view).quit;
         if let Some(io) = state.ingame_io {
             open_ingame_saves(io, game_dir, state);
         }
@@ -276,13 +288,13 @@ pub(crate) fn resolve_filename_request(
     }
     // Modal closed without a submit (Esc) while a request is still pending -> cancel.
     if state.pending_filename.is_some()
-        && !matches!(&state.overlays.text_entry, Some(d) if d.kind == app::state::TextEntryKind::CreateFile)
+        && !matches!(&state.overlays.text_entry, Some(d) if d.kind == crate::state::TextEntryKind::CreateFile)
         && state.overlays.file_picker.is_none()
     {
         state.pending_filename = None;
         let result = session.resume_filename(None);
         state.push_notice("[create_by_prompt cancelled]");
-        let quit = turn::finish_resumed_turn(result, mapper, state, session, game_dir, ifid, map_area);
+        let quit = turn::finish_resumed_turn(result, mapper, state, session, game_dir, ifid, map_view).quit;
         if let Some(io) = state.ingame_io {
             open_ingame_saves(io, game_dir, state);
         }
@@ -295,16 +307,16 @@ pub(crate) fn resolve_filename_request(
 
 #[cfg(all(test, feature = "t-persist"))]
 mod tests {
-    use app::archive::SaveTrigger;
-    use app::engine::Engine;
-    use app::session::{GameSession, PendingIo};
+    use crate::archive::SaveTrigger;
+    use crate::engine::Engine;
+    use crate::session::{GameSession, PendingIo};
     use mapper::direction::Direction;
     use mapper::mapper::Mapper;
 
     const IFID: &str = "ZCODE-1-TEST00-0531";
 
     fn temp_dir(tag: &str) -> std::path::PathBuf {
-        app::scratch_dir(&format!("sq0531-{tag}"))
+        crate::scratch_dir(&format!("sq0531-{tag}"))
     }
 
     /// A fresh minizork session, parked at its opening prompt.
@@ -317,15 +329,15 @@ mod tests {
 
     /// App state carrying a recognisable session: transcript lines and the turn
     /// counter an archive is supposed to bring back.
-    fn state_with_session(io: Option<PendingIo>) -> app::state::AppState {
-        let mut s = app::state::AppState::default();
+    fn state_with_session(io: Option<PendingIo>) -> crate::state::AppState {
+        let mut s = crate::state::AppState::default();
         s.ingame_io = io;
         s.unsaved_progress = true;
         s.turns = 11;
-        s.push_transcript_internal("West of House", app::state::TranscriptKind::Story);
+        s.push_transcript_internal("West of House", crate::state::TranscriptKind::Story);
         s.push_transcript_internal(
             "Opening the small mailbox reveals a leaflet.",
-            app::state::TranscriptKind::Story,
+            crate::state::TranscriptKind::Story,
         );
         s
     }
@@ -368,19 +380,19 @@ mod tests {
         assert!(path.exists(), "@save writes the archive");
         assert!(!dir.join("chapter-one.qzl").exists(), "and no bare .qzl beside it");
 
-        let meta = app::archive::read_archive_meta(&path).expect("meta");
+        let meta = crate::archive::read_archive_meta(&path).expect("meta");
         assert_eq!(meta.trigger, SaveTrigger::Ingame, "the trigger round-trips through meta.json");
         assert!(meta.trigger.is_portable(), "an @save archive is advertised as portable");
         assert_eq!(meta.turns, 11);
 
         assert_eq!(
-            app::archive::read_quetzal_from_file(&path).expect("inner bytes"),
+            crate::archive::read_quetzal_from_file(&path).expect("inner bytes"),
             expected,
             "game.qzl is byte-identical to machine.save_quetzal()"
         );
 
         // The whole session rode along — this is what the old bare .qzl could not do.
-        let ac = app::archive::load_archive(&path).expect("load_archive");
+        let ac = crate::archive::load_archive(&path).expect("load_archive");
         assert_eq!(ac.transcript, state.transcript, "the scrollback is in the archive");
         assert_eq!(ac.mapper.graph.rooms().count(), mapper.graph.rooms().count(), "so is the map");
         assert!(ac.screen.is_some(), "so is the Z-machine screen");
@@ -408,10 +420,10 @@ mod tests {
         super::handle_save_as("chapter one".into(), &dir, IFID, &mut mapper, &mut sess, &mut state, false);
 
         let path = dir.join("chapter-one.lanthorn");
-        let meta = app::archive::read_archive_meta(&path).expect("meta");
+        let meta = crate::archive::read_archive_meta(&path).expect("meta");
         assert_eq!(meta.trigger, SaveTrigger::HostState);
         assert!(!meta.trigger.is_portable(), "a between-turns snapshot is NOT advertised as portable");
-        assert_eq!(app::archive::read_quetzal_from_file(&path).unwrap(), expected);
+        assert_eq!(crate::archive::read_quetzal_from_file(&path).unwrap(), expected);
 
         // Host-save bookkeeping is unchanged by the unification.
         assert!(!state.unsaved_progress, "a host Save State captures progress");
@@ -439,7 +451,7 @@ mod tests {
         let path = dir.join("before-troll.lanthorn");
         assert!(path.exists());
         let original_bytes = std::fs::read(&path).expect("read original archive");
-        let meta1 = app::archive::read_archive_meta(&path).expect("meta");
+        let meta1 = crate::archive::read_archive_meta(&path).expect("meta");
         assert_eq!(meta1.name.as_deref(), Some("Before Troll"));
 
         // Second save: a DIFFERENT typed name that slugifies to the SAME file.
@@ -461,7 +473,7 @@ mod tests {
             pending.existing_name, "Before Troll",
             "the prompt must name the save ALREADY there, not the name just typed"
         );
-        assert!(matches!(pending.pending, app::state::PendingOverwrite::SaveAs));
+        assert!(matches!(pending.pending, crate::state::PendingOverwrite::SaveAs));
 
         // The save-name dialog stays open behind it, with the typed text intact —
         // Cancel needs nowhere else to fall back to.
@@ -492,7 +504,7 @@ mod tests {
 
         let new_bytes = std::fs::read(&path).expect("read archive after the confirmed overwrite");
         assert_ne!(new_bytes, original_bytes, "the confirmed overwrite actually wrote");
-        let meta = app::archive::read_archive_meta(&path).expect("meta");
+        let meta = crate::archive::read_archive_meta(&path).expect("meta");
         assert_eq!(meta.name.as_deref(), Some("before, troll!"), "the file now belongs to the new name");
         assert!(state2.overlays.confirm_overwrite_save.is_none(), "force writes directly, no confirm prompt");
 
@@ -539,7 +551,7 @@ mod tests {
 
         let r = sess.submit("restore");
         assert_eq!(r.pending_io, Some(PendingIo::Restore), "'restore' reaches @restore");
-        let bytes = app::archive::read_quetzal_from_file(&path).expect("inner bytes");
+        let bytes = crate::archive::read_quetzal_from_file(&path).expect("inner bytes");
         sess.resume_restore(Some(&bytes));
 
         let t2 = sess.submit("north").transcript;
@@ -562,7 +574,7 @@ mod tests {
 
         let r = sess.submit("restore");
         assert_eq!(r.pending_io, Some(PendingIo::Restore));
-        let bytes = app::archive::read_quetzal_from_file(&foreign).expect("raw bytes");
+        let bytes = crate::archive::read_quetzal_from_file(&foreign).expect("raw bytes");
         sess.resume_restore(Some(&bytes));
 
         let t2 = sess.submit("north").transcript;
@@ -573,7 +585,7 @@ mod tests {
 
     #[test]
     fn host_load_dispatches_on_the_trigger_not_the_extension() {
-        use app::engine_helpers::{restore_from_file, RestoreOutcome};
+        use crate::engine_helpers::{restore_from_file, RestoreOutcome};
 
         let dir = temp_dir("host-load");
         let mut mapper = mapper_with_room();
@@ -633,7 +645,7 @@ mod tests {
 
         std::fs::write(dir.join("from-frotz.qzl"), b"carried in from elsewhere").unwrap();
 
-        let entries = crate::combined_saves(&dir);
+        let entries = super::combined_saves(&dir);
         let find = |n: &str| {
             entries.iter().find(|e| e.name == n).unwrap_or_else(|| panic!("{n} should be listed"))
         };
@@ -671,23 +683,23 @@ mod tests {
     /// Open the saves manager over `dir` exactly as the run loop does
     /// (`Action::OpenSaves` → `combined_saves`), selecting the row holding
     /// `select`.
-    fn open_saves_over(dir: &std::path::Path, select: &std::path::Path) -> app::state::AppState {
+    fn open_saves_over(dir: &std::path::Path, select: &std::path::Path) -> crate::state::AppState {
         let mut state = state_with_session(None);
-        let entries = crate::combined_saves(dir);
+        let entries = super::combined_saves(dir);
         let idx = entries
             .iter()
             .position(|e| e.path == select)
             .unwrap_or_else(|| panic!("{} should be listed", select.display()));
-        let mut scroll = app::list_scroll::ListScroll::new();
+        let mut scroll = crate::list_scroll::ListScroll::new();
         scroll.len(entries.len());
         scroll.selected = idx;
-        state.overlays.saves = Some(app::state::SavesState { entries, scroll });
+        state.overlays.saves = Some(crate::state::SavesState { entries, scroll });
         state
     }
 
     /// The list's rows as a set of paths (order between two saves written in the
     /// same second is a tie, so membership is what a test can pin).
-    fn rows(state: &app::state::AppState) -> Vec<std::path::PathBuf> {
+    fn rows(state: &crate::state::AppState) -> Vec<std::path::PathBuf> {
         let mut p: Vec<_> = state
             .overlays
             .saves
@@ -702,7 +714,7 @@ mod tests {
     }
 
     fn on_disk(dir: &std::path::Path) -> Vec<std::path::PathBuf> {
-        let mut p: Vec<_> = crate::combined_saves(dir).into_iter().map(|e| e.path).collect();
+        let mut p: Vec<_> = super::combined_saves(dir).into_iter().map(|e| e.path).collect();
         p.sort();
         p
     }
@@ -771,8 +783,8 @@ mod tests {
     #[test]
     fn the_cursor_stays_in_the_list_after_deleting_the_first_row() {
         let dir = dir_with_two_states_and_a_qzl("delete-first", false);
-        let first = crate::combined_saves(&dir)[0].path.clone();
-        let expected_next = crate::combined_saves(&dir)[1].path.clone();
+        let first = super::combined_saves(&dir)[0].path.clone();
+        let expected_next = super::combined_saves(&dir)[1].path.clone();
         let mut state = open_saves_over(&dir, &first);
         assert_eq!(state.overlays.saves.as_ref().unwrap().scroll.selected, 0);
 
@@ -789,7 +801,7 @@ mod tests {
     #[test]
     fn the_cursor_stays_in_the_list_after_deleting_the_last_row() {
         let dir = dir_with_two_states_and_a_qzl("delete-last", true);
-        let last = crate::combined_saves(&dir)[2].path.clone();
+        let last = super::combined_saves(&dir)[2].path.clone();
         let mut state = open_saves_over(&dir, &last);
         assert_eq!(state.overlays.saves.as_ref().unwrap().scroll.selected, 2);
 
