@@ -2154,7 +2154,12 @@ fn main() {
                                  &mut page_height, &mut machine, &mut view);
                 }
                 if aborted {
-                    machine.abort_timed_input(line.trim_end());
+                    // ZMSD 1.1 §15 (@read/@aread): "If this routine returns
+                    // true, all input is erased (to zero) and the reading
+                    // process is terminated at once." The partial typed line
+                    // is discarded, matching the read_char abort path below
+                    // (`abort_timed_input("")`).
+                    machine.abort_timed_input("");
                 } else {
                     machine.supply_line(line.trim_end(), terminator);
                 }
