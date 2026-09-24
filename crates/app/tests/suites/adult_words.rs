@@ -34,7 +34,7 @@ use std::collections::{BTreeMap, BTreeSet};
 use app::config::{Config, DEFAULT_ADULT_WORDS};
 use app::engine::Engine;
 use app::graphics::PictSource;
-use app::render::command_band::{verbs_from_grammar, VerbSource, VerbTable};
+use app::render::command_band::{story_verbs, VerbSource, VerbTable};
 use app::session::GameSession;
 use app::state::{AppState, TranscriptKind};
 use app::vocab::{Position, StoryVocabulary};
@@ -87,9 +87,24 @@ fn pocket_vocabulary() -> StoryVocabulary {
 /// The band's column as the app assembles it: the story's grammar, `extra_verbs`
 /// layered on, and then the adult list applied — `Config::layer_band_verbs`, the
 /// one production route.
+///
+/// Since SQ-1554 a verb's spellings are folded into one row, so "in the column"
+/// means shown OR carried as a synonym: a host can list either, and the filter
+/// has to have reached both.
 fn column(cfg: &Config, verbs: &[Verb]) -> Vec<String> {
-    let table = VerbTable::new(verbs_from_grammar(verbs), VerbSource::Story);
-    cfg.layer_band_verbs(table).entries.into_iter().map(|e| e.word).collect()
+    let mut words = std::collections::BTreeMap::new();
+    for v in verbs {
+        for w in &v.words {
+            words.insert(w.to_lowercase(), roles(true, false));
+        }
+    }
+    let vocab = StoryVocabulary::new(verbs.to_vec(), words, Default::default(), 0);
+    let table = VerbTable::new(story_verbs(&vocab, &Default::default()), VerbSource::Story);
+    cfg.layer_band_verbs(table)
+        .entries
+        .into_iter()
+        .flat_map(|e| std::iter::once(e.word).chain(e.synonyms))
+        .collect()
 }
 
 // ── The default ──────────────────────────────────────────────────────────────

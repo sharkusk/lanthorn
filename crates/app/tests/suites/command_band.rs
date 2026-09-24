@@ -18,7 +18,7 @@ use app::config::Config;
 use app::engine::Engine;
 use app::graphics::PictSource;
 use app::render::command_band::{
-    default_quick, default_verbs, refresh_objects, refresh_verbs, verbs_from_grammar, VerbSource,
+    default_quick, default_verbs, refresh_objects, refresh_verbs, story_verbs, VerbSource,
     VerbTable, COL_CARRIED, COL_HERE, COL_SECOND, COL_VERB,
 };
 use app::session::GameSession;
@@ -530,10 +530,21 @@ fn the_verb_column_is_the_running_story_s_own_grammar() {
             "the player's own word `{word}` reaches the story's verb"
         );
     }
-    assert!(after.len() > 200, "the whole grammar, not a curated slice: {}", after.len());
-    let mut sorted = after.clone();
-    sorted.sort();
-    assert_eq!(after, sorted, "alphabetical — the only order a list this long can be scanned in");
+    // The whole grammar, not a curated slice — every spelling still reaches a
+    // row, now folded one row per verb (SQ-1554).
+    let spellings: usize = band.verbs.iter().map(|e| 1 + e.synonyms.len()).sum();
+    assert!(spellings > 200, "every spelling is still reachable: {spellings}");
+    assert!(band.verbs.len() < spellings, "…behind fewer rows: {}", band.verbs.len());
+    // Tiered, and alphabetical within each tier past the curated one.
+    use app::render::command_band::VerbTier;
+    assert!(band.verbs.windows(2).all(|p| p[0].tier <= p[1].tier), "tiers in order");
+    for tier in [VerbTier::Story, VerbTier::More] {
+        let words: Vec<&str> =
+            band.verbs.iter().filter(|e| e.tier == tier).map(|e| e.word.as_str()).collect();
+        let mut sorted = words.clone();
+        sorted.sort();
+        assert_eq!(words, sorted, "{tier:?} is alphabetical");
+    }
 }
 
 /// SQ-1128, on the story that raised it: the column jumped from `lock` to
@@ -566,24 +577,20 @@ fn quick_words_that_take_an_object_stay_in_zork_i_s_column() {
     let band = state.overlays.command_band.as_ref().unwrap();
     let items = band.items(COL_VERB);
 
-    // Non-vacuity: this really is the story's own 200-odd word column.
+    // Non-vacuity: this really is the story's own column — every Zork I verb,
+    // one row each since SQ-1554.
     assert_eq!(band.verb_source, VerbSource::Story);
-    assert!(items.len() > 200, "the whole grammar: {}", items.len());
+    assert!(items.len() > 60, "the whole grammar: {}", items.len());
 
+    // The reported symptom was `look` missing from the column; it is a core
+    // verb now, so it is not merely present but near the top.
     for word in ["look", "enter", "exit"] {
         assert!(
             items.contains(&word.to_string()),
             "`{word}` takes an object in Zork I, so one click cannot finish it"
         );
     }
-    // The reported symptom, exactly: no gap between `lock` and `lose`.
-    let lock = items.iter().position(|w| w == "lock").expect("Zork I has `lock`");
-    let lose = items.iter().position(|w| w == "lose").expect("Zork I has `lose`");
-    assert!(
-        items[lock..lose].contains(&"look".to_string()),
-        "the column no longer jumps `lock` → `lose`: {:?}",
-        &items[lock..=lose]
-    );
+    assert_eq!(items[0], "look", "the first core verb leads the column");
 
     // …and the words the quick row really does finish are still excluded.
     // Zork I's `wait` has one bare line and nothing else (Deadline's has
@@ -614,24 +621,20 @@ fn quick_words_that_take_an_object_stay_in_zork_i_s_column() {
 fn zork_i_r52_s_column_drops_the_test_harness_verbs() {
     let Some(session) = boot_zmachine("zork1-invclues-r52-s871125.z5") else { return };
     let vocab = session.story_vocabulary().expect("Zork I r52's grammar reads");
-    let entries = verbs_from_grammar(vocab.verbs());
+    let entries = story_verbs(&vocab, &Default::default());
 
-    let unfiltered: Vec<String> = entries.iter().map(|e| e.word.clone()).collect();
+    // Every SPELLING, shown or folded behind its row (SQ-1554): the rule has to
+    // reach both, since a host may list a row's synonyms too.
+    let spellings = |entries: Vec<app::render::command_band::VerbEntry>| -> Vec<String> {
+        entries.into_iter().flat_map(|e| std::iter::once(e.word).chain(e.synonyms)).collect()
+    };
+    let unfiltered = spellings(entries.clone());
     for word in ["#command", "#random", "#record", "#unrecor", "$verif"] {
         assert!(unfiltered.contains(&word.to_string()), "r52 really holds `{word}`");
     }
-    assert_eq!(
-        unfiltered[..5],
-        ["#command", "#random", "#record", "#unrecor", "$verif"],
-        "…at the very top of an alphabetical column, which is the whole complaint"
-    );
 
     let column = |cfg: &Config| -> Vec<String> {
-        cfg.layer_band_verbs(VerbTable::new(entries.clone(), VerbSource::Story))
-            .entries
-            .into_iter()
-            .map(|e| e.word)
-            .collect()
+        spellings(cfg.layer_band_verbs(VerbTable::new(entries.clone(), VerbSource::Story)).entries)
     };
 
     // With the adult list off, the sigil rule is the ONLY thing removing rows,
@@ -652,7 +655,7 @@ fn zork_i_r52_s_column_drops_the_test_harness_verbs() {
             "no sigil word survives: {:?}",
             &shown[..8]
         );
-        assert_eq!(shown[0], "activate", "the column now opens on a verb a player would try");
+        assert_eq!(shown[0], "look", "the column opens on a core verb a player would try");
         for kept in ["take", "look", "pray", "dig", "count"] {
             assert!(shown.contains(&kept.to_string()), "`{kept}` is untouched");
         }

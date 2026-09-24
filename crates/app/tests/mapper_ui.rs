@@ -24,6 +24,8 @@ mod anchor_box_quote;
 mod anchor_room_detection;
 #[path = "suites/command_band.rs"]
 mod command_band;
+#[path = "suites/verb_tiers.rs"]
+mod verb_tiers;
 #[path = "suites/border_controls.rs"]
 mod border_controls;
 #[path = "suites/return_probe.rs"]

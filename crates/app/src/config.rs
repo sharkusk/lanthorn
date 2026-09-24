@@ -872,10 +872,31 @@ impl CommandBandConfig {
         warnings: &mut Vec<String>,
     ) -> crate::render::command_band::VerbTable {
         for extra in &self.extra_verbs {
-            if let Some(e) = lower_verb(extra, warnings) {
+            if let Some(mut e) = lower_verb(extra, warnings) {
                 match table.entries.iter_mut().find(|t| t.word == e.word) {
-                    Some(slot) => *slot = e,
-                    None => table.entries.push(e),
+                    // Replacing a row keeps where it ranks and the story's other
+                    // spellings of it (SQ-1554).
+                    Some(slot) => {
+                        e.tier = slot.tier;
+                        e.synonyms = std::mem::take(&mut slot.synonyms);
+                        *slot = e;
+                    }
+                    None => {
+                        // A folded synonym this row now overrides is its own row
+                        // again, as it was before folding.
+                        for t in &mut table.entries {
+                            t.synonyms.retain(|s| *s != e.word);
+                        }
+                        // The player's own word leads the ranked column with the
+                        // core verbs — a list of built-ins or a configured list is
+                        // all `Core`, so there this is still the end.
+                        let at = table
+                            .entries
+                            .iter()
+                            .rposition(|t| t.tier == crate::render::command_band::VerbTier::Core)
+                            .map_or(0, |i| i + 1);
+                        table.entries.insert(at, e);
+                    }
                 }
             }
         }

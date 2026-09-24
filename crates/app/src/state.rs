@@ -383,6 +383,10 @@ pub struct CommandBandState {
     /// there is; without this a story with no readable grammar would re-ask on
     /// every tick forever. (`render::command_band::refresh_verbs`.)
     pub verbs_read: bool,
+    /// The `turn_epoch` the story's column was last RANKED at (SQ-1554). The
+    /// grammar is static, but which verbs the player has typed is not, so a
+    /// story column is re-tiered once per turn — never per tick.
+    pub verbs_epoch: Option<u64>,
     /// The one-click quick-action row.
     pub quick: Vec<String>,
     /// Tokens picked so far, in order.
@@ -493,7 +497,9 @@ impl CommandBandState {
     /// The table entry for `word`, matched case-insensitively (the player types
     /// the prompt now, and `Take` is the same verb as `take`).
     pub fn verb_by_word(&self, word: &str) -> Option<&VerbEntry> {
-        self.verbs.iter().find(|v| v.word.eq_ignore_ascii_case(word))
+        // A row's folded synonyms name it too (SQ-1554): `carry` is the `take`
+        // row's, and typing it must open the same columns.
+        self.verbs.iter().find(|v| v.answers_to(word))
     }
 
     /// The picked verb's table entry (grammar for everything downstream).
@@ -760,8 +766,17 @@ impl CommandBandState {
         let (max_nouns, joiners) = (entry.max_nouns(), entry.joiners());
         // Store the TABLE's spelling, so downstream lookups (`prep`,
         // `max_nouns`) and `phrase_text` are canonical regardless of how it was
-        // typed.
-        let mut picks = vec![BandPick { slot: BandSlot::Verb, text: entry.word.clone() }];
+        // typed — unless the player typed one of the row's folded SYNONYMS
+        // (SQ-1554). That word stays: `phrase_text` must still end the prompt
+        // the player wrote, or a click appends `take` after their `carry`
+        // instead of replacing the phrase, and the synonym resolves to the
+        // same row anyway.
+        let verb_text = if entry.word.eq_ignore_ascii_case(toks[vi]) {
+            entry.word.clone()
+        } else {
+            toks[vi].to_string()
+        };
+        let mut picks = vec![BandPick { slot: BandSlot::Verb, text: verb_text }];
         let rest = &toks[vi + 1..];
         let push = |picks: &mut Vec<BandPick>, slot, text: String| {
             if !text.is_empty() {

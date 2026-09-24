@@ -192,12 +192,57 @@ pub struct VerbEntry {
     /// lines it is handed, which is the right answer for a table (the
     /// built-ins, `[command_panel] verbs`) whose shapes ARE its whole grammar.
     pub takes_object: bool,
+    /// How far forward this verb belongs (SQ-1554) — see [`VerbTier`]. A host
+    /// shows [`VerbTier::Core`] and [`VerbTier::Story`] up front and the rest
+    /// behind a "More…"; the list already arrives in that order.
+    pub tier: VerbTier,
+    /// The story's OTHER spellings of this same verb, spelled out (SQ-1554):
+    /// `carry`, `get` and `hold` behind a `take` row. Not listed, still
+    /// recognised — [`crate::state::CommandBandState::verb_by_word`] finds the
+    /// row through any of them, so a player who types `carry` gets `take`'s
+    /// shapes. Empty for a table whose rows ARE its words (the built-ins, a
+    /// configured list).
+    pub synonyms: Vec<String>,
+}
+
+/// Where a verb belongs in a list ordered for a player rather than a parser
+/// (SQ-1554).
+///
+/// A story's grammar is eighty-odd verbs in Zork I, and an alphabetical column
+/// buries `take` between `swim` and `tell`. The tiers put the verbs a player
+/// actually needs first and keep the rest reachable, in declaration order of
+/// importance:
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Default)]
+pub enum VerbTier {
+    /// A verb nearly every parser game needs ([`CORE_VERBS`]) that THIS story's
+    /// grammar accepts, in that list's order. Also every row of a table that
+    /// is not the story's grammar — the built-in fallback and a configured
+    /// list are short curated sets already, and are shown whole as before.
+    #[default]
+    Core,
+    /// A verb the story's own text mentions, or one the player has already
+    /// typed and the story's dictionary knew. Alphabetical.
+    Story,
+    /// Everything else the grammar holds. Alphabetical, behind "More…".
+    More,
 }
 
 impl VerbEntry {
     pub fn new(word: &str, lines: Vec<VerbLine>) -> Self {
         let takes_object = lines.iter().any(|l| l.nouns > 0);
-        VerbEntry { word: word.to_string(), lines, takes_object }
+        VerbEntry {
+            word: word.to_string(),
+            lines,
+            takes_object,
+            tier: VerbTier::Core,
+            synonyms: Vec::new(),
+        }
+    }
+
+    /// Does `word` name this verb — its shown spelling or one of its folded
+    /// synonyms? Case-insensitive, whole-word.
+    pub fn answers_to(&self, word: &str) -> bool {
+        self.word.eq_ignore_ascii_case(word) || self.synonyms.iter().any(|s| s.eq_ignore_ascii_case(word))
     }
 
     /// Record that the grammar gives this verb an object slot the band cannot
@@ -320,9 +365,43 @@ impl VerbTable {
         if hidden.is_empty() {
             return self;
         }
-        self.entries
-            .retain(|e| !hidden.iter().any(|h| h.eq_ignore_ascii_case(&e.word)));
+        self.drop_spellings(|w| hidden.iter().any(|h| h.eq_ignore_ascii_case(w)));
         self
+    }
+
+    /// Remove every spelling `gone` names, the folded synonyms included
+    /// (SQ-1554). A row whose shown word goes is shown under its first
+    /// surviving synonym instead, and dropped only when none survives — which
+    /// is exactly what the column did when every spelling was its own row.
+    fn drop_spellings(&mut self, gone: impl Fn(&str) -> bool) {
+        let mut promoted = false;
+        self.entries.retain_mut(|e| {
+            e.synonyms.retain(|s| !gone(s));
+            if !gone(&e.word) {
+                return true;
+            }
+            if e.synonyms.is_empty() {
+                return false;
+            }
+            e.word = e.synonyms.remove(0);
+            promoted = true;
+            true
+        });
+        if promoted {
+            // A renamed row takes its alphabetical place again. Stable, and
+            // keyed on the index for `Core`, so the curated order — and a
+            // built-in or configured table, which is all `Core` — is untouched.
+            let mut keyed: Vec<(VerbTier, usize, String, VerbEntry)> = std::mem::take(&mut self.entries)
+                .into_iter()
+                .enumerate()
+                .map(|(i, e)| match e.tier {
+                    VerbTier::Core => (e.tier, i, String::new(), e),
+                    _ => (e.tier, 0, e.word.clone(), e),
+                })
+                .collect();
+            keyed.sort_by(|a, b| (a.0, a.1, &a.2).cmp(&(b.0, b.1, &b.2)));
+            self.entries = keyed.into_iter().map(|(.., e)| e).collect();
+        }
     }
 
     /// Drop the story's own test-harness and diagnostic verbs — every word whose
@@ -351,7 +430,7 @@ impl VerbTable {
     /// [`layer_band_verbs`](crate::config::Config::layer_band_verbs), which are
     /// the two places a table is assembled; this is `pub` only so they can.
     pub fn without_sigil_verbs(mut self) -> VerbTable {
-        self.entries.retain(|e| !e.word.starts_with(SIGILS));
+        self.drop_spellings(|w| w.starts_with(SIGILS));
         self
     }
 }
@@ -470,56 +549,128 @@ pub fn default_verbs() -> VerbTable {
     VerbTable::new(entries, VerbSource::Builtin)
 }
 
-/// The story's own verb column: one row per dictionary spelling every verb of
-/// its grammar answers to, alphabetically.
+/// The verbs nearly every parser game needs, in the order a player reaches for
+/// them — the curated half of [`VerbTier::Core`] (SQ-1554).
 ///
-/// **Every spelling, not one per verb**, and that is the whole point. Infocom's
-/// tables list a verb's synonyms in DICTIONARY order, so the first spelling is
-/// merely the alphabetically-earliest one: Zork I's take-verb is `carry`, its
-/// look-verb is `gaze`, its put-verb is `hide`, its throw-verb is `chuck`, and
-/// its wave-verb is the truncated key `brandi`. Naming one spelling per verb
-/// would hand the player a column of words no one would ever type. Listing them
-/// all needs no heuristic, has zero false positives — every word here is one the
-/// parser really accepts — and puts `take`, `look`, `put` and `throw` back where
-/// the player expects them, beside their oddities.
+/// Only ever INTERSECTED with a story's grammar: a word here that the story
+/// does not hold contributes nothing, and one it does hold is shown as spelled
+/// here — `examine`, not the `examin` a Version 3 dictionary stores — which the
+/// parser truncates back to the same entry. Two of them reaching one verb
+/// (`talk` and `tell` in a story that files them together) make one row, under
+/// whichever comes first.
+pub const CORE_VERBS: &[&str] = &[
+    "look", "examine", "take", "drop", "inventory", "open", "close", "put", "go", "enter",
+    "wait", "read", "push", "pull", "turn", "give", "talk", "ask", "tell",
+];
+
+/// The story's own verb column: one row per VERB of its grammar, tiered for a
+/// player and not for a parser (SQ-1554).
 ///
-/// One-character spellings (`x`, `g`, `z`, `l`, `q`) are dropped: they are real
-/// vocabulary and a wasted row, the same call `vocab::StoryVocabulary`'s synonym
-/// offer already makes. Where two verbs claim one spelling the first wins, as
-/// both engines' readers do.
-pub fn verbs_from_grammar(verbs: &[grammar_model::Verb]) -> Vec<VerbEntry> {
-    let mut out: std::collections::BTreeMap<String, VerbEntry> = std::collections::BTreeMap::new();
-    for verb in verbs {
-        let mut lines: Vec<VerbLine> = Vec::new();
-        for line in &verb.lines {
-            if let Some(l) = VerbLine::from_syntax(line) {
-                if !lines.contains(&l) {
-                    lines.push(l);
-                }
-            }
-        }
-        // Asked of the RAW syntax lines, not of `lines`: "the story lets this
-        // verb take an object" is a different question from "the band knows how
-        // to compose one", and only the first decides whether a quick word is
-        // redundant in the column (SQ-1128).
-        let takes_object =
-            verb.lines.iter().any(|l| l.slots.iter().any(grammar_model::Slot::is_noun_slot));
-        for word in &verb.words {
-            let word = word.to_lowercase();
-            if word.chars().count() < 2 {
-                continue;
-            }
-            out.entry(word.clone()).or_insert_with(|| {
-                let e = VerbEntry::new(&word, lines.clone());
-                if takes_object {
-                    e.also_takes_object()
-                } else {
-                    e
-                }
-            });
+/// **One row per verb, its other spellings folded behind it.** This used to be
+/// one row per spelling, because Infocom files a verb's synonyms in dictionary
+/// order and the first is merely the alphabetically-earliest — Zork I's
+/// take-verb is `carry`, its look-verb `gaze` — and listing every spelling was
+/// the only heuristic-free way to put `take` in the column at all. It also made
+/// the column 200-odd rows long. Now each verb shows ONE spelling and keeps the
+/// rest in [`VerbEntry::synonyms`], still recognised when typed; the spelling
+/// shown is:
+///
+/// 1. the [`CORE_VERBS`] word that reaches it, if one does (`take`, `look`);
+/// 2. otherwise the commonest English verb among its spellings — the one in the
+///    most [`verb_synonyms`] groups (`throw` over `chuck`, `wave` over
+///    `brandish`) — then the shortest, then the first alphabetically.
+///
+/// **The tiers**, in list order ([`VerbTier`]): the core verbs this story
+/// accepts, in [`CORE_VERBS`] order; then verbs whose spelling the story's own
+/// text uses ([`crate::vocab::StoryVocabulary::text_words`]) or the player has
+/// typed (`used` — first words of commands, resolved through the story's own
+/// dictionary), alphabetically; then everything else, alphabetically. Nothing
+/// is dropped, only ordered.
+///
+/// Spellings are shown spelled out ([`crate::vocab::StoryVocabulary::spell`],
+/// SQ-1553). One-character spellings (`x`, `g`, `z`) are dropped, as the offer
+/// drops them; where two verbs claim one spelling the first wins, as both
+/// engines' readers do.
+pub fn story_verbs(
+    vocab: &crate::vocab::StoryVocabulary,
+    used: &std::collections::BTreeSet<String>,
+) -> Vec<VerbEntry> {
+    let verbs = vocab.verbs();
+    let index_of = |v: &grammar_model::Verb| verbs.iter().position(|x| std::ptr::eq(x, v));
+    // Which curated word reaches each verb — the first one wins.
+    let mut core: Vec<Option<(usize, &str)>> = vec![None; verbs.len()];
+    for (pos, &c) in CORE_VERBS.iter().enumerate() {
+        if let Some(i) = vocab.verb_named(c).and_then(index_of) {
+            core[i].get_or_insert((pos, c));
         }
     }
-    out.into_values().collect()
+    let used_verbs: std::collections::BTreeSet<usize> =
+        used.iter().filter_map(|u| vocab.verb_named(u).and_then(index_of)).collect();
+    let text = vocab.text_words();
+
+    let mut claimed: std::collections::HashSet<String> = std::collections::HashSet::new();
+    let mut out: Vec<(VerbTier, usize, VerbEntry)> = Vec::new();
+    for (i, verb) in verbs.iter().enumerate() {
+        let spellings: Vec<String> = verb
+            .words
+            .iter()
+            .map(|w| w.to_lowercase())
+            .filter(|w| w.chars().count() >= 2 && claimed.insert(w.clone()))
+            .map(|w| vocab.spell(&w).to_string())
+            .collect();
+        let (tier, rank, word) = match core[i] {
+            Some((pos, c)) => (VerbTier::Core, pos, c.to_string()),
+            None => {
+                let Some(word) = commonest(&spellings) else { continue };
+                let story = used_verbs.contains(&i) || spellings.iter().any(|s| text.contains(s));
+                (if story { VerbTier::Story } else { VerbTier::More }, 0, word)
+            }
+        };
+        let mut synonyms: Vec<String> =
+            spellings.into_iter().filter(|s| !s.eq_ignore_ascii_case(&word)).collect();
+        synonyms.sort();
+        synonyms.dedup();
+        let mut e = entry_for(verb, &word);
+        e.tier = tier;
+        e.synonyms = synonyms;
+        out.push((tier, rank, e));
+    }
+    out.sort_by(|a, b| (a.0, a.1, &a.2.word).cmp(&(b.0, b.1, &b.2.word)));
+    out.into_iter().map(|(_, _, e)| e).collect()
+}
+
+/// The spelling of a verb a player is likeliest to know: the one in the most
+/// [`verb_synonyms`] groups, then the shortest, then the first alphabetically.
+fn commonest(spellings: &[String]) -> Option<String> {
+    spellings
+        .iter()
+        .min_by_key(|s| (std::cmp::Reverse(verb_synonyms::groups(s).count()), s.len(), s.as_str()))
+        .cloned()
+}
+
+/// One grammar verb as a band row named `word`, with the shapes the band can
+/// compose from its syntax lines.
+fn entry_for(verb: &grammar_model::Verb, word: &str) -> VerbEntry {
+    let mut lines: Vec<VerbLine> = Vec::new();
+    for line in &verb.lines {
+        if let Some(l) = VerbLine::from_syntax(line) {
+            if !lines.contains(&l) {
+                lines.push(l);
+            }
+        }
+    }
+    // Asked of the RAW syntax lines, not of `lines`: "the story lets this verb
+    // take an object" is a different question from "the band knows how to
+    // compose one", and only the first decides whether a quick word is
+    // redundant in the column (SQ-1128).
+    let takes_object =
+        verb.lines.iter().any(|l| l.slots.iter().any(grammar_model::Slot::is_noun_slot));
+    let e = VerbEntry::new(word, lines);
+    if takes_object {
+        e.also_takes_object()
+    } else {
+        e
+    }
 }
 
 /// Refill the band's VERB column from the running story's own grammar.
@@ -527,30 +678,37 @@ pub fn verbs_from_grammar(verbs: &[grammar_model::Verb]) -> Vec<VerbEntry> {
 /// Called from the same per-tick hook as [`refresh_objects`], and for the same
 /// reason the band opens before it can ask: `Action::OpenCommandBand` has the
 /// config but no engine, so the band is born on the fallback and swaps to the
-/// story's own words on the tick before its first frame. Read ONCE per open —
-/// the grammar table is static, so no later turn can change the answer — and
-/// never over a `[command_panel] verbs` list, which is the player's own.
+/// story's own words on the tick before its first frame. The grammar is read
+/// once per open; the column is RE-RANKED once per turn (`turn_epoch`), because
+/// the verbs the player has typed move a verb into [`VerbTier::Story`]
+/// (SQ-1554). Never over a `[command_panel] verbs` list, which is the player's
+/// own.
 ///
 /// Returns `true` when the column actually changed (→ repaint).
 pub fn refresh_verbs(state: &mut AppState, session: &dyn crate::engine::Engine) -> bool {
     let Some(band) = state.overlays.command_band.as_ref() else { return false };
-    if band.verbs_read || band.verb_source == VerbSource::Configured {
+    if band.verb_source == VerbSource::Configured {
         return false;
     }
+    let epoch = state.turn_epoch;
+    let stale_story = band.verb_source == VerbSource::Story && band.verbs_epoch != Some(epoch);
+    if band.verbs_read && !stale_story {
+        return false;
+    }
+    // What the player has typed this session: the first word of every command
+    // line, which `story_verbs` resolves through the story's own dictionary.
+    // A slash command's `/` word resolves to nothing, so needs no filtering.
+    let used: std::collections::BTreeSet<String> = state
+        .command_history
+        .iter()
+        .filter_map(|c| c.split_whitespace().next())
+        .map(str::to_lowercase)
+        .collect();
     // `VocabState` is the one vocabulary seam (SQ-1117): the same snapshot the
     // guidance offer reads, cached for the session, so this costs one grammar
     // read whichever of the two asks first.
     let mut vocab = std::mem::take(&mut state.vocab);
-    // Spelled out for display (SQ-1553): `brandi` is `brandish`, and a word
-    // spelled out only ever APPENDS letters to its key, so the column's
-    // alphabetical order is unchanged.
-    let story = vocab.get(session).map(|v| {
-        let mut entries = verbs_from_grammar(v.verbs());
-        for e in &mut entries {
-            e.word = v.spell(&e.word).to_string();
-        }
-        entries
-    });
+    let story = vocab.get(session).map(|v| story_verbs(v, &used));
     state.vocab = vocab;
     let table = match story {
         Some(entries) if !entries.is_empty() => {
@@ -560,6 +718,7 @@ pub fn refresh_verbs(state: &mut AppState, session: &dyn crate::engine::Engine) 
     };
     let Some(band) = state.overlays.command_band.as_mut() else { return false };
     band.verbs_read = true;
+    band.verbs_epoch = Some(epoch);
     match table {
         Some(t) => {
             if band.verbs == t.entries && band.verb_source == t.source {
@@ -2473,29 +2632,71 @@ mod tests {
         assert_eq!(v.joiner(), Some("from"));
     }
 
-    /// Every dictionary spelling gets a row, one-letter abbreviations do not,
-    /// and the column comes out alphabetical. This is what puts `take` and
-    /// `look` in a Zork I column whose verbs are internally named `carry` and
-    /// `gaze`.
+    /// A Version 3 story's grammar as the vocabulary snapshot the band reads:
+    /// every spelling a verb word, six-character keys, and `text` as the words
+    /// its own static text holds.
+    fn story_vocab(
+        verbs: Vec<grammar_model::Verb>,
+        text: &[&str],
+    ) -> crate::vocab::StoryVocabulary {
+        let mut words = std::collections::BTreeMap::new();
+        for v in &verbs {
+            for w in &v.words {
+                let mut r = grammar_model::WordRoles::default();
+                r.verb = true;
+                words.insert(w.clone(), r);
+            }
+        }
+        crate::vocab::StoryVocabulary::new(verbs, words, Default::default(), 6)
+            .with_story_text(Some(text.iter().map(|w| w.to_string()).collect()))
+    }
+
+    fn verb(n: u32, words: &[&str], lines: Vec<grammar_model::SyntaxLine>) -> grammar_model::Verb {
+        grammar_model::Verb::new(n, 0, words.iter().map(|w| w.to_string()).collect(), lines)
+    }
+
+    /// SQ-1554: one row per VERB, not per spelling, in three tiers — the core
+    /// verbs this story accepts in their curated order, then what the story's
+    /// own text mentions, then everything else — each later tier alphabetical.
+    /// Nothing is dropped: every spelling still reaches its row. This is what
+    /// shows `take` and `look` in a Zork I column whose verbs are internally
+    /// named `carry` and `gaze`, and shows them FIRST.
     #[test]
-    fn the_story_s_column_is_every_spelling_alphabetically() {
+    fn the_story_s_column_is_one_row_per_verb_in_tiers() {
         let verbs = vec![
-            grammar_model::Verb::new(
+            verb(
                 255,
-                0,
-                vec!["carry".into(), "get".into(), "take".into()],
+                &["carry", "get", "take"],
                 vec![line(vec![noun()]), line(vec![noun(), word("from"), noun()])],
             ),
-            grammar_model::Verb::new(
-                254,
-                0,
-                vec!["gaze".into(), "l".into(), "look".into()],
-                vec![line(vec![]), line(vec![word("at"), noun()])],
-            ),
+            verb(254, &["dig"], vec![line(vec![noun()])]),
+            verb(253, &["pray"], vec![line(vec![])]),
+            verb(252, &["gaze", "l", "look"], vec![line(vec![]), line(vec![word("at"), noun()])]),
         ];
-        let entries = verbs_from_grammar(&verbs);
-        let words: Vec<&str> = entries.iter().map(|e| e.word.as_str()).collect();
-        assert_eq!(words, vec!["carry", "gaze", "get", "look", "take"], "no `l`, alphabetical");
+        let v = story_vocab(verbs, &["pray"]);
+        let entries = story_verbs(&v, &Default::default());
+        let rows: Vec<(&str, VerbTier)> = entries.iter().map(|e| (e.word.as_str(), e.tier)).collect();
+        assert_eq!(
+            rows,
+            vec![
+                ("look", VerbTier::Core),
+                ("take", VerbTier::Core),
+                ("pray", VerbTier::Story),
+                ("dig", VerbTier::More),
+            ],
+            "core in curated order (look before take), then mentioned, then the rest"
+        );
+        let take = entries.iter().find(|e| e.word == "take").expect("take");
+        assert_eq!(take.synonyms, vec!["carry", "get"], "folded, not dropped");
+        assert!(take.answers_to("carry") && take.answers_to("GET"));
+        let look = entries.iter().find(|e| e.word == "look").expect("look");
+        assert_eq!(look.synonyms, vec!["gaze"], "no one-letter `l`");
+
+        // A verb the player has typed joins the story tier.
+        let used = ["dig".to_string()].into_iter().collect();
+        let entries = story_verbs(&v, &used);
+        let dig = entries.iter().find(|e| e.word == "dig").expect("dig");
+        assert_eq!(dig.tier, VerbTier::Story);
         let take = entries.iter().find(|e| e.word == "take").expect("take");
         assert_eq!(take.max_nouns(), 2, "a synonym carries the verb's own shapes");
         assert_eq!(take.joiner(), Some("from"));
@@ -2516,13 +2717,8 @@ mod tests {
     /// syntax — which would answer the same here and wrongly for `look` above.
     #[test]
     fn a_genuinely_bare_verb_takes_no_object() {
-        let verbs = vec![grammar_model::Verb::new(
-            253,
-            0,
-            vec!["wait".into(), "z".into()],
-            vec![line(vec![])],
-        )];
-        let entries = verbs_from_grammar(&verbs);
+        let v = story_vocab(vec![verb(253, &["wait", "z"], vec![line(vec![])])], &[]);
+        let entries = story_verbs(&v, &Default::default());
         let wait = entries.iter().find(|e| e.word == "wait").expect("wait");
         assert!(!wait.takes_object, "one bare line and nothing else");
         assert_eq!(wait.max_nouns(), 0);
@@ -2542,6 +2738,25 @@ mod tests {
         let table = VerbTable::new(entries, VerbSource::Story).without_sigil_verbs();
         let words: Vec<&str> = table.entries.iter().map(|e| e.word.as_str()).collect();
         assert_eq!(words, vec!["take", "dollar", "hash"], "the sigil is a PREFIX, not a substring");
+    }
+
+    /// Folded spellings are filtered like the rows they used to be (SQ-1554):
+    /// a sigil or adult SYNONYM is stripped from its row, and a row whose shown
+    /// word goes is shown under a surviving synonym rather than lost.
+    #[test]
+    fn a_filter_reaches_folded_synonyms_and_promotes_a_survivor() {
+        let mut row = VerbEntry::new("#record", vec![VerbLine::bare()]);
+        row.synonyms = vec!["record".into()];
+        let mut take = VerbEntry::new("take", vec![VerbLine::object()]);
+        take.synonyms = vec!["$take".into(), "get".into()];
+        let table = VerbTable::new(vec![row, take], VerbSource::Story).without_sigil_verbs();
+        assert_eq!(table.entries[0].word, "record", "promoted, not dropped");
+        assert!(table.entries[0].synonyms.is_empty());
+        assert_eq!(table.entries[1].synonyms, vec!["get"], "the sigil synonym is gone");
+
+        let hidden = table.hiding(&["get".to_string(), "record".to_string()]);
+        assert_eq!(hidden.entries.len(), 1, "a row with nothing left to show goes");
+        assert!(hidden.entries[0].synonyms.is_empty());
     }
 
     /// The rule is the first character only, so a verb that merely contains one

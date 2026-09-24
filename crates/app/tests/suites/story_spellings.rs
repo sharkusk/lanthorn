@@ -102,16 +102,21 @@ fn spells_the_story_out(mut b: BootedStory, what: &str) {
     let v = b.state.vocab.get(b.session.as_ref()).expect("a Z-machine grammar");
     assert_eq!(v.spell("descri"), "descri", "{what}: two whole words reach it");
 
-    // The band's VERB column, through the host API.
+    // The band's VERB column, through the host API — every spelling it
+    // carries, shown or folded behind its row (SQ-1554).
     let band = app::host::refresh_band_data(&mut b.state, b.session.as_ref());
-    let verbs: Vec<&str> = band.verbs.iter().map(|e| e.word.as_str()).collect();
+    let verbs: Vec<&str> = band
+        .verbs
+        .iter()
+        .flat_map(|e| std::iter::once(&e.word).chain(&e.synonyms))
+        .map(String::as_str)
+        .collect();
     for want in ["examine", "brandish", "activate"] {
         assert!(verbs.contains(&want), "{what}: VERB column holds `{want}`: {verbs:?}");
     }
     for gone in ["examin", "brandi", "activa"] {
         assert!(!verbs.contains(&gone), "{what}: VERB column no longer shows `{gone}`");
     }
-    assert!(verbs.windows(2).all(|p| p[0] <= p[1]), "{what}: still alphabetical");
 }
 
 #[test]

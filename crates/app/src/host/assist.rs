@@ -50,8 +50,16 @@ pub fn set_guidance(
 /// beyond what a host actually needs to draw its own command help.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct BandData {
-    /// The VERB column: every word this story's grammar (or the built-in/
+    /// The VERB column: every verb this story's grammar (or the built-in/
     /// configured fallback) offers, with the sentence shapes it accepts.
+    ///
+    /// Ranked for a player (SQ-1554): [`VerbEntry::tier`] says which rows a
+    /// host shows up front (`Core`, then `Story`) and which go behind its own
+    /// "More…" (`More`); the list is already in that order. One row per verb,
+    /// its other spellings in [`VerbEntry::synonyms`].
+    ///
+    /// [`VerbEntry::tier`]: crate::render::command_band::VerbEntry::tier
+    /// [`VerbEntry::synonyms`]: crate::render::command_band::VerbEntry::synonyms
     pub verbs: Vec<crate::render::command_band::VerbEntry>,
     /// Where [`Self::verbs`] came from — the story's own grammar, the
     /// built-in fallback, or the player's `[command_panel] verbs`.
