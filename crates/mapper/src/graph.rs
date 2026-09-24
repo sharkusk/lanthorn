@@ -290,10 +290,29 @@ pub struct MapGraph {
     /// [`MapGraph::current`] itself, so walking between rooms the map already knows does not look
     /// like a fresh layout to a memo keyed on this.
     ///
+    /// **Deliberately NOT bumped by [`MapGraph::mark_tried`]/[`MapGraph::unmark_tried`]** (SQ-1551
+    /// considered it and rejected it): `observe` calls `mark_tried` on every typed direction,
+    /// including one that bounced off a wall, and `state::tests::
+    /// a_foiled_move_shows_up_immediately_without_a_geometry_change` pins that a foiled move must
+    /// NOT invalidate the routed DRAWN-layout memo this counter gates — only the MATRIX view draws
+    /// a tried marker, and re-routing the whole map on every failed compass attempt would be a real
+    /// regression for that one cell. [`MapGraph::tried_gen`] is the separate counter for that.
+    ///
     /// Not persisted — a fresh load is a fresh generation, and nothing compares this ACROSS a
     /// save/restore, only within one running session (a render memo, an embedding host's own
     /// redraw decision).
     struct_gen: u64,
+    /// Tried-direction generation counter (SQ-1551), the matrix view's own analogue of
+    /// `struct_gen`: bumped by [`MapGraph::mark_tried`]/[`MapGraph::unmark_tried`] when the tried
+    /// set for a room actually changes — the `×`/`·` marker the matrix view draws. Kept separate
+    /// from `struct_gen` on purpose: a typed direction that bounces off a wall happens on every
+    /// foiled move, and folding it into `struct_gen` would make a non-terminal host (or this
+    /// crate's own routed-layout memo) think the DRAWN layout needs re-deriving when nothing about
+    /// room positions or connections changed. A caller that draws the matrix view watches this
+    /// counter instead of (or alongside) `struct_gen`.
+    ///
+    /// Not persisted, for the same reason `struct_gen` is not: fresh per running session.
+    tried_gen: u64,
 }
 
 impl Default for MapGraph {
@@ -311,6 +330,7 @@ impl Default for MapGraph {
             seam_decisions: BTreeMap::new(),
             suggestions_disabled: false,
             struct_gen: 0,
+            tried_gen: 0,
         }
     }
 }
@@ -385,6 +405,7 @@ impl MapGraph {
             suggestions_disabled: false,
             // A freshly-loaded graph is a fresh generation — see the field's own doc comment.
             struct_gen: 0,
+            tried_gen: 0,
         }
     }
 
@@ -446,6 +467,20 @@ impl MapGraph {
     /// left unbumped) anywhere the field's own doc comment does not already account for.
     fn touch_layout(&mut self) {
         self.struct_gen = self.struct_gen.wrapping_add(1);
+    }
+
+    /// The tried-direction generation counter (SQ-1551) — see the field's own doc comment for why
+    /// this is separate from [`MapGraph::struct_gen`]. A caller that draws the matrix view's
+    /// `×`/`·` tried markers keys its own redraw decision on this rather than `struct_gen`, which a
+    /// foiled move deliberately does not bump.
+    pub fn tried_gen(&self) -> u64 {
+        self.tried_gen
+    }
+
+    /// Record that a tried-direction mutation just happened. Private for the same reason
+    /// [`MapGraph::touch_layout`] is.
+    fn touch_tried(&mut self) {
+        self.tried_gen = self.tried_gen.wrapping_add(1);
     }
 
     pub fn room(&self, id: RoomId) -> Option<&Room> {
@@ -776,11 +811,26 @@ impl MapGraph {
     /// saying anything new. A no-op for an unknown room.
     /// Record that `dir` was TYPED while standing in `id`, whether or not it moved the player
     /// (SQ-0391). Idempotent — a direction you try twice is still one tried direction.
+    ///
+    /// Bumps [`MapGraph::tried_gen`] (SQ-1551), NOT `struct_gen`, when this actually adds a new
+    /// tried direction: the matrix view draws a tried-direction marker for it, so a caller that
+    /// re-derives its own view only on a generation change would otherwise miss it — but
+    /// `observe` calls this on every typed direction including a foiled move (one that bounced off
+    /// a wall), and folding that into `struct_gen` would make the routed DRAWN-layout memo (and a
+    /// host keyed on the same counter) think room positions/connections need re-deriving on every
+    /// failed compass attempt, which they never do. See `struct_gen`'s own field doc for the test
+    /// that pins this. Re-marking an already-tried direction changes nothing drawn, so it does not
+    /// bump either counter — matching every other mutator here.
     pub fn mark_tried(&mut self, id: RoomId, dir: Direction) {
+        let mut newly_tried = false;
         if let Some(r) = self.rooms.get_mut(&id) {
             if !r.tried.contains(&dir) {
                 r.tried.push(dir);
+                newly_tried = true;
             }
+        }
+        if newly_tried {
+            self.touch_tried();
         }
     }
 
@@ -792,10 +842,17 @@ impl MapGraph {
     ///
     /// Only the TYPED record is dropped. A direction that also carries an edge out of `id` stays
     /// tried by [`MapGraph::is_tried`], because the edge is the stronger evidence and this cannot
-    /// (and must not) unmint it.
+    /// (and must not) unmint it. Bumps `tried_gen` (SQ-1551) when it actually clears a typed
+    /// record — the matrix view's marker for `dir` reverts from `×` to `·` when that happens.
     pub fn unmark_tried(&mut self, id: RoomId, dir: Direction) {
+        let mut changed = false;
         if let Some(r) = self.rooms.get_mut(&id) {
+            let before = r.tried.len();
             r.tried.retain(|d| *d != dir);
+            changed = r.tried.len() != before;
+        }
+        if changed {
+            self.touch_tried();
         }
     }
 
@@ -1226,6 +1283,7 @@ impl MapGraph {
             seam_decisions: BTreeMap::new(),
             suggestions_disabled: false,
             struct_gen: 0,
+            tried_gen: 0,
         }
     }
 
@@ -2092,5 +2150,53 @@ mod struct_gen_tests {
         let gen = g.struct_gen();
         g.mark_random_exit(1, Direction::S); // promotes the inherited mark, badge already drawn
         assert_eq!(g.struct_gen(), gen, "promoting an inherited mark with no new badge must not bump");
+    }
+
+    /// SQ-1551: `mark_tried`/`unmark_tried` never touch `struct_gen` at all — see the field's own
+    /// doc comment for why (a foiled move must not look like a layout change to the routed DRAWN
+    /// memo). `tried_gen_tests` below covers the counter they DO bump.
+    #[test]
+    fn mark_tried_and_unmark_tried_never_bump_struct_gen() {
+        let mut g = MapGraph::new();
+        g.upsert_room(1, "Hall".into());
+        let gen = g.struct_gen();
+        g.mark_tried(1, Direction::N);
+        assert_eq!(g.struct_gen(), gen, "a tried mark is not a layout change");
+        g.unmark_tried(1, Direction::N);
+        assert_eq!(g.struct_gen(), gen, "nor is undoing one");
+    }
+}
+
+#[cfg(test)]
+mod tried_gen_tests {
+    use super::*;
+
+    // ── SQ-1551: tried-direction generation counter ──────────────────────────────
+
+    #[test]
+    fn mark_tried_bumps_tried_gen_only_on_a_new_direction() {
+        let mut g = MapGraph::new();
+        g.upsert_room(1, "Hall".into());
+        let gen = g.tried_gen();
+        g.mark_tried(1, Direction::N);
+        assert_ne!(g.tried_gen(), gen, "a genuinely new tried direction must bump");
+
+        let gen = g.tried_gen();
+        g.mark_tried(1, Direction::N); // same direction again
+        assert_eq!(g.tried_gen(), gen, "re-marking an already-tried direction must not bump");
+    }
+
+    #[test]
+    fn unmark_tried_bumps_tried_gen_only_when_it_clears_a_real_mark() {
+        let mut g = MapGraph::new();
+        g.upsert_room(1, "Hall".into());
+        g.mark_tried(1, Direction::N);
+        let gen = g.tried_gen();
+        g.unmark_tried(1, Direction::N);
+        assert_ne!(g.tried_gen(), gen, "clearing a real typed record must bump");
+
+        let gen = g.tried_gen();
+        g.unmark_tried(1, Direction::N); // already cleared
+        assert_eq!(g.tried_gen(), gen, "unmarking an already-clear direction must not bump");
     }
 }

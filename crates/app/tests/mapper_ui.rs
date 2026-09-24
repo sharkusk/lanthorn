@@ -126,3 +126,5 @@ mod sq1342_quit_clears_resume;
 mod sq1345_zork1_forest_shadow;
 #[path = "suites/sq1351_nguhd_topics.rs"]
 mod sq1351_nguhd_topics;
+#[path = "suites/sq1551_host_map_editing.rs"]
+mod sq1551_host_map_editing;

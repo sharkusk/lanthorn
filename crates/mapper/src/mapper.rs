@@ -95,6 +95,12 @@ impl Mapper {
         self.graph.struct_gen()
     }
 
+    /// The graph's tried-direction generation counter (SQ-1551) — see [`MapGraph::tried_gen`].
+    /// Same convenience as [`Mapper::struct_gen`], for the matrix view's own tried markers.
+    pub fn tried_gen(&self) -> u64 {
+        self.graph.tried_gen()
+    }
+
     /// Observe the player's location after a turn. The conservative form: when the location has
     /// not changed, nothing is minted — the direction is merely recorded as tried.
     pub fn observe(&mut self, location: RoomId, name: &str, via: Option<Direction>) {

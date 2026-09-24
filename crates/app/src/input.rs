@@ -4250,7 +4250,12 @@ fn parse_move_region_arg(
 
 /// Why the rooms to move could not be settled — a refusal that belongs to the SEAM, not to the
 /// destination (SQ-0439).
-enum SeamRefusal {
+///
+/// `pub` since SQ-1551: a host embedding `AppState` without the terminal UI offers its own
+/// "Move to another layer…" action and needs [`choose_region`]'s own refusals to explain why a
+/// move can't happen, rather than reinventing them.
+#[derive(Debug)]
+pub enum SeamRefusal {
     /// The seam was named and the region walk turned it down; the pair is the passage tried.
     Region(mapper::layer::RegionRefusal, Option<(mapper::graph::RoomId, Direction)>),
     /// Several passages lead into the room and each cuts a different map. Nothing to auto-pick
@@ -4280,7 +4285,11 @@ enum SeamRefusal {
 /// direction first — so the command a tier-3 refusal suggests means what the list said it meant —
 /// falling back to the passage of that direction OUT of the room, which is the only way to name a
 /// one-way exit.
-fn choose_region(
+///
+/// `pub` since SQ-1551: a host without the TUI's "move-region" command still needs "which rooms
+/// would a move take from here" for its own layer-editing UI, and reimplementing this ordering
+/// against `mapper`'s public API can silently drift from what the TUI actually does.
+pub fn choose_region(
     graph: &mapper::graph::MapGraph,
     room: mapper::graph::RoomId,
     dir: Option<Direction>,
@@ -4317,7 +4326,10 @@ fn choose_region(
 /// Mirrors [`mapper::layer::move_region`]'s own refusals rather than inventing a second rule: a new
 /// layer is only a rename when the region is its whole layer, and Main may be moved out of but
 /// never emptied.
-fn move_targets(
+///
+/// `pub` since SQ-1551: a host's "Move to another layer…" action needs the same destination list
+/// the TUI offers, from `mapper`'s public API alone.
+pub fn move_targets(
     graph: &mapper::graph::MapGraph,
     region: &mapper::layer::Region,
 ) -> Vec<mapper::layer::MoveTarget> {
@@ -4566,10 +4578,17 @@ pub fn open_layer_suggestion(
         // The seam is the way IN, and the region is the maze side of it.
         Trigger::Name => (
             "This looks like a maze.".to_string(),
-            vec![
-                format!("{} calls itself a maze.", room_label(graph, suggestion.region.anchor)),
-                "Separating it also flags the layer as a maze.".to_string(),
-            ],
+            {
+                let mut body =
+                    vec![format!("{} calls itself a maze.", room_label(graph, suggestion.region.anchor))];
+                // Read from `suggestion_sets_maze_flag` rather than stated as a bare fact: that is
+                // also what `accept_layer_suggestion` consults to decide whether to actually set
+                // the flag (SQ-1551), so this sentence cannot promise something accepting won't do.
+                if suggestion_sets_maze_flag(suggestion.trigger) {
+                    body.push("Separating it also flags the layer as a maze.".to_string());
+                }
+                body
+            },
         ),
     };
     let options = dest_options(graph, &suggestion.destinations);
@@ -4668,7 +4687,7 @@ fn open_dest_prompt(
 /// seam across two layers, which silences it by construction.
 pub fn apply_region_prompt(state: &mut AppState, mapper: &mut Mapper, act: crate::state::RegionPromptAct) {
     use crate::state::{RegionOption, RegionPromptAct as A, RegionPromptKind as K};
-    use mapper::suggest::{SeamDecision, Trigger};
+    use mapper::suggest::SeamDecision;
     let Some(prompt) = state.overlays.region_prompt.take() else { return };
     let chosen = prompt.chosen().cloned();
     match (&prompt.kind, act) {
@@ -4686,13 +4705,11 @@ pub fn apply_region_prompt(state: &mut AppState, mapper: &mut Mapper, act: crate
         (_, A::Defer | A::Never | A::NeverForStory) => {}
         (K::Suggest { trigger, region, .. }, A::Accept) => {
             let Some(RegionOption::Dest { target, .. }) = chosen else { return };
-            if let Some(landed) = perform_move(state, mapper, region, None, target) {
-                // The player confirmed it is a maze by accepting a prompt that said so. A
-                // structural suggestion sets nothing — a cellar is not a maze.
-                if *trigger == Trigger::Name {
-                    mapper.graph.set_layer_maze(landed, true);
-                }
-            }
+            // The player confirmed it is a maze by accepting a prompt that said so. A structural
+            // suggestion sets nothing — a cellar is not a maze. `suggestion_sets_maze_flag` is the
+            // one place that rule lives, so the prompt's own "flags it as a maze" line (built in
+            // `open_layer_suggestion`) cannot say something this accept doesn't actually do.
+            accept_layer_suggestion(state, mapper, region, target, suggestion_sets_maze_flag(*trigger));
         }
         (K::PickSeam { room, dest }, A::Accept) => {
             let Some(RegionOption::Seam { from, dir, .. }) = chosen else { return };
@@ -4714,6 +4731,40 @@ pub fn apply_region_prompt(state: &mut AppState, mapper: &mut Mapper, act: crate
             perform_move(state, mapper, region, *cut, target);
         }
     }
+}
+
+/// Whether accepting a layer suggestion with this trigger sets the maze flag on the layer the
+/// rooms land on (SQ-1551) — the player confirmed it is a maze by accepting a prompt that said so,
+/// and a structural suggestion (no such claim) sets nothing.
+///
+/// This is the one place that rule lives: [`accept_layer_suggestion`]'s own maze-flag step reads
+/// it, and so does [`open_layer_suggestion`]'s "Separating it also flags the layer as a maze"
+/// line, so the sentence a host or the TUI shows before accepting can never promise something the
+/// accept itself doesn't do.
+pub fn suggestion_sets_maze_flag(trigger: mapper::suggest::Trigger) -> bool {
+    trigger == mapper::suggest::Trigger::Name
+}
+
+/// Accept a layer suggestion: move the region, and — only when `set_maze_flag` says so — flag the
+/// layer it landed on as a maze (SQ-1551).
+///
+/// Split out of what was a single bundled step in [`apply_region_prompt`] so a host that does not
+/// use maze flags (and shows a suggested layer in its own matrix view instead of a maze view) can
+/// accept the very same suggestion without the flag, rather than reimplementing the move to skip
+/// one side effect. The TUI's own accept path is unchanged: it always calls this with
+/// `set_maze_flag = suggestion_sets_maze_flag(trigger)`.
+pub fn accept_layer_suggestion(
+    state: &mut AppState,
+    mapper: &mut Mapper,
+    region: &mapper::layer::Region,
+    target: mapper::layer::MoveTarget,
+    set_maze_flag: bool,
+) -> Option<mapper::layer::LayerId> {
+    let landed = perform_move(state, mapper, region, None, target)?;
+    if set_maze_flag {
+        mapper.graph.set_layer_maze(landed, true);
+    }
+    Some(landed)
 }
 
 /// Say which of the several quite different reasons the REGION could not be computed (SQ-0360).
