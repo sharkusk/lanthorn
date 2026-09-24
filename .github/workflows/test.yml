@@ -145,3 +145,36 @@ jobs:
       # across many pre-existing files), so adding the check now would fail
       # on unrelated code rather than catch new drift. Revisit once the tree
       # is formatted.
+
+  # SQ-1541: `app` without sound output — what a host that delivers sound
+  # somewhere else (a browser, a phone) builds. `--no-default-features` drops
+  # `playback`, and with it rodio → cpal → alsa-sys, so this job deliberately
+  # does NOT install libasound2-dev: if ALSA creeps back into this build, the
+  # tree check below names the path and the build fails on the missing
+  # headers. Linux only, because ALSA is Linux-only.
+  no-playback:
+    name: build without sound output (ubuntu-latest, no ALSA)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Rust
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Cache cargo build
+        uses: Swatinem/rust-cache@v2
+        with:
+          key: no-playback
+
+      # Written to a file first so a failing `cargo tree` fails this step rather
+      # than reading as "no match".
+      - name: No audio device library in the dependency tree
+        run: |
+          cargo tree -p lanthorn --locked --no-default-features -e normal --target all --prefix none > tree.txt
+          if grep -E '^(alsa-sys|alsa|cpal|rodio) ' tree.txt; then
+            echo "::error::lanthorn --no-default-features still depends on an audio device library"
+            exit 1
+          fi
+
+      - name: cargo build --no-default-features
+        run: cargo build -p lanthorn --locked --no-default-features

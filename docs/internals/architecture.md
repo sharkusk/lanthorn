@@ -183,6 +183,12 @@ caller of it: there is one copy of each rule.
   sound through `sound_finished`, which runs the routine exactly as the TUI does
   when its device reports one. `tests/suites/host_turn.rs` drives Zork I into the
   grue and a hand-assembled `@sound_effect` story through a recording sink.
+  The device itself is `app`'s default-on `playback` feature (SQ-1541):
+  `--no-default-features` drops rodio → cpal → ALSA, the default sink becomes
+  `host::sound::Silence`, and the `audio` crate's device-free decoders
+  (`decode_aiff`, `tone`/`bleep`, `render_mod` → `Pcm` → `Pcm::to_wav`) are
+  what such a host's sink works with. CI's `no-playback` job builds that
+  configuration on Linux with no `libasound2-dev` installed.
 - **The rest of a session** (SQ-1539) — `host::clock`: `refresh_input` re-arms the
   timed-input and Glk-timer deadlines, `next_deadline` says when to wake,
   `fire_due(now)` fires what is due (interrupt routines, Glk timers, sound

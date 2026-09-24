@@ -1,6 +1,14 @@
 //! Cross-platform host-side audio backend for lanthorn. Plays synthesised tones
 //! (Z-machine bleeps) and decoded samples (Blorb `Snd ` resources) via `rodio`.
 //! With the `playback` feature off, the backend is a compile-time no-op.
+//!
+//! **Decoding needs no device** (SQ-1541). [`decode_aiff`], [`tone`] /
+//! [`bleep`] and (with `mod-music`) [`render_mod`] turn a sound into [`Pcm`] —
+//! interleaved 16-bit samples — and [`Pcm::to_wav`] wraps it in a RIFF WAVE
+//! file, so a host that delivers sound somewhere else (a browser, a phone) can
+//! hand it to anything that plays WAV. None of it touches `rodio`, and all of it
+//! builds with `default-features = false`. Ogg is left as the bytes it arrived
+//! in: decoding it is what `rodio` is here for.
 
 /// Identifies a playing sampled sound so the host can stop it or detect its end.
 pub type SoundId = u32;
@@ -15,6 +23,87 @@ pub enum SoundFormat {
 
 const SAMPLE_RATE: u32 = 44100;
 
+/// Decoded sound, ready for any output: `channels` interleaved signed 16-bit
+/// samples at `rate` Hz (a stereo frame is `[left, right]`).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Pcm {
+    pub channels: u16,
+    pub rate: u32,
+    pub samples: Vec<i16>,
+}
+
+impl Pcm {
+    /// Sample frames — one sample per channel each.
+    pub fn frames(&self) -> usize {
+        self.samples.len() / usize::from(self.channels.max(1))
+    }
+
+    /// The same sound as a RIFF WAVE file: 16-bit little-endian PCM
+    /// (`WAVE_FORMAT_PCM`), the one format every WAV player reads.
+    pub fn to_wav(&self) -> Vec<u8> {
+        let data_len = (self.samples.len() * 2) as u32;
+        let block_align = self.channels * 2;
+        let mut out = Vec::with_capacity(44 + data_len as usize);
+        out.extend_from_slice(b"RIFF");
+        out.extend_from_slice(&(36 + data_len).to_le_bytes());
+        out.extend_from_slice(b"WAVE");
+        out.extend_from_slice(b"fmt ");
+        out.extend_from_slice(&16u32.to_le_bytes()); // fmt chunk length
+        out.extend_from_slice(&1u16.to_le_bytes()); // WAVE_FORMAT_PCM
+        out.extend_from_slice(&self.channels.to_le_bytes());
+        out.extend_from_slice(&self.rate.to_le_bytes());
+        out.extend_from_slice(&(self.rate * u32::from(block_align)).to_le_bytes()); // byte rate
+        out.extend_from_slice(&block_align.to_le_bytes());
+        out.extend_from_slice(&16u16.to_le_bytes()); // bits per sample
+        out.extend_from_slice(b"data");
+        out.extend_from_slice(&data_len.to_le_bytes());
+        for s in &self.samples {
+            out.extend_from_slice(&s.to_le_bytes());
+        }
+        out
+    }
+}
+
+/// The Z-machine's high bleep, sound 1 (ZMSD §15), as lanthorn plays it.
+pub const HIGH_BLEEP_HZ: f32 = 800.0;
+/// The Z-machine's low bleep, sound 2 (ZMSD §15).
+pub const LOW_BLEEP_HZ: f32 = 400.0;
+/// How long either bleep sounds.
+pub const BLEEP_MS: u32 = 150;
+
+/// A short decaying sine at `freq_hz` for `ms`, as mono 44100 Hz PCM at full
+/// scale — the tone [`AudioBackend::play_tone`] plays, before volume.
+pub fn tone(freq_hz: f32, ms: u32) -> Pcm {
+    let samples = synth_tone(freq_hz, ms)
+        .into_iter()
+        .map(|v| (v.clamp(-1.0, 1.0) * f32::from(i16::MAX)) as i16)
+        .collect();
+    Pcm { channels: 1, rate: SAMPLE_RATE, samples }
+}
+
+/// The Z-machine bleep `number` — 1 high, 2 low (ZMSD §15) — or `None` for any
+/// other sound number, which is a sampled resource rather than a tone.
+pub fn bleep(number: u16) -> Option<Pcm> {
+    match number {
+        1 => Some(tone(HIGH_BLEEP_HZ, BLEEP_MS)),
+        2 => Some(tone(LOW_BLEEP_HZ, BLEEP_MS)),
+        _ => None,
+    }
+}
+
+/// Render a ProTracker MOD to PCM (interleaved stereo, 44100 Hz), playing the
+/// song through once — or stopping after `max_frames` frames, for a module that
+/// loops on itself. `None` for a malformed module.
+#[cfg(feature = "mod-music")]
+pub fn render_mod(bytes: &[u8], max_frames: Option<usize>) -> Option<Pcm> {
+    let source = mod_stream::ModSource::new(bytes, false, 1)?;
+    let samples: Vec<i16> = match max_frames {
+        Some(n) => source.take(n.saturating_mul(2)).collect(),
+        None => source.collect(),
+    };
+    Some(Pcm { channels: 2, rate: SAMPLE_RATE, samples })
+}
+
 /// Master+Z-scale gain in 0.0..=1.0. Master is 0..=100; z_volume is the Z-machine
 /// 1..=8 scale, with 0/255 meaning "loudest" (full).
 #[cfg_attr(not(feature = "playback"), allow(dead_code))]
@@ -28,7 +117,6 @@ fn gain(master: u8, z_volume: u8) -> f32 {
 
 /// A short decaying sine at `freq_hz` for `ms` at 44100 Hz (unit amplitude,
 /// linear decay envelope). Volume is applied by the caller via the sink.
-#[cfg_attr(not(feature = "playback"), allow(dead_code))]
 fn synth_tone(freq_hz: f32, ms: u32) -> Vec<f32> {
     let n = ((ms as f32 / 1000.0) * SAMPLE_RATE as f32) as usize;
     let mut out = Vec::with_capacity(n);
@@ -44,7 +132,6 @@ fn synth_tone(freq_hz: f32, ms: u32) -> Vec<f32> {
 /// Decode a 10-byte 80-bit IEEE-754 extended float (AIFF sample rate) to u32 Hz.
 /// Layout: 1 sign bit, 15 exponent bits (bias 16383), 64 mantissa bits with an
 /// explicit integer bit. value = mantissa * 2^(exponent - 16383 - 63).
-#[cfg_attr(not(feature = "playback"), allow(dead_code))]
 fn extended80_to_u32(b: &[u8; 10]) -> u32 {
     let exponent = (((b[0] & 0x7F) as u32) << 8) | b[1] as u32;
     let mantissa = u64::from_be_bytes([b[2], b[3], b[4], b[5], b[6], b[7], b[8], b[9]]);
@@ -61,10 +148,10 @@ fn extended80_to_u32(b: &[u8; 10]) -> u32 {
     val as u32
 }
 
-/// Parse an IFF `FORM`/`AIFF` container into (channels, sample_rate, interleaved
-/// big-endian 16-bit PCM). Returns None on a malformed or non-16-bit AIFF.
-#[cfg_attr(not(feature = "playback"), allow(dead_code))]
-fn decode_aiff(bytes: &[u8]) -> Option<(u16, u32, Vec<i16>)> {
+/// Decode an IFF `FORM`/`AIFF` (or `AIFC`) container — a Blorb `Snd ` resource,
+/// an Infocom disk sample (`blorb::infocom_sound::InfocomSound::to_aiff`) — into
+/// [`Pcm`]. 8-bit samples are widened to 16. `None` on a malformed AIFF.
+pub fn decode_aiff(bytes: &[u8]) -> Option<Pcm> {
     // `Blorb::sound` returns an AIFF resource as a full `FORM`...`AIFF`/`AIFC`
     // container (the `FORM`+len header is part of the resource per the Blorb
     // spec). Accept that, and also a bare payload starting directly at the form
@@ -150,7 +237,7 @@ fn decode_aiff(bytes: &[u8]) -> Option<(u16, u32, Vec<i16>)> {
     if pcm.is_empty() {
         return None;
     }
-    Some((channels, sample_rate, pcm))
+    Some(Pcm { channels, rate: sample_rate, samples: pcm })
 }
 
 /// A lazy, streaming ProTracker MOD source. Wraps an `XmrsPlayer` that renders
@@ -163,7 +250,7 @@ fn decode_aiff(bytes: &[u8]) -> Option<(u16, u32, Vec<i16>)> {
 /// `Sink` must be `Send + 'static`. `self_cell` lets us own the `Module` and the
 /// `XmrsPlayer` that borrows it in one `Send + 'static` value without leaking.
 #[cfg(feature = "mod-music")]
-mod mod_stream {
+pub mod mod_stream {
     use super::SAMPLE_RATE;
     use xmrs::prelude::Module;
     use xmrsplayer::prelude::XmrsPlayer;
@@ -328,7 +415,7 @@ impl AudioBackend {
         let (forever, count) = repeat_plan(repeats);
         match format {
             SoundFormat::Aiff => {
-                let (channels, rate, pcm) = decode_aiff(bytes)?;
+                let Pcm { channels, rate, samples: pcm } = decode_aiff(bytes)?;
                 if forever {
                     sink.append(rodio::buffer::SamplesBuffer::new(channels, rate, pcm.clone()).repeat_infinite());
                 } else {
@@ -545,7 +632,9 @@ mod tests {
     #[test]
     fn backend_no_device_paths_never_panic() {
         // The whole point is the no-device path — so force it, rather than open
-        // (and slowly tear down) a real device on a machine that has one.
+        // (and slowly tear down) a real device on a machine that has one. (The
+        // no-op backend without `playback` has no device to skip.)
+        #[cfg(feature = "playback")]
         disable_output_for_tests();
         // Constructing a backend must succeed even with no output device (CI).
         let mut b = AudioBackend::new(100);
@@ -599,7 +688,7 @@ mod tests {
 
     #[test]
     fn decode_aiff_parses_comm_and_ssnd() {
-        let (channels, rate, pcm) = decode_aiff(&tiny_aiff()).expect("valid AIFF");
+        let Pcm { channels, rate, samples: pcm } = decode_aiff(&tiny_aiff()).expect("valid AIFF");
         assert_eq!(channels, 1);
         assert_eq!(rate, 44100);
         assert_eq!(pcm, vec![256i16, -256i16]);
@@ -639,7 +728,7 @@ mod tests {
         form.extend_from_slice(&(body.len() as u32).to_be_bytes());
         form.extend_from_slice(&body);
 
-        let (channels, rate, pcm) = decode_aiff(&form).expect("SSND-first AIFF is legal");
+        let Pcm { channels, rate, samples: pcm } = decode_aiff(&form).expect("SSND-first AIFF is legal");
         assert_eq!(channels, 1);
         assert_eq!(rate, 44100);
         assert_eq!(pcm, vec![256i16, -256i16], "16-bit data decoded as 16-bit");
@@ -681,7 +770,7 @@ mod tests {
         form.extend_from_slice(&(body.len() as u32).to_be_bytes());
         form.extend_from_slice(&body);
 
-        let (_, _, pcm) = decode_aiff(&form).expect("valid AIFF with offset");
+        let pcm = decode_aiff(&form).expect("valid AIFF with offset").samples;
         assert_eq!(pcm, vec![256i16, -256i16], "the offset pad bytes are skipped");
     }
 
@@ -720,7 +809,8 @@ mod tests {
 
     #[test]
     fn decode_aiff_accepts_blorb_payload_8bit() {
-        let (channels, rate, pcm) = decode_aiff(&blorb_aiff_payload_8bit()).expect("valid blorb AIFF payload");
+        let Pcm { channels, rate, samples: pcm } =
+            decode_aiff(&blorb_aiff_payload_8bit()).expect("valid blorb AIFF payload");
         assert_eq!(channels, 1);
         assert_eq!(rate, 44100);
         assert_eq!(pcm, vec![32512i16, -32768i16, 0i16]);
@@ -782,5 +872,72 @@ mod tests {
         let src = ModSource::new(&minimal_mod(), false, 1).expect("valid minimal MOD");
         let pcm: Vec<i16> = src.collect();
         assert!(!pcm.is_empty(), "one pattern still yields frames");
+    }
+
+    // ── SQ-1541: decode with no device ─────────────────────────────────────────
+
+    /// Parse a RIFF WAVE of 16-bit PCM back into [`Pcm`] — the reader the
+    /// round-trip below checks `to_wav` against, written from the RIFF/WAVE
+    /// layout rather than from the encoder.
+    fn read_wav(w: &[u8]) -> Pcm {
+        assert_eq!(&w[0..4], b"RIFF");
+        assert_eq!(u32::from_le_bytes(w[4..8].try_into().unwrap()) as usize, w.len() - 8, "RIFF size");
+        assert_eq!(&w[8..12], b"WAVE");
+        assert_eq!(&w[12..16], b"fmt ");
+        assert_eq!(u32::from_le_bytes(w[16..20].try_into().unwrap()), 16);
+        assert_eq!(u16::from_le_bytes([w[20], w[21]]), 1, "PCM");
+        let channels = u16::from_le_bytes([w[22], w[23]]);
+        let rate = u32::from_le_bytes(w[24..28].try_into().unwrap());
+        let byte_rate = u32::from_le_bytes(w[28..32].try_into().unwrap());
+        let block_align = u16::from_le_bytes([w[32], w[33]]);
+        assert_eq!(u16::from_le_bytes([w[34], w[35]]), 16, "16-bit");
+        assert_eq!(block_align, channels * 2);
+        assert_eq!(byte_rate, rate * u32::from(block_align));
+        assert_eq!(&w[36..40], b"data");
+        let len = u32::from_le_bytes(w[40..44].try_into().unwrap()) as usize;
+        assert_eq!(len, w.len() - 44);
+        let samples = w[44..].as_chunks::<2>().0.iter().map(|c| i16::from_le_bytes(*c)).collect();
+        Pcm { channels, rate, samples }
+    }
+
+    #[test]
+    fn a_tone_is_mono_44100_pcm_of_the_length_asked_for() {
+        let t = tone(440.0, 100);
+        assert_eq!((t.channels, t.rate), (1, 44100));
+        assert_eq!(t.frames(), 4410, "100ms at 44100 Hz");
+        assert!(t.samples.iter().any(|s| s.unsigned_abs() > 3000), "a tone, not silence");
+        let high = bleep(1).expect("sound 1 is the high bleep");
+        let low = bleep(2).expect("sound 2 is the low bleep");
+        assert_eq!(high.frames(), (BLEEP_MS as usize) * 441 / 10);
+        assert_eq!(high.frames(), low.frames(), "both bleeps last as long");
+        assert_ne!(high.samples, low.samples, "at different pitches");
+        assert!(bleep(3).is_none(), "3 and up are sampled resources, not tones");
+    }
+
+    #[test]
+    fn an_aiff_round_trips_through_the_wav_encoder() {
+        for aiff in [tiny_aiff(), blorb_aiff_payload_8bit()] {
+            let pcm = decode_aiff(&aiff).expect("valid AIFF");
+            let wav = pcm.to_wav();
+            assert_eq!(wav.len(), 44 + pcm.samples.len() * 2);
+            assert_eq!(read_wav(&wav), pcm, "WAV carries exactly the decoded samples");
+        }
+        let tone = tone(800.0, 20);
+        assert_eq!(read_wav(&tone.to_wav()), tone, "and a synthesized tone");
+    }
+
+    /// One 64-row pattern at ProTracker's defaults — speed 6 ticks a row, 125
+    /// BPM, so a tick is 2.5 / 125 s = 20 ms, 882 frames at 44100 Hz — is
+    /// 64 × 6 × 882 frames of stereo.
+    #[cfg(feature = "mod-music")]
+    #[test]
+    fn a_mod_renders_to_the_frames_its_song_lasts() {
+        let pcm = render_mod(&minimal_mod(), None).expect("valid minimal MOD");
+        assert_eq!((pcm.channels, pcm.rate), (2, 44100));
+        assert_eq!(pcm.frames(), 64 * 6 * 882, "one pattern at the default speed and tempo");
+        let capped = render_mod(&minimal_mod(), Some(1000)).expect("valid minimal MOD");
+        assert_eq!(capped.frames(), 1000, "a cap stops the render");
+        assert!(render_mod(&[0u8; 100], None).is_none(), "a malformed module renders nothing");
+        assert_eq!(read_wav(&capped.to_wav()), capped);
     }
 }

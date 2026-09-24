@@ -3682,7 +3682,7 @@ impl Default for AppState {
         // `TEST_SILENCE` only skips opening the device — so nothing about the
         // production path goes untested. Invisible to the shipped binary,
         // which is built without `cfg(test)`.
-        #[cfg(test)]
+        #[cfg(all(test, feature = "playback"))]
         audio::disable_output_for_tests();
 
         Self {
@@ -4014,10 +4014,10 @@ impl AppState {
                 // operand; zvm now defaults a real sound's omitted effect to
                 // 2 = play, so the compensation is gone with it).
                 1 | 2 => {
-                    let freq = if ev.number == 1 { 800.0 } else { 400.0 };
+                    let freq = if ev.number == 1 { audio::HIGH_BLEEP_HZ } else { audio::LOW_BLEEP_HZ };
                     self.audio
                         .get_or_insert_with(|| crate::host::sound::default_sound_sink(volume))
-                        .tone(freq, 150, ev.volume);
+                        .tone(freq, audio::BLEEP_MS, ev.volume);
                 }
                 n => match ev.effect {
                     3 => {
@@ -6088,8 +6088,7 @@ mod tests {
         use crate::session::SchannelOp;
         let mut state = AppState::default();
         state.config.enable_sound = true;
-        audio::disable_output_for_tests(); // silent backend: no real device to open/tear down
-        state.audio = Some(Box::new(audio::AudioBackend::new(50)));
+        state.audio = Some(crate::host::sound::default_sound_sink(50)); // silent in tests: no device
         // Seed the channel's current gain (as a prior play/set_volume would).
         state.glulx_gain.insert(1, 1.0);
         // A ramped set_volume_ext installs a ramp from the current gain to target
@@ -6128,8 +6127,7 @@ mod tests {
         use crate::session::SchannelOp;
         let mut state = AppState::default();
         state.config.enable_sound = true;
-        audio::disable_output_for_tests(); // silent backend: no real device to open/tear down
-        state.audio = Some(Box::new(audio::AudioBackend::new(50)));
+        state.audio = Some(crate::host::sound::default_sound_sink(50)); // silent in tests: no device
         // A ramped set_volume_ext with a nonzero notify schedules a pending
         // volume-notify keyed by channel (no live sound needed).
         state.play_glulx_sound_ops(&[SchannelOp::SetVolumeExt { chan: 1, vol: 0x8000, duration_ms: 1000, notify: 7 }]);

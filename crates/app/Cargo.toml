@@ -78,6 +78,16 @@ bin-dir = "lanthorn-{ version }-windows-x86_64/{ bin }{ binary-ext }"
 # t-input input`. Run everything (CI does): `--features t-all` or
 # `--all-features`.
 [features]
+# SQ-1541: sound output through a real device (`audio/playback` → rodio → cpal,
+# and on Linux ALSA, which needs libasound2-dev to build). On by default, and the
+# TUI always has it; a host that delivers sound elsewhere builds with
+# `--no-default-features` and installs its own `host::sound::SoundSink` — the
+# PCM decoders (`audio::decode_aiff`, `audio::tone`, `audio::render_mod`) need
+# no device either way. `mod-music` is ProTracker MOD decoding (pure Rust),
+# separate so it can stay on without playback.
+default = ["playback", "mod-music"]
+playback = ["audio/playback"]
+mod-music = ["audio/mod-music"]
 t-input = []    # input.rs, keymap, slash(_dispatch), browser, complete, pixel/pane mouse
 t-render = []   # render/*, plus the model layer it draws (graphics, layout, fonts, list_scroll, pager, clipboard, cell_dump)
 t-picker = []   # picker*, ifdb*, ifiction, ifid, fetch_worker, cover*, story_info/menu/pick/url, launch_options*, metadata_import
@@ -107,7 +117,8 @@ grammar-model = { package = "lanthorn-grammar-model", path = "../grammar-model",
 verb-synonyms = { package = "lanthorn-verb-synonyms", path = "../verb-synonyms", version = "0.7.2" }
 mapper = { package = "lanthorn-mapper", path = "../mapper", version = "0.7.2" }
 blorb = { package = "lanthorn-blorb", path = "../blorb", version = "0.7.2" }
-audio = { package = "lanthorn-audio", path = "../audio", version = "0.7.2" }
+# Features chosen by this crate's own `playback`/`mod-music` (see [features]).
+audio = { package = "lanthorn-audio", path = "../audio", version = "0.7.2", default-features = false }
 ratatui = { version = "0.30", features = ["crossterm_0_29"] }
 crossterm = "0.29"
 ratatui-image = { version = "12.0.0-rc.0", default-features = false }

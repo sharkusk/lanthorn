@@ -5918,6 +5918,7 @@ mod tests {
         // Regression: launching with enable_sound = false never constructs an
         // AudioBackend (see main.rs), so flipping the config flag alone leaves
         // state.audio == None forever. ToggleSound must build the backend too.
+        #[cfg(feature = "playback")]
         audio::disable_output_for_tests(); // ToggleSound builds a real backend; keep it silent
         let mut s = AppState::default();
         s.config.enable_sound = false;
@@ -6049,6 +6050,7 @@ mod tests {
     /// read that as "still the flag's" and refuse to save the user's actual choice.
     #[test]
     fn editing_a_settings_row_promotes_a_one_run_value_to_a_persisted_one() {
+        #[cfg(feature = "playback")]
         audio::disable_output_for_tests();
         let dir = std::env::temp_dir().join(format!("bm-row-promote-{}", std::process::id()));
         let _ = std::fs::remove_dir_all(&dir);

@@ -25,6 +25,11 @@ use crate::engine_helpers::{glulx_session_opt_mut, zvm_session_opt_mut};
 use crate::state::AppState;
 
 pub use audio::{SoundFormat, SoundId};
+// The device-free decoders (SQ-1541), for a host whose sink delivers sound
+// somewhere that wants samples or a WAV file rather than a Blorb resource.
+#[cfg(feature = "mod-music")]
+pub use audio::render_mod;
+pub use audio::{bleep, decode_aiff, tone, Pcm};
 
 /// How loud a sampled sound starts.
 #[derive(Debug, Clone, Copy, PartialEq)]
@@ -75,6 +80,7 @@ pub trait SoundSink: std::fmt::Debug {
     fn finished(&mut self) -> Vec<SoundId>;
 }
 
+#[cfg(feature = "playback")]
 impl SoundSink for audio::AudioBackend {
     fn tone(&mut self, freq_hz: f32, ms: u32, z_volume: u8) {
         self.play_tone(freq_hz, ms, z_volume);
@@ -109,9 +115,42 @@ impl SoundSink for audio::AudioBackend {
 }
 
 /// The sink a state opens when a story first plays a sound and the host
-/// installed none: the output device at `volume`.
+/// installed none: the output device at `volume` — or, built without the
+/// `playback` feature (SQ-1541), [`Silence`], since there is no device to open.
+#[cfg(feature = "playback")]
 pub fn default_sound_sink(volume: u8) -> Box<dyn SoundSink> {
     Box::new(audio::AudioBackend::new(volume))
+}
+
+/// The sink a state opens when a story first plays a sound and the host
+/// installed none. Built without the `playback` feature (SQ-1541) there is no
+/// device to open, so it is [`Silence`]; a host that wants the sound installs
+/// its own sink on `AppState::audio` before the first turn.
+#[cfg(not(feature = "playback"))]
+pub fn default_sound_sink(_volume: u8) -> Box<dyn SoundSink> {
+    Box::new(Silence)
+}
+
+/// A sink that plays nothing: every sound fails to start, so no finish routine
+/// is ever left waiting on one — what a story hears from an interpreter with no
+/// sound output at all.
+#[derive(Debug, Default, Clone, Copy)]
+pub struct Silence;
+
+impl SoundSink for Silence {
+    fn tone(&mut self, _freq_hz: f32, _ms: u32, _z_volume: u8) {}
+    fn play(&mut self, _sound: SampleStart<'_>) -> Option<SoundId> {
+        None
+    }
+    fn stop(&mut self, _id: SoundId) {}
+    fn pause(&mut self, _id: SoundId) {}
+    fn unpause(&mut self, _id: SoundId) {}
+    fn set_gain(&mut self, _id: SoundId, _gain: f32) {}
+    fn stop_all(&mut self) {}
+    fn set_volume(&mut self, _volume: u8) {}
+    fn finished(&mut self) -> Vec<SoundId> {
+        Vec::new()
+    }
 }
 
 /// The sound `id` finished: forget it, and run whatever the story left waiting on
@@ -158,4 +197,29 @@ pub fn sound_finished(
         }
     }
     false
+}
+
+#[cfg(all(test, feature = "t-session"))]
+mod tests {
+    use super::*;
+
+    /// With no device the sink starts nothing, so nothing is ever left waiting
+    /// on a finish routine — the story hears an interpreter with no sound.
+    #[test]
+    fn silence_starts_nothing_and_reports_nothing_finished() {
+        let mut s = Silence;
+        s.tone(HIGH, 150, 8);
+        let bytes = [0u8; 4];
+        let started = s.play(SampleStart {
+            resource: 3,
+            bytes: &bytes,
+            format: SoundFormat::Aiff,
+            level: SampleLevel::ZVolume(8),
+            repeats: 1,
+        });
+        assert_eq!(started, None);
+        assert!(s.finished().is_empty());
+    }
+
+    const HIGH: f32 = audio::HIGH_BLEEP_HZ;
 }
