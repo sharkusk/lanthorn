@@ -1528,6 +1528,72 @@ pub fn read_archive_meta(path: &Path) -> io::Result<Meta> {
     Ok(meta)
 }
 
+/// Rewrite `old_path`'s `meta.json` with a new display `name` and write the
+/// result to `new_path`, copying every OTHER entry byte-for-byte via
+/// `ZipWriter::raw_copy_file` (SQ-1556) — never through
+/// `load_archive`/`save_archive_meta_pics`, which would re-decode and
+/// re-encode every picture, replay history and reserialize the transcript
+/// just to change one string, and risks silently dropping a field `Meta`
+/// does not yet know how to round-trip. Validated and rejected the same way
+/// [`read_archive_meta`] is: a future-format archive refuses rather than
+/// getting silently rewritten.
+///
+/// Same atomic-write discipline as every other archive write in this module
+/// ([`crate::storage::atomic_write`]): the whole rewritten archive is built
+/// in memory first, then the file at `new_path` is replaced in one rename —
+/// a crash mid-build leaves the original untouched. `new_path` may equal
+/// `old_path` (the display name changed but its filename slug did not); when
+/// it differs, `old_path` is removed only AFTER `new_path` is durably
+/// written, so a crash between the two leaves both files rather than
+/// neither.
+pub fn rename_archive(old_path: &Path, new_path: &Path, new_name: &str) -> io::Result<()> {
+    let file = std::fs::File::open(old_path)?;
+    let mut zip = zip::ZipArchive::new(file)
+        .map_err(|e| io::Error::new(io::ErrorKind::InvalidData, e))?;
+
+    let mut meta: Meta = {
+        let mut entry = zip.by_name(ENTRY_META).map_err(|e| {
+            io::Error::new(io::ErrorKind::InvalidData, format!("missing {ENTRY_META}: {e}"))
+        })?;
+        let mut buf = String::new();
+        entry.read_to_string(&mut buf)?;
+        serde_json::from_str(&buf).map_err(|e| {
+            io::Error::new(io::ErrorKind::InvalidData, format!("corrupt {ENTRY_META}: {e}"))
+        })?
+    };
+    if meta.format_version > CURRENT_FORMAT_VERSION {
+        return Err(io::Error::new(
+            io::ErrorKind::InvalidData,
+            format!(
+                "unsupported archive format_version {}; expected <= {}",
+                meta.format_version, CURRENT_FORMAT_VERSION
+            ),
+        ));
+    }
+    meta.name = Some(new_name.to_string());
+    let meta_json = serde_json::to_vec(&meta)
+        .map_err(|e| io::Error::new(io::ErrorKind::InvalidData, e))?;
+
+    let to_io = |e: zip::result::ZipError| io::Error::other(e);
+    let mut out = zip::ZipWriter::new(std::io::Cursor::new(Vec::<u8>::new()));
+    let options = zip::write::SimpleFileOptions::default();
+    for i in 0..zip.len() {
+        let entry = zip.by_index(i).map_err(to_io)?;
+        if entry.name() == ENTRY_META {
+            out.start_file(ENTRY_META, options)?;
+            out.write_all(&meta_json)?;
+        } else {
+            out.raw_copy_file(entry).map_err(to_io)?;
+        }
+    }
+    let bytes = out.finish()?.into_inner();
+    crate::storage::atomic_write(new_path, &bytes)?;
+    if old_path != new_path {
+        std::fs::remove_file(old_path)?;
+    }
+    Ok(())
+}
+
 impl ArchiveContents {
     /// The persisted game state as an engine-tagged [`EngineSave`], rebuilt from
     /// the archive's `game.<ext>` bytes + `engine.txt` tag (defaulting to

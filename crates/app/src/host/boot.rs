@@ -365,6 +365,17 @@ pub fn boot_story(req: BootRequest<'_>, hooks: &mut dyn BootHooks) -> Result<Boo
     // rides with the story for the session, so `@restart` draws the same
     // resolution rather than quietly reverting to the default.
     cfg.scott_picture_resolution_override = overrides.scott_picture_resolution;
+    // SQ-1556: a host's explicit "None, text only" choice — forces the whole
+    // picture pipeline off for THIS launch, the same effect `--images off`
+    // already has globally, scoped to one story. Applied before every read of
+    // `cfg.images` below (native archive resolution, the Blorb fallback for
+    // all three engines), and — like `pictures_override` above — parked on
+    // `cfg` itself rather than threaded separately, so `@restart` (`reset.rs`,
+    // which reads `state.config.images`) carries the same choice forward
+    // without a second door into this mechanism.
+    if let Some(images) = overrides.images {
+        cfg.images = images;
+    }
     let picture_override = if cfg.images {
         crate::graphics::PictureOverride::resolve_with_session(
             &story_path,

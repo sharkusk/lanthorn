@@ -214,6 +214,43 @@ pub fn existing_save_display_name(path: &Path) -> Option<String> {
     }))
 }
 
+/// Rename a Save State (SQ-1556): give it a new display name, and — since a
+/// named save's FILE name IS its slug (`<slug>.lanthorn`, see
+/// [`named_save_path`]) — move the file to match when the slug changes.
+///
+/// The reserved default/quick-save slot (`default.lanthorn`) is not
+/// renameable: `list_saves` always shows it as `"(default)"` regardless of
+/// what `Meta::name` says (see `list_saves` above), so a "renamed" default
+/// slot would look unchanged in the saves list — the same reservation
+/// `save_named` already enforces for a NEW save, applied here too so a
+/// caller cannot rename SOME OTHER save onto the reserved slug either
+/// (`named_save_path` rejects "default" the same way regardless of which
+/// direction produced it).
+///
+/// Refuses to clobber an unrelated existing save that already holds the
+/// destination name; renaming a save to the name it already has (a
+/// cosmetically different string that slugifies the same) is a no-op on the
+/// file and just rewrites `meta.json` in place.
+pub fn rename_save(path: &Path, new_name: &str) -> io::Result<()> {
+    if path.file_name().and_then(|n| n.to_str()) == Some("default.lanthorn") {
+        return Err(io::Error::new(
+            io::ErrorKind::InvalidInput,
+            "the default save slot cannot be renamed",
+        ));
+    }
+    let game_dir = path.parent().ok_or_else(|| {
+        io::Error::new(io::ErrorKind::InvalidInput, "save path has no parent directory")
+    })?;
+    let new_path = named_save_path(game_dir, new_name)?;
+    if new_path.as_path() != path && new_path.exists() {
+        return Err(io::Error::new(
+            io::ErrorKind::AlreadyExists,
+            format!("a save named \"{new_name}\" already exists"),
+        ));
+    }
+    crate::archive::rename_archive(path, &new_path, new_name)
+}
+
 // ── Helpers ───────────────────────────────────────────────────────────────────
 
 /// Convert a human-readable name to a filesystem-safe slug.
@@ -787,6 +824,111 @@ mod tests {
         super::delete_save(&path).expect("delete ok");
         let saves_after = super::list_saves(&dir);
         assert!(saves_after.is_empty(), "save should be gone after delete");
+
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    // ── rename_save ───────────────────────────────────────────────────────────
+
+    #[test]
+    fn rename_save_round_trips_the_listed_name_and_keeps_the_archive_restorable() {
+        let Some(machine) = fake_machine() else { return };
+        let dir = make_temp_dir("rename");
+        let mut mapper = Mapper::default();
+        mapper.observe(1, "Foyer", None);
+        let ifid = "ZCODE-1-TEST00-0005";
+
+        super::save_named(&dir, ifid, "before-troll", crate::archive::SaveTrigger::HostState, &mapper, &es(&machine), Some(&machine.screen), &[], None, None, &machine.aux_data, 42, Some("Foyer".into()), Some(7), &crate::archive::SessionRecord::empty())
+            .expect("save_named ok");
+        let old_path = dir.join("before-troll.lanthorn");
+        assert!(old_path.exists());
+
+        super::rename_save(&old_path, "After Troll").expect("rename ok");
+
+        // The old slug's file is gone; the new slug's file exists.
+        assert!(!old_path.exists(), "old file removed after rename");
+        let new_path = dir.join("after-troll.lanthorn");
+        assert!(new_path.exists(), "renamed file lands at the new slug");
+
+        // The listed name changed, and everything else about the row is intact.
+        let saves = super::list_saves(&dir);
+        assert_eq!(saves.len(), 1, "still exactly one save");
+        assert_eq!(saves[0].name, "After Troll");
+        assert_eq!(saves[0].turns, 42);
+        assert_eq!(saves[0].location.as_deref(), Some("Foyer"));
+        assert_eq!(saves[0].score, Some(7));
+
+        // A restore from the renamed archive still works: the archive loads and
+        // its game bytes are byte-identical to what was saved.
+        let ac = crate::archive::load_archive(&new_path).expect("load renamed archive");
+        assert_eq!(ac.meta.name.as_deref(), Some("After Troll"));
+        assert_eq!(ac.meta.ifid.as_deref(), Some(ifid), "ifid untouched by rename");
+        assert_eq!(ac.save, machine.save_quetzal(), "game bytes untouched by rename");
+        assert_eq!(ac.mapper.graph.rooms().count(), 1, "map untouched by rename");
+
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn rename_save_to_the_same_slug_only_rewrites_meta() {
+        // "Before Troll" and "before, troll!" both slugify to "before-troll", so
+        // this rename must not touch the filename at all — only `meta.json`'s
+        // `name` field changes.
+        let Some(machine) = fake_machine() else { return };
+        let dir = make_temp_dir("rename-same-slug");
+        let mapper = Mapper::default();
+        let ifid = "ZCODE-1-TEST00-0006";
+
+        super::save_named(&dir, ifid, "Before Troll", crate::archive::SaveTrigger::HostState, &mapper, &es(&machine), Some(&machine.screen), &[], None, None, &machine.aux_data, 1, None, None, &crate::archive::SessionRecord::empty())
+            .expect("save_named ok");
+        let path = dir.join("before-troll.lanthorn");
+        assert!(path.exists());
+
+        super::rename_save(&path, "before, troll!").expect("rename ok");
+        assert!(path.exists(), "same-slug rename keeps the same file");
+
+        let saves = super::list_saves(&dir);
+        assert_eq!(saves.len(), 1);
+        assert_eq!(saves[0].name, "before, troll!");
+        assert_eq!(saves[0].path, path);
+
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn rename_save_rejects_the_default_slot() {
+        let Some(machine) = fake_machine() else { return };
+        let dir = make_temp_dir("rename-default");
+        let mapper = Mapper::default();
+        let default_path = crate::storage::default_state_path(&dir);
+        crate::archive::save_archive(&default_path, &mapper, &es(&machine), Some(&machine.screen), &machine.aux_data, &[], &[], &[], &[], &[], &[])
+            .expect("default save ok");
+
+        let err = super::rename_save(&default_path, "My Quicksave").expect_err("default slot must refuse rename");
+        assert_eq!(err.kind(), io::ErrorKind::InvalidInput);
+        assert!(default_path.exists(), "default file untouched");
+
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn rename_save_refuses_to_clobber_an_unrelated_save() {
+        let Some(machine) = fake_machine() else { return };
+        let dir = make_temp_dir("rename-collide");
+        let mapper = Mapper::default();
+        let ifid = "ZCODE-1-TEST00-0007";
+
+        super::save_named(&dir, ifid, "alpha", crate::archive::SaveTrigger::HostState, &mapper, &es(&machine), Some(&machine.screen), &[], None, None, &machine.aux_data, 1, None, None, &crate::archive::SessionRecord::empty()).unwrap();
+        super::save_named(&dir, ifid, "beta", crate::archive::SaveTrigger::HostState, &mapper, &es(&machine), Some(&machine.screen), &[], None, None, &machine.aux_data, 2, None, None, &crate::archive::SessionRecord::empty()).unwrap();
+
+        let alpha_path = dir.join("alpha.lanthorn");
+        let err = super::rename_save(&alpha_path, "beta").expect_err("must not clobber an existing save");
+        assert_eq!(err.kind(), io::ErrorKind::AlreadyExists);
+        // Both originals survive untouched.
+        assert!(alpha_path.exists());
+        assert!(dir.join("beta.lanthorn").exists());
+        let saves = super::list_saves(&dir);
+        assert_eq!(saves.len(), 2, "no save was lost or merged");
 
         let _ = std::fs::remove_dir_all(&dir);
     }

@@ -164,7 +164,7 @@ pub fn draw_launch_options(
     // The "N more above/below" markers cost rows too, and only exist when the
     // list actually scrolls — so budget for them only then, in two passes.
     let fixed = 1 + tail + caveat_lines; // + the "Artwork" heading
-    let art_total = st.candidates.len() + 1;
+    let art_total = st.art_rows();
     let loose = content.height.saturating_sub(fixed);
     let marks = if art_total > usize::from(loose) { 2 } else { 0 };
     let art_rows = usize::from(content.height.saturating_sub(fixed + marks).max(1));
@@ -209,7 +209,7 @@ pub fn draw_launch_options(
                 };
                 option_row(buf, 0, &label, &mut rows, &mut y);
             }
-            Some(i) => {
+            Some(i) if i < st.candidates.len() => {
                 let c = &st.candidates[i];
                 let mark = if st.art == idx { "(•)" } else { "( )" };
                 // Where an archive with no path of its own lives: `CPic.data` is
@@ -225,6 +225,13 @@ pub fn draw_launch_options(
                     note(&crate::launch_options::medium_note(c)),
                 );
                 option_row(buf, idx, &label, &mut rows, &mut y);
+            }
+            // The one past every candidate: "None, text only" (SQ-1556) — this
+            // launch forces no picture source at all, whatever the story would
+            // otherwise draw.
+            Some(_) => {
+                let mark = if st.is_text_only() { "(•)" } else { "( )" };
+                option_row(buf, idx, &format!("  {mark} None, text only"), &mut rows, &mut y);
             }
         }
     }
@@ -261,7 +268,7 @@ pub fn draw_launch_options(
         None => "auto".to_string(),
     };
     y += 1;
-    option_row(buf, st.candidates.len() + 1, &format!("  Interpreter   {shown}"), &mut rows, &mut y);
+    option_row(buf, st.art_rows(), &format!("  Interpreter   {shown}"), &mut rows, &mut y);
     let derived = match st.derived() {
         Some((n, src)) => format!(
             "      header 0x1E = {n} ({}) — {}",
@@ -277,14 +284,14 @@ pub fn draw_launch_options(
     // second resolution to choose, so the row does not exist for one.
     if st.scott_native_pictures {
         let label = format!("  Picture resolution   {}", st.scott_resolution.label());
-        option_row(buf, st.candidates.len() + 2, &label, &mut rows, &mut y);
+        option_row(buf, st.art_rows() + 1, &label, &mut rows, &mut y);
     }
 
     // Colour source and game colours (SQ-1532): always present, unlike the
     // picture-resolution row above — locking shows the row FIXED/READ-ONLY
     // rather than hiding it, per the confirmed design, so a CLI-set value is
     // still visible and its provenance is said on screen.
-    let colour_source_idx = st.candidates.len() + 2 + usize::from(st.scott_native_pictures);
+    let colour_source_idx = st.art_rows() + 1 + usize::from(st.scott_native_pictures);
     let cs_note = if st.colour_source_cli_locked { "   (fixed by --colour)" } else { "" };
     let cs_label = format!(
         "  Colour source   {}{}",
@@ -365,6 +372,33 @@ mod tests {
         assert!(text.contains("[ ]"), "checkbox starts clear");
         assert_eq!(r.rows.len(), st.row_count(), "one hit-rect per selectable row");
         assert_eq!(r.buttons.len(), 2);
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// SQ-1556: "None, text only" draws as a real row in the art list — always
+    /// last, one past every candidate — with its own hit-rect and a selection
+    /// mark that follows `st.art`, exactly like every other art choice.
+    #[test]
+    fn none_text_only_draws_as_the_last_art_choice() {
+        let dir = tmp("text-only-draw");
+        let story = dir.join("story.z6");
+        std::fs::write(&story, b"x").unwrap();
+        let mut st = LaunchOptionsState::new("Story", &story, None, None, Some(6), None);
+        assert!(st.candidates.is_empty(), "a dummy story has no real archives beside it");
+
+        let (text, rects) = render(&st, 90, 24);
+        let r = rects.expect("dialog renders at 90x24");
+        assert!(text.contains("None, text only"), "{text:?}");
+        assert!(text.contains("( ) None, text only"), "unselected mark: {text:?}");
+        assert_eq!(r.rows.len(), st.row_count(), "one hit-rect per selectable row, text-only included");
+        assert!(
+            r.rows.iter().any(|(idx, _)| *idx == st.text_only_index()),
+            "the text-only row is a hit-rect at its own flat index"
+        );
+
+        st.art = st.text_only_index();
+        let (text2, _) = render(&st, 90, 24);
+        assert!(text2.contains("(•) None, text only"), "selected mark: {text2:?}");
         let _ = std::fs::remove_dir_all(&dir);
     }
 

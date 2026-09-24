@@ -193,6 +193,15 @@ pub struct StoryMeta {
     pub ifid: String,
     pub features: Features,
     pub self_blorb: Option<Vec<ChunkInfo>>, // Some when the story file itself is a blorb
+    /// The frontispiece (cover) `Pict` resource number the story's OWN Blorb
+    /// declares via a top-level `Fspc` chunk (SQ-1556), read off the same
+    /// parse `self_blorb` already comes from — never a second read of the
+    /// file. `None` for a non-blorb story and for a blorb that declares no
+    /// `Fspc` chunk, which a host must tell apart from "has one but the fetch
+    /// failed": this says whether a cover URL is worth offering at all,
+    /// rather than letting a host guess from `self_blorb`'s mere presence
+    /// and fall back silently on a miss.
+    pub frontispiece: Option<u32>,
     /// What a Scott Adams entry's own graphics are ([`scott_pictures`], SQ-1473).
     /// `None` for a non-Scott engine and for a text-only Scott `.dat`.
     pub scott_pictures: Option<ScottPictures>,
@@ -249,6 +258,7 @@ impl StoryMeta {
             ifid: String::new(),
             features: Features::default(),
             self_blorb: None,
+            frontispiece: None,
             scott_pictures: None,
             disk_image: None,
             disk_entry: None,
@@ -2066,8 +2076,11 @@ fn entry_from_loaded(
     // Self-blorb chunks: only blorb-container files carry a resource index,
     // and extraction (`load_story`) discards it — re-read the raw file for
     // those extensions only, so plain .z* files stay single-read. The same
-    // parse yields the `IFmd` chunk (if any) for precedence resolution below.
+    // parse yields the `IFmd` chunk (if any) for precedence resolution below,
+    // and the frontispiece (cover) resource number (SQ-1556) — read off this
+    // SAME parse, never a second one.
     let mut ifmd: Option<crate::ifiction::IFiction> = None;
+    let mut frontispiece: Option<u32> = None;
     let self_blorb = if is_blorb_ext(path) {
         std::fs::read(path).ok().and_then(|raw| {
             if blorb::Blorb::is_blorb(&raw) {
@@ -2075,6 +2088,7 @@ fn entry_from_loaded(
                     if let Some(xml) = b.metadata() {
                         ifmd = crate::ifiction::parse(xml).ok();
                     }
+                    frontispiece = b.frontispiece();
                     chunks_of(&b)
                 })
             } else {
@@ -2185,6 +2199,7 @@ fn entry_from_loaded(
         ifid,
         features,
         self_blorb,
+        frontispiece,
         scott_pictures: scott_pictures_kind,
         disk_image,
         disk_entry: disk_entry.map(str::to_string),
@@ -2768,6 +2783,7 @@ mod tests {
                 ifid: String::new(),
                 features: Features::default(),
                 self_blorb: None,
+                frontispiece: None,
                 scott_pictures: None,
                 disk_image: None,
                 disk_entry: None,
@@ -3399,6 +3415,74 @@ mod tests {
         );
     }
 
+    /// Like `blorb_with_exec`, plus a `Pict` resource and a top-level `Fspc`
+    /// chunk naming it as the frontispiece (SQ-1556) — read off the SAME
+    /// self-blorb parse `StoryMeta::frontispiece` is filled from.
+    fn blorb_with_exec_and_frontispiece(story: &[u8], pict_number: u32) -> Vec<u8> {
+        fn chunk(ty: &[u8; 4], data: &[u8]) -> Vec<u8> {
+            let mut v = Vec::new();
+            v.extend_from_slice(ty);
+            v.extend_from_slice(&(data.len() as u32).to_be_bytes());
+            v.extend_from_slice(data);
+            if data.len() % 2 == 1 {
+                v.push(0);
+            }
+            v
+        }
+        const HEADER_LEN: usize = 12; // "FORM" + size(4) + "IFRS"
+        let ridx_data_len = 4 + 12 + 12; // count + Exec entry + Pict entry
+        let ridx_chunk_len = 8 + ridx_data_len + (ridx_data_len % 2);
+        let fspc_chunk_len = 8 + 4;
+        let exec_off = HEADER_LEN + ridx_chunk_len + fspc_chunk_len;
+        let exec_chunk_len = 8 + story.len() + (story.len() % 2);
+        let pict_off = exec_off + exec_chunk_len;
+        let pict_payload = b"\x89PNG";
+
+        let mut ridx = Vec::new();
+        ridx.extend_from_slice(&2u32.to_be_bytes());
+        ridx.extend_from_slice(b"Exec");
+        ridx.extend_from_slice(&0u32.to_be_bytes());
+        ridx.extend_from_slice(&(exec_off as u32).to_be_bytes());
+        ridx.extend_from_slice(b"Pict");
+        ridx.extend_from_slice(&pict_number.to_be_bytes());
+        ridx.extend_from_slice(&(pict_off as u32).to_be_bytes());
+
+        let mut inner = Vec::new();
+        inner.extend_from_slice(b"IFRS");
+        inner.extend_from_slice(&chunk(b"RIdx", &ridx));
+        inner.extend_from_slice(&chunk(b"Fspc", &pict_number.to_be_bytes()));
+        inner.extend_from_slice(&chunk(b"ZCOD", story));
+        inner.extend_from_slice(&chunk(b"PNG ", pict_payload));
+
+        let mut file = Vec::new();
+        file.extend_from_slice(b"FORM");
+        file.extend_from_slice(&(inner.len() as u32).to_be_bytes());
+        file.extend_from_slice(&inner);
+        file
+    }
+
+    /// SQ-1556: a Blorb that declares a frontispiece via a top-level `Fspc`
+    /// chunk reports it in `StoryMeta`, and one with no such chunk reports
+    /// `None` — the two cases a host needs told apart to decide whether a
+    /// cover URL is worth offering at all.
+    #[test]
+    fn a_blorbs_own_fspc_chunk_is_surfaced_as_its_frontispiece() {
+        let dir = temp_dir("frontispiece");
+        let story = minimal_v3_story();
+        std::fs::write(dir.join("with-cover.zblorb"), blorb_with_exec_and_frontispiece(&story, 7))
+            .unwrap();
+        std::fs::write(dir.join("without-cover.zblorb"), blorb_with_exec(&story)).unwrap();
+
+        let with_cover = resolve_entry(&dir.join("with-cover.zblorb"), &dir)
+            .expect("blorb with an Fspc chunk resolves");
+        let without_cover = resolve_entry(&dir.join("without-cover.zblorb"), &dir)
+            .expect("blorb with no Fspc chunk still resolves");
+        let _ = std::fs::remove_dir_all(&dir);
+
+        assert_eq!(with_cover.meta.frontispiece, Some(7), "the Fspc chunk's own resource number");
+        assert_eq!(without_cover.meta.frontispiece, None, "no Fspc chunk means no frontispiece");
+    }
+
     /// SQ-0767: a `zork1inv.z5` sitting beside a story whose *file* is named for
     /// the box is that story's InvisiClues, and only the mounted story's release
     /// and serial can say so. Fixture-free — the header carries Zork I release
@@ -3660,7 +3744,7 @@ mod tests {
                 size_bytes: 1, story_bytes: 1, modified: None, engine: Engine::ZCode,
                 format: "Z-code".into(), version: Some("5".into()),
                 serial: None, release: None, ifid: ifid.into(),
-                features: Features::default(), self_blorb, scott_pictures: None, disk_image: None, disk_entry: None,
+                features: Features::default(), self_blorb, frontispiece: None, scott_pictures: None, disk_image: None, disk_entry: None,
                 author: None, year: None, genre: None, language: None, description: None,
                 ifdb_link: None, ifdb_rating: None, ifdb_rating_count: None,
                 fetch_not_found: false,
@@ -4198,6 +4282,7 @@ mod tests {
             ifid: String::new(),
             features: Features::default(),
             self_blorb: None,
+            frontispiece: None,
             scott_pictures: pictures,
             disk_image: None,
             disk_entry: None,

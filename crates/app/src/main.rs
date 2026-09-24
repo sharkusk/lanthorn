@@ -1933,6 +1933,11 @@ fn cli_overrides(ctx: &startup::LaunchCtx) -> app::launch_options::LaunchOverrid
         // they did before SQ-1532.
         colour_source: None,
         honor_game_colours: None,
+        // No CLI flag for THIS launch specifically (SQ-1556) — `--images off`
+        // already exists globally and reaches every launch on the command
+        // line, so a second, per-launch door into the same setting would be
+        // redundant on this path. The dialog's own art row is what needs it.
+        images: None,
     }
 }
 

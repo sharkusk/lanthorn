@@ -4677,6 +4677,7 @@ mod tests {
             ifid: String::new(),
             features: Features::default(),
             self_blorb: None,
+            frontispiece: None,
             scott_pictures: Some(ScottPictures::NativeZx { pictures: 31 }),
             disk_image: None,
             disk_entry: None,
@@ -4702,7 +4703,7 @@ mod tests {
         let meta = |engine: Engine, version: Option<&str>| StoryMeta {
             size_bytes: 0, story_bytes: 0, modified: None, engine, format: String::new(),
             version: version.map(String::from), serial: None, release: None, ifid: String::new(),
-            features: Features::default(), self_blorb: None, scott_pictures: None, disk_image: None, disk_entry: None,
+            features: Features::default(), self_blorb: None, frontispiece: None, scott_pictures: None, disk_image: None, disk_entry: None,
             author: None, year: None,
             genre: None, language: None, description: None, ifdb_link: None, ifdb_rating: None, ifdb_rating_count: None, fetch_not_found: false,
         };
@@ -4732,7 +4733,7 @@ mod tests {
         let meta = |disk_image: Option<DiskImage>| StoryMeta {
             size_bytes: 0, story_bytes: 0, modified: None, engine: Engine::ZCode, format: String::new(),
             version: Some("6".into()), serial: None, release: None, ifid: String::new(),
-            features: Features::default(), self_blorb: None, scott_pictures: None, disk_image, disk_entry: None,
+            features: Features::default(), self_blorb: None, frontispiece: None, scott_pictures: None, disk_image, disk_entry: None,
             author: None, year: None,
             genre: None, language: None, description: None, ifdb_link: None, ifdb_rating: None, ifdb_rating_count: None, fetch_not_found: false,
         };
@@ -4773,7 +4774,7 @@ mod tests {
         let meta = |disk_image: Option<DiskImage>| StoryMeta {
             size_bytes: 0, story_bytes: 0, modified: None, engine: Engine::Scott, format: String::new(),
             version: None, serial: None, release: None, ifid: String::new(),
-            features: Features::default(), self_blorb: None, scott_pictures: None, disk_image, disk_entry: None,
+            features: Features::default(), self_blorb: None, frontispiece: None, scott_pictures: None, disk_image, disk_entry: None,
             author: None, year: None,
             genre: None, language: None, description: None, ifdb_link: None, ifdb_rating: None, ifdb_rating_count: None, fetch_not_found: false,
         };
@@ -4801,7 +4802,7 @@ mod tests {
         let base = |engine: Engine, version: Option<&str>| StoryMeta {
             size_bytes: 0, story_bytes: 0, modified: None, engine, format: String::new(),
             version: version.map(String::from), serial: None, release: None, ifid: String::new(),
-            features: Features::default(), self_blorb: None, scott_pictures: None, disk_image: None, disk_entry: None,
+            features: Features::default(), self_blorb: None, frontispiece: None, scott_pictures: None, disk_image: None, disk_entry: None,
             author: None, year: None,
             genre: None, language: None, description: None, ifdb_link: None, ifdb_rating: None, ifdb_rating_count: None, fetch_not_found: false,
         };
@@ -4945,7 +4946,7 @@ mod tests {
             meta: StoryMeta {
                 size_bytes: 1, story_bytes: 1, modified: None, engine, format: "Z-code".into(),
                 version: None, serial: None, release: None, ifid: title.into(),
-                features: Features::default(), self_blorb: None, scott_pictures: None, disk_image: None, disk_entry: None,
+                features: Features::default(), self_blorb: None, frontispiece: None, scott_pictures: None, disk_image: None, disk_entry: None,
                 author: None, year: None, genre: None, language: None, description: None, ifdb_link: None, ifdb_rating: None, ifdb_rating_count: None, fetch_not_found: false,
             },
             hint_sidecar: None,
@@ -4965,7 +4966,7 @@ mod tests {
             meta: StoryMeta {
                 size_bytes: 1, story_bytes: 1, modified: None, engine: Engine::ZCode, format: "Z-code".into(),
                 version: None, serial: None, release: None, ifid: title.into(),
-                features: Features::default(), self_blorb: None, scott_pictures: None, disk_image: None, disk_entry: None,
+                features: Features::default(), self_blorb: None, frontispiece: None, scott_pictures: None, disk_image: None, disk_entry: None,
                 author: author.map(String::from), year: year.map(String::from),
                 genre: None, language: None, description: None, ifdb_link: None, ifdb_rating: None, ifdb_rating_count: None, fetch_not_found: false,
             },
@@ -5783,7 +5784,7 @@ mod tests {
             size_bytes: 0, story_bytes: 0, modified: None, engine: app::picker::Engine::ZCode,
             format: "Z-code".into(), version: Some("3".into()), serial: None, release: None,
             ifid: "ZCODE-88-840726".into(), features: app::picker::Features::default(),
-            self_blorb: None, scott_pictures: None, disk_image: None, disk_entry: None, author: None, year: None, genre: None, language: None,
+            self_blorb: None, frontispiece: None, scott_pictures: None, disk_image: None, disk_entry: None, author: None, year: None, genre: None, language: None,
             description: None, ifdb_link: None, ifdb_rating: None, ifdb_rating_count: None, fetch_not_found: false,
         };
         let area = Rect::new(0, 0, 40, 12);
@@ -5826,6 +5827,7 @@ mod tests {
                     detail: Some("15.4 kHz · 8-bit · mono · 2.2s".into()),
                 },
             ]),
+            frontispiece: None,
             scott_pictures: None,
             author: None, year: None, genre: None, language: None, description: None, ifdb_link: None, ifdb_rating: None, ifdb_rating_count: None, fetch_not_found: false,
         };
@@ -5972,6 +5974,7 @@ mod tests {
             disk_image: None,
             disk_entry: Some("LEATHRGODDESSES".into()),
             self_blorb: None,
+            frontispiece: None,
             scott_pictures: None,
             author: None, year: None, genre: None, language: None, description: None,
             ifdb_link: None, ifdb_rating: None, ifdb_rating_count: None, fetch_not_found: false,
@@ -6081,7 +6084,7 @@ mod tests {
             release: Some(88),
             ifid: "ZCODE-88-840726".into(),
             features: app::picker::Features::default(),
-            disk_image: None, disk_entry: None, self_blorb: None, scott_pictures: None,
+            disk_image: None, disk_entry: None, self_blorb: None, frontispiece: None, scott_pictures: None,
             author: None, year: None, genre: None, language: None, description: None,
             ifdb_link: None, ifdb_rating: None, ifdb_rating_count: None, fetch_not_found: false,
         };
@@ -6289,6 +6292,7 @@ mod tests {
             ifid: "ZCODE-88-840726".into(),
             features: app::picker::Features::default(),
             self_blorb: Some(chunks),
+            frontispiece: None,
             scott_pictures: None,
             disk_image: None,
             disk_entry: None,
@@ -6328,7 +6332,7 @@ mod tests {
             size_bytes: 1, story_bytes: 1, modified: None, engine: app::picker::Engine::Glulx,
             format: "Blorb (Glulx)".into(), version: Some("3.1.2".into()),
             serial: None, release: None, ifid: "IFID-X".into(),
-            features: app::picker::Features::default(), self_blorb: None, scott_pictures: None, disk_image: None, disk_entry: None,
+            features: app::picker::Features::default(), self_blorb: None, frontispiece: None, scott_pictures: None, disk_image: None, disk_entry: None,
             author: None, year: None, genre: None, language: None, description: None, ifdb_link: None, ifdb_rating: None, ifdb_rating_count: None, fetch_not_found: false,
         }
     }
@@ -6347,7 +6351,7 @@ mod tests {
                 size_bytes: 1, story_bytes: 1, modified: None, engine: app::picker::Engine::Scott,
                 format: "Scott Adams".into(), version: None, serial: None, release: None,
                 ifid: "IFID-SCOTT".into(), features: app::picker::Features::default(),
-                self_blorb: None, scott_pictures, disk_image: None, disk_entry: None,
+                self_blorb: None, frontispiece: None, scott_pictures, disk_image: None, disk_entry: None,
                 author: None, year: None, genre: None, language: None, description: None,
                 ifdb_link: None, ifdb_rating: None, ifdb_rating_count: None, fetch_not_found: false,
             },
@@ -6566,7 +6570,7 @@ mod tests {
         let meta = |scott_pictures: Option<ScottPictures>| StoryMeta {
             size_bytes: 0, story_bytes: 0, modified: None, engine: Engine::Scott, format: String::new(),
             version: None, serial: None, release: None, ifid: String::new(),
-            features: Features::default(), self_blorb: None, scott_pictures, disk_image: None, disk_entry: None,
+            features: Features::default(), self_blorb: None, frontispiece: None, scott_pictures, disk_image: None, disk_entry: None,
             author: None, year: None,
             genre: None, language: None, description: None, ifdb_link: None, ifdb_rating: None, ifdb_rating_count: None, fetch_not_found: false,
         };
@@ -7671,6 +7675,7 @@ mod tests {
             self_blorb: Some(vec![ChunkInfo {
                 usage: "Pict".into(), number: 3, chunk_type: "PNG ".into(), len: 100, detail: None,
             }]),
+            frontispiece: None,
             scott_pictures: None,
             disk_image: None,
             disk_entry: None,

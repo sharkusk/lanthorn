@@ -94,6 +94,23 @@ pub struct LaunchOverrides {
     /// (SQ-1532) — a choice the launch-options dialog made and the user did not
     /// persist. Outranks the per-game sidecar's `honor_game_colours` key.
     pub honor_game_colours: Option<bool>,
+    /// Force this launch to draw with NO picture source at all, whatever the
+    /// story would otherwise resolve — a host's explicit "None, text only"
+    /// choice (SQ-1556), offered as a real row alongside `pictures` in the
+    /// launch-options dialog's art list rather than as an internal-only value.
+    ///
+    /// `Some(false)` is the choice this launch makes; `Some(true)` forces
+    /// images ON even when disabled by default (symmetric with every other
+    /// `Option<bool>` field here, though nothing produces it today — the
+    /// dialog's art row only ever writes `Some(false)`). `None` means
+    /// "unchanged from what this launch already inherits" — the ordinary
+    /// `--images`/config default — exactly like every other field here.
+    /// Mutually exclusive with `pictures` in practice (the dialog's art list
+    /// is a radio button: "Automatic", one candidate, or "None, text only",
+    /// never two at once), but nothing enforces that at the type level — a
+    /// host driving this struct directly is free to set both, and the boot
+    /// path applies `images` first, so a `Some(false)` here always wins.
+    pub images: Option<bool>,
 }
 
 impl LaunchOverrides {
@@ -105,6 +122,7 @@ impl LaunchOverrides {
             && self.scott_picture_resolution.is_none()
             && self.colour_source.is_none()
             && self.honor_game_colours.is_none()
+            && self.images.is_none()
     }
 }
 
@@ -1128,38 +1146,58 @@ impl LaunchOptionsState {
         usize::from(self.scott_native_pictures)
     }
 
-    /// Total selectable rows: one per art choice (plus "inherit"), the
-    /// interpreter row, the picture-resolution row when it exists, the
-    /// colour-source and game-colours rows (SQ-1532, always present), and the
-    /// persist checkbox.
+    /// Total art-row choices: "inherit" (`0`), each candidate, and "None, text
+    /// only" (SQ-1556) — always the last one. The single source of truth for
+    /// the flat-index range `Row::Art` covers, so the render side never
+    /// recomputes it by hand.
+    pub fn art_rows(&self) -> usize {
+        self.candidates.len() + 2
+    }
+
+    /// The flat art-row index of the "None, text only" choice — always the
+    /// last art row (SQ-1556).
+    pub fn text_only_index(&self) -> usize {
+        self.candidates.len() + 1
+    }
+
+    /// Is "None, text only" the current art selection — this launch forced to
+    /// draw with no picture source at all (SQ-1556)?
+    pub fn is_text_only(&self) -> bool {
+        self.art == self.text_only_index()
+    }
+
+    /// Total selectable rows: the art choices (inherit, each candidate, and
+    /// "None, text only"), the interpreter row, the picture-resolution row
+    /// when it exists, the colour-source and game-colours rows (SQ-1532,
+    /// always present), and the persist checkbox.
     pub fn row_count(&self) -> usize {
-        self.candidates.len() + 5 + self.resolution_row()
+        self.art_rows() + 4 + self.resolution_row()
     }
 
     /// The cursor as a flat row index.
     pub fn cursor_index(&self) -> usize {
         match self.cursor {
             Row::Art(i) => i,
-            Row::Interpreter => self.candidates.len() + 1,
-            Row::ScottResolution => self.candidates.len() + 2,
-            Row::ColourSource => self.candidates.len() + 2 + self.resolution_row(),
-            Row::GameColours => self.candidates.len() + 3 + self.resolution_row(),
-            Row::Persist => self.candidates.len() + 4 + self.resolution_row(),
+            Row::Interpreter => self.art_rows(),
+            Row::ScottResolution => self.art_rows() + 1,
+            Row::ColourSource => self.art_rows() + 1 + self.resolution_row(),
+            Row::GameColours => self.art_rows() + 2 + self.resolution_row(),
+            Row::Persist => self.art_rows() + 3 + self.resolution_row(),
         }
     }
 
     /// Move the cursor to a flat row index (clamped).
     pub fn set_cursor_index(&mut self, idx: usize) {
-        let n = self.candidates.len();
-        self.cursor = if idx <= n {
+        let art_rows = self.art_rows();
+        self.cursor = if idx < art_rows {
             Row::Art(idx)
-        } else if idx == n + 1 {
+        } else if idx == art_rows {
             Row::Interpreter
-        } else if self.scott_native_pictures && idx == n + 2 {
+        } else if self.scott_native_pictures && idx == art_rows + 1 {
             Row::ScottResolution
-        } else if idx == n + 2 + self.resolution_row() {
+        } else if idx == art_rows + 1 + self.resolution_row() {
             Row::ColourSource
-        } else if idx == n + 3 + self.resolution_row() {
+        } else if idx == art_rows + 2 + self.resolution_row() {
             Row::GameColours
         } else {
             Row::Persist
@@ -1176,10 +1214,20 @@ impl LaunchOptionsState {
     /// `cycle`/`activate_row` alone, so this stays correct even if a locked
     /// row's live value were ever set some other way (SQ-1532).
     pub fn overrides(&self) -> LaunchOverrides {
+        let art_changed = self.art != self.baseline_art;
         LaunchOverrides {
-            pictures: (self.art != self.baseline_art)
+            // "None, text only" is a THIRD art state, not a candidate — see
+            // `images` below for what it actually produces. `chosen_art()`
+            // already answers `None` for it (its index is one past every
+            // candidate), so excluding it here only prevents a stale
+            // `pictures` override from lingering under a `LaunchOverrides`
+            // that also carries `images: Some(false)`.
+            pictures: (art_changed && !self.is_text_only())
                 .then(|| self.chosen_art().map(|c| c.filename.clone()))
                 .flatten(),
+            // SQ-1556: the one art choice that isn't naming an archive — forces
+            // the whole picture pipeline off for this launch instead.
+            images: (art_changed && self.is_text_only()).then_some(false),
             interpreter_number: (self.interpreter != self.baseline_interpreter)
                 .then_some(self.interpreter)
                 .flatten(),
@@ -1345,7 +1393,12 @@ impl LaunchOptionsState {
     /// inheritance into a pin, and the story stops tracking a later change to the
     /// global config. Only a difference from the baseline is a decision.
     pub fn persist_to(&self, game_dir: &Path) -> std::io::Result<()> {
-        if self.art != self.baseline_art {
+        // SQ-1556: "None, text only" has no sidecar key of its own — writing
+        // `pictures = None` here would read as "inherit", not "never draw
+        // pictures for this game", which is a different promise. So the
+        // checkbox is a session-only choice for this one row: ticking it
+        // leaves the sidecar's `pictures` key exactly as it was.
+        if self.art != self.baseline_art && !self.is_text_only() {
             crate::styles::write_per_game_pictures(
                 game_dir,
                 self.chosen_art().map(|c| c.filename.clone()),
@@ -1546,6 +1599,29 @@ mod tests {
         let _ = std::fs::remove_dir_all(&dir);
     }
 
+    /// SQ-1556: "None, text only" has no sidecar key of its own — writing
+    /// `pictures = None` for it would read as "inherit", a different promise
+    /// — so ticking the checkbox on that row is a no-op on disk: it must not
+    /// create a sidecar at all, and must not clobber a `pictures` key a prior
+    /// session already pinned.
+    #[test]
+    fn persisting_text_only_writes_nothing() {
+        let dir = tmp("persist-text-only");
+        let story = dir.join("story.z6");
+        std::fs::write(&story, b"x").unwrap();
+        let game_dir = dir.join("game");
+        crate::styles::write_per_game_pictures(&game_dir, Some("zork0.mg1".to_string())).unwrap();
+
+        let mut st = LaunchOptionsState::new("Story", &story, Some("zork0.mg1"), None, Some(6), None);
+        st.art = st.text_only_index();
+        st.persist = true;
+        st.persist_to(&game_dir).unwrap();
+
+        let body = std::fs::read_to_string(crate::styles::per_game_config_path(&game_dir)).unwrap();
+        assert!(body.contains("zork0.mg1"), "the prior pin survives untouched: {body:?}");
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
     /// SQ-1473: the picture-resolution row exists only when
     /// [`LaunchOptionsState::with_scott_resolution`] says this entry has
     /// native C64 vector pictures — it must not appear, and must not be
@@ -1576,10 +1652,10 @@ mod tests {
 
         // And the resolution row itself is reachable only on the native entry.
         let mut native3 = native.clone();
-        native3.set_cursor_index(native3.candidates.len() + 2);
+        native3.set_cursor_index(native3.art_rows() + 1);
         assert_eq!(native3.cursor, Row::ScottResolution);
         let mut plain3 = plain.clone();
-        plain3.set_cursor_index(plain3.candidates.len() + 2);
+        plain3.set_cursor_index(plain3.art_rows() + 1);
         assert_ne!(plain3.cursor, Row::ScottResolution, "no such row on a plain story");
 
         let _ = std::fs::remove_dir_all(&dir);
@@ -1690,10 +1766,14 @@ mod tests {
         let mut st = LaunchOptionsState::new("Story", &story, None, None, Some(6), None);
         let k = |c| KeyEvent::new(c, KeyModifiers::NONE);
 
-        // No candidates here, so rows are: Art(0), Interpreter, ColourSource,
-        // GameColours, Persist (SQ-1532 added the middle two, always present).
-        assert_eq!(st.row_count(), 5);
+        // No candidates here, so rows are: Art(0) "inherit", Art(1) "None,
+        // text only" (SQ-1556 — always the last art row, even with zero
+        // candidates), Interpreter, ColourSource, GameColours, Persist
+        // (SQ-1532 added the middle two, always present).
+        assert_eq!(st.row_count(), 6);
         assert_eq!(st.cursor, Row::Art(0));
+        st.on_key(k(KeyCode::Down));
+        assert_eq!(st.cursor, Row::Art(1), "the text-only row comes before Interpreter");
         st.on_key(k(KeyCode::Down));
         assert_eq!(st.cursor, Row::Interpreter);
         // Right cycles the interpreter forward off auto; Left comes back.
@@ -1758,6 +1838,40 @@ mod tests {
         assert!(st2.overrides().is_empty());
     }
 
+    /// SQ-1556: selecting "None, text only" — the art row one past every
+    /// candidate — produces exactly `images: Some(false)`, never a `pictures`
+    /// override alongside it, and reverting to "Automatic" clears it back to
+    /// nothing, the same "absent key = inherit" contract every other row here
+    /// keeps.
+    #[test]
+    fn selecting_text_only_produces_exactly_one_images_override() {
+        let dir = tmp("text-only");
+        let story = dir.join("story.z6");
+        std::fs::write(&story, b"x").unwrap();
+        let mut st = LaunchOptionsState::new("Story", &story, None, None, Some(6), None);
+        assert!(st.candidates.is_empty(), "a dummy story has no real archives beside it");
+
+        // Row 0 is "inherit"; the text-only row is always the LAST art row,
+        // one past every candidate — here that's row 1.
+        assert_eq!(st.text_only_index(), 1);
+        assert_eq!(st.art_rows(), 2);
+        st.art = st.text_only_index();
+        assert!(st.is_text_only());
+
+        let ov = st.overrides();
+        assert_eq!(ov.images, Some(false));
+        assert_eq!(ov.pictures, None, "text-only never also names an archive");
+        assert!(!ov.is_empty());
+
+        // Picking "Automatic" again clears it — no lingering override.
+        st.art = 0;
+        assert!(!st.is_text_only());
+        assert_eq!(st.overrides().images, None);
+        assert!(st.overrides().is_empty());
+
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
     fn colours_story(dir: &Path) -> PathBuf {
         let story = dir.join("story.z6");
         std::fs::write(&story, b"x").unwrap();
@@ -1779,18 +1893,18 @@ mod tests {
 
         // Same row count either way — locking is not hiding.
         assert_eq!(unlocked.row_count(), locked.row_count());
-        let n = unlocked.candidates.len();
-        assert_eq!(unlocked.row_count(), n + 5);
+        let art_rows = unlocked.art_rows();
+        assert_eq!(unlocked.row_count(), art_rows + 4);
 
         for st in [&unlocked, &locked] {
             let mut st = st.clone();
-            st.set_cursor_index(n + 2);
+            st.set_cursor_index(art_rows + 1);
             assert_eq!(st.cursor, Row::ColourSource);
-            st.set_cursor_index(n + 3);
+            st.set_cursor_index(art_rows + 2);
             assert_eq!(st.cursor, Row::GameColours);
-            st.set_cursor_index(n + 4);
+            st.set_cursor_index(art_rows + 3);
             assert_eq!(st.cursor, Row::Persist);
-            assert_eq!(st.cursor_index(), n + 4);
+            assert_eq!(st.cursor_index(), art_rows + 3);
         }
         let _ = std::fs::remove_dir_all(&dir);
     }

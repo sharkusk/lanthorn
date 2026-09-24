@@ -104,6 +104,66 @@ fn a_scott_adams_story_boots_with_no_terminal() {
     let _ = std::fs::remove_dir_all(&home);
 }
 
+/// SQ-1556: a host's explicit "None, text only" launch choice
+/// (`LaunchOverrides.images = Some(false)`) suppresses the whole picture
+/// pipeline for that one boot — the same effect `--images off` has globally,
+/// scoped to a single launch instead. `cfg.images` is the one gate every
+/// engine's picture resolution reads (`PictureOverride::resolve_with_session`,
+/// `PictSource::resolve_with_override` for Z-code, `resolve_pict_blorb` for
+/// Glulx and Scott — see `host/boot.rs`), so asserting it is off after boot is
+/// a direct proof that no picture source is in effect, for any engine.
+///
+/// Arthur is a real graphical Version 6 release with its own native/Blorb
+/// artwork (`stories/`-only, so this skips vacuously without it, like every
+/// other real-media suite).
+#[test]
+fn the_text_only_override_boots_a_picture_bearing_story_with_no_picture_source() {
+    let story = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../stories/arthur-r74-s890714.z6");
+    if !story.is_file() {
+        eprintln!("SKIP: {} absent (stories/ not populated in this checkout)", story.display());
+        return;
+    }
+    let home = app::scratch_dir("host-boot-text-only");
+    let overrides = LaunchOverrides { images: Some(false), ..LaunchOverrides::default() };
+    let req = BootRequest {
+        story_path: story,
+        disk_entry: None,
+        overrides: &overrides,
+        cfg: headless_config(&home),
+        data_base: home.join("saves"),
+        flags: LaunchFlags::default(),
+        terminal: TerminalFacts::default(),
+    };
+    let b = boot_story(req, &mut QuietBoot).expect("boots with the text-only override");
+    // Not `assert_ready`: a v6 game's intro screen does not necessarily land
+    // its first text in `state.transcript`, and the point of this case is the
+    // override, not v6's window model — `has_quit` is the engine-neutral proof
+    // the boot actually ran the story rather than erroring out some other way.
+    assert!(!b.session.has_quit(), "the story is running, not stuck at an error");
+    assert!(
+        !b.state.config.images,
+        "LaunchOverrides.images forced pictures off for this launch, even though \
+         the config default (and Arthur's own artwork) would otherwise draw them"
+    );
+    let _ = std::fs::remove_dir_all(&home);
+}
+
+/// The baseline the case above is falsified against: with no override, the
+/// same story boots with pictures still on (the config default).
+#[test]
+fn without_the_override_the_config_default_for_images_is_unchanged() {
+    let story = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../stories/arthur-r74-s890714.z6");
+    if !story.is_file() {
+        eprintln!("SKIP: {} absent (stories/ not populated in this checkout)", story.display());
+        return;
+    }
+    let home = app::scratch_dir("host-boot-images-default");
+    let b = boot(story, headless_config(&home), &home.join("saves"));
+    assert!(!b.session.has_quit(), "the story is running, not stuck at an error");
+    assert!(b.state.config.images, "no override: the config default (on) is untouched");
+    let _ = std::fs::remove_dir_all(&home);
+}
+
 /// A story that cannot be read is an error the host gets back, not a process exit.
 #[test]
 fn an_unreadable_story_is_an_error_not_an_exit() {
