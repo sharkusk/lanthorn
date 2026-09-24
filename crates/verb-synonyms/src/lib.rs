@@ -151,6 +151,17 @@ pub fn suggest(word: &str, known: impl Fn(&str) -> bool, limit: usize) -> Vec<&'
     out
 }
 
+/// Every single word the table holds, in no particular order — the table read
+/// as a plain English lexicon rather than as groups.
+///
+/// For a caller that needs to know how a word is SPELLED rather than what it
+/// means: a Version 3 story stores `activa`, prints `activate` nowhere, and
+/// this is where the whole word can still be found (SQ-1553). Phrasal members
+/// (`put on`) are left out; they are not one word.
+pub fn words() -> impl Iterator<Item = &'static str> {
+    index().by_word.keys().copied().filter(|w| !w.contains(' '))
+}
+
 /// How many groups the shipped table holds. For diagnostics and for tests that
 /// want to know the data is really there.
 pub fn group_count() -> usize {

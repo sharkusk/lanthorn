@@ -283,3 +283,16 @@ fn no_form_is_its_own_base() {
         assert!(f.next().is_none(), "exactly two columns: {line:?}");
     }
 }
+
+/// The lexicon view spells out the verbs a Version 3 dictionary cuts short —
+/// `activa`, `brandi` and `examin` in Zork I — and holds no phrase, since a
+/// phrase is not one word (SQ-1553).
+#[test]
+fn the_lexicon_holds_whole_single_words() {
+    let all: std::collections::HashSet<&str> = words().collect();
+    for w in ["activate", "brandish", "examine", "describe"] {
+        assert!(all.contains(w), "`{w}` should be in the lexicon");
+    }
+    assert!(all.iter().all(|w| !w.contains(' ')), "no phrasal member is a word");
+    assert!(all.len() > 3000, "only {} words — did the table get truncated?", all.len());
+}

@@ -492,6 +492,10 @@ fn zork1_answers_a_word_it_never_heard_with_what_that_word_means() {
 ///
 /// Falsify by dropping the `irregular_bases` loop from `vocab::stems`: all three
 /// lines fall silent.
+///
+/// `destroy` is Zork's own `destro`, spelled out of the story's text (SQ-1553);
+/// before that an aside still sitting at the truncation limit was dropped as a
+/// fragment and `smash` took its slot.
 #[test]
 fn zork1_answers_an_irregular_inflection_with_the_verb_it_knows() {
     let Some(mut s) = zork1() else { return };
@@ -500,7 +504,7 @@ fn zork1_answers_an_irregular_inflection_with_the_verb_it_knows() {
         lines,
         vec![
             "this story knows — take · look · carry",
-            "this story knows — break · block · smash",
+            "this story knows — break · block · destroy",
             "this story knows — catch · carry · get",
         ]
     );
@@ -542,6 +546,9 @@ fn zork1_answers_a_three_letter_irregular_now_that_length_gates_only_the_near_mi
 /// Each is a form no suffix rule can produce and the near miss cannot reach —
 /// `saw` is two keystrokes from `see`, `won` two from `win` — so every line here
 /// is WordNet's exception list and the story's own dictionary, and nothing else.
+///
+/// `consume` is Zork's own `consum`, spelled out of the story's text (SQ-1553),
+/// where the fragment used to be dropped and `taste` took its slot.
 #[test]
 fn zork1_answers_the_rest_of_the_three_letter_irregulars() {
     let Some(mut s) = zork1() else { return };
@@ -549,7 +556,7 @@ fn zork1_answers_the_rest_of_the_three_letter_irregulars() {
     assert_eq!(
         lines,
         vec![
-            "this story knows — eat · bite · taste",
+            "this story knows — eat · bite · consume",
             "this story knows — see · find · seek",
             "this story knows — win",
             "this story knows — get · carry · catch",

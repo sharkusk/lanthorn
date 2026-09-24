@@ -1345,7 +1345,14 @@ pub fn boot_story(req: BootRequest<'_>, hooks: &mut dyn BootHooks) -> Result<Boo
     // sound should never pay it just because `enable_sound` is on (SQ-1423).
 
     // Seed autocomplete with the story's parser vocabulary (room nouns are added live).
-    state.dict_words = session.introspect().map(|i| i.vocabulary()).unwrap_or_default();
+    // Each entry spelled out where the dictionary cut it short (SQ-1553):
+    // completion offers `lantern`, not `lanter`, and applying it still reaches
+    // the same entry. This is also where the one-time story-text read is paid.
+    let words = session.introspect().map(|i| i.vocabulary()).unwrap_or_default();
+    state.dict_words = match state.vocab.get(session.as_ref()) {
+        Some(v) => words.iter().map(|w| v.spell(w).to_string()).collect(),
+        None => words,
+    };
 
     // Open whichever panel this story starts with (SQ-1123, widened to a
     // three-state cycle by SQ-1237): the per-game override, or the global

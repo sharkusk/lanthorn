@@ -1296,6 +1296,23 @@ pub trait Engine {
         None
     }
 
+    /// Every word the story's own static text holds — what it CAN print, read
+    /// from the story file once, not what it has printed so far (SQ-1553).
+    ///
+    /// It is what spells a truncated dictionary key out in full
+    /// ([`crate::vocab::StoryVocabulary::spell`]): a Version 3 dictionary stores
+    /// `lanter`, and the story's text says `lantern`. Asked once a session, at
+    /// [`crate::vocab::VocabState::get`].
+    ///
+    /// `None` — the default — for an engine with no reader for its text. The
+    /// Z-machine answers ([`crate::story_text::zmachine_words`]); a Glulx image's
+    /// strings are compressed through a decoding table and a Scott Adams
+    /// database keeps words shorter than any key worth spelling out, so both
+    /// fall back to the lexicon alone.
+    fn story_text_words(&self) -> Option<std::collections::BTreeSet<String>> {
+        None
+    }
+
     /// Split prose the way this story's own parser splits an input line
     /// (SQ-1116).
     ///

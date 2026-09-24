@@ -5812,6 +5812,10 @@ impl Engine for GameSession {
         Some(zvm::dictionary::load(mem).lookup(mem, word) != 0)
     }
 
+    fn story_text_words(&self) -> Option<std::collections::BTreeSet<String>> {
+        Some(crate::story_text::zmachine_words(&self.machine.mem))
+    }
+
     /// The story's OWN tokeniser, run over prose the story itself printed
     /// (SQ-1116) — `zvm::dictionary::tokenise`, which is the routine `read`
     /// calls, so the dictionary's declared separators (ZMSD §13.1) are the ones

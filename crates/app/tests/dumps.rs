@@ -23,6 +23,8 @@ mod vocabulary_offer;
 mod story_word_scrape;
 #[path = "suites/scope_completion.rs"]
 mod scope_completion;
+#[path = "suites/story_spellings.rs"]
+mod story_spellings;
 
 #[path = "suites/vocabulary_vetting.rs"]
 mod vocabulary_vetting;

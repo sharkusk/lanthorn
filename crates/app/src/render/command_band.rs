@@ -541,7 +541,16 @@ pub fn refresh_verbs(state: &mut AppState, session: &dyn crate::engine::Engine) 
     // guidance offer reads, cached for the session, so this costs one grammar
     // read whichever of the two asks first.
     let mut vocab = std::mem::take(&mut state.vocab);
-    let story = vocab.get(session).map(|v| verbs_from_grammar(v.verbs()));
+    // Spelled out for display (SQ-1553): `brandi` is `brandish`, and a word
+    // spelled out only ever APPENDS letters to its key, so the column's
+    // alphabetical order is unchanged.
+    let story = vocab.get(session).map(|v| {
+        let mut entries = verbs_from_grammar(v.verbs());
+        for e in &mut entries {
+            e.word = v.spell(&e.word).to_string();
+        }
+        entries
+    });
     state.vocab = vocab;
     let table = match story {
         Some(entries) if !entries.is_empty() => {
