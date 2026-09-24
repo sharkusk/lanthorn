@@ -78,6 +78,7 @@ fn a_zmachine_story_boots_with_no_terminal() {
     // The starting room is on the map from the seed turn, as on the TUI's first frame.
     assert!(b.mapper.graph.current().is_some(), "the starting room is observed");
     assert!(b.game_dir.starts_with(home.join("saves")), "per-story storage under the data base");
+    assert!(!b.resumed, "a first boot with no archive on disk did not resume anything (SQ-1545)");
     let _ = std::fs::remove_dir_all(&home);
 }
 
@@ -188,6 +189,7 @@ fn a_second_boot_resumes_the_first_and_plays_on_identically() {
     let data_base = home.join("saves");
 
     let mut first = boot(story.clone(), headless_config(&home), &data_base);
+    assert!(!first.resumed, "the first boot found no archive to resume from (SQ-1545)");
     let start = here(&first);
     play(&mut first, "look");
     play(&mut first, "south");
@@ -195,6 +197,7 @@ fn a_second_boot_resumes_the_first_and_plays_on_identically() {
     write_resume_archive(&mut first);
 
     let mut second = boot(story, headless_config(&home), &data_base);
+    assert!(second.resumed, "the second boot restored the archive the first one wrote (SQ-1545)");
     assert_eq!(here(&second), here(&first), "the resumed game stands where the first one stopped");
     assert_eq!(tail(&second, 6), tail(&first, 6), "the resumed transcript ends where the first one did");
     assert_eq!(second.state.turns, first.state.turns, "the turn counter comes back with it");

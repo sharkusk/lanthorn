@@ -214,6 +214,19 @@ pub fn silent_terminator_turn(
 /// terminating character (see [`silent_terminator_turn`]); `map_view` is the map
 /// pane's `(cols, rows)` to recenter in, or `None` for a host with no map;
 /// `bg_tidy_counter` is the host's debounce counter for background map tidies.
+///
+/// Per-command bookkeeping (SQ-1545) runs first, unconditionally: `cmd` is
+/// recorded into shell-style command history (a no-op if a caller already
+/// recorded the same line — see below), the turn counter advances, and
+/// progress is marked unsaved (drives the quit prompt). This used to be three
+/// lines every caller had to repeat immediately before calling this function;
+/// a headless host that just does `session.submit` + `finish_command_turn` now
+/// gets the same history/turn-count/autosave behaviour the TUI does, with no
+/// extra lines of its own. The TUI's own slash-command branch still records a
+/// command into history BEFORE routing it (a slash command never reaches this
+/// function at all, so it has to record itself) — when that same line lands
+/// here as an ordinary command, the record below is a harmless consecutive-
+/// duplicate no-op (`AppState::record_command`'s own dedupe).
 #[allow(clippy::too_many_arguments)]
 pub fn finish_command_turn(
     cmd: &str,
@@ -228,6 +241,11 @@ pub fn finish_command_turn(
     map_view: Option<(u16, u16)>,
     bg_tidy_counter: &mut u32,
 ) -> TurnOutcome {
+    if !cmd.is_empty() {
+        state.record_command(cmd);
+    }
+    state.turns += 1;
+    state.unsaved_progress = true;
     // The player has typed again, so anything the shadow is still working on for
     // an earlier turn is stale (SQ-1124).
     state.begin_turn();

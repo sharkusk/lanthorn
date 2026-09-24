@@ -195,6 +195,48 @@ fn a_room_heading_starting_with_the_command_word_does_not_swallow_the_echo() {
     let _ = std::fs::remove_dir_all(&home);
 }
 
+// ── Per-command bookkeeping (SQ-1545) ───────────────────────────────────────
+
+/// `command()` above is exactly `session.submit` + `finish_command_turn` — no
+/// extra lines recording history, advancing the turn counter, or marking
+/// progress unsaved. Those three used to be the TUI's own responsibility,
+/// repeated at every call site right before this function; they now run
+/// inside `finish_command_turn` itself, so a headless caller gets them for
+/// free with no caller-side bookkeeping of its own.
+#[test]
+fn finish_command_turn_does_the_per_command_bookkeeping_with_no_extra_caller_code() {
+    let story = fixture_path("Tangle.z5");
+    if !story.is_file() {
+        eprintln!("SKIP: {} absent", story.display());
+        return;
+    }
+    let home = app::scratch_dir("host-turn-bookkeeping");
+    let mut b = boot(story, &home);
+    let mut tidy = 0u32;
+    assert_eq!(b.state.turns, 0, "premise: a fresh boot starts at turn 0");
+    assert!(b.state.command_history.is_empty(), "premise: no shell history yet");
+    assert!(!b.state.unsaved_progress, "premise: nothing to save yet");
+
+    let out = command(&mut b, "look", &mut tidy);
+    assert!(!out.quit);
+    assert_eq!(b.state.turns, 1, "the turn counter advanced with no caller-side `turns += 1`");
+    assert!(b.state.unsaved_progress, "progress is marked unsaved with no caller-side flag set");
+    assert_eq!(
+        b.state.command_history.last().map(String::as_str),
+        Some("look"),
+        "the command landed in shell-style history with no caller-side record_command call"
+    );
+
+    let _ = command(&mut b, "look", &mut tidy);
+    assert_eq!(b.state.turns, 2, "and again next turn");
+    assert_eq!(
+        b.state.command_history.len(),
+        1,
+        "a consecutive repeat is deduped, same as AppState::record_command always did"
+    );
+    let _ = std::fs::remove_dir_all(&home);
+}
+
 // ── Sound: a recording sink, and a finish routine reported back ────────────────
 
 #[derive(Debug, Clone, PartialEq)]

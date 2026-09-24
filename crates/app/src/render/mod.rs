@@ -230,7 +230,14 @@ impl<'a> TextInk<'a> {
 /// - `ZColour::Standard(10..=12)` → fixed grey RGB via `grey_rgb(n)`
 /// - `ZColour::Standard(_)` (the §8.3.1 non-colours) → `Color::Reset`
 /// - `ZColour::True(v)` → exact 15-bit RGB via `rgb15_to_888(v)`
-pub(crate) fn resolve_zcolour(c: ZColour, scheme: &ColorScheme) -> Color {
+///
+/// `pub`, not `pub(crate)` (SQ-1545): a host that draws its own transcript
+/// `StyleRun`s (rather than letting the TUI's renderer draw them) needs this
+/// exact packed-zcolour-to-`Color` mapping to match what the TUI would have
+/// shown — `AppState`'s own `transcript_styles`/`transcript_runs` already carry
+/// `ratatui::style::Style`/`Color`, so a host reading them is not taking on a
+/// new dependency by receiving one back from here too.
+pub fn resolve_zcolour(c: ZColour, scheme: &ColorScheme) -> Color {
     match c {
         ZColour::Default => Color::Reset,
         ZColour::Standard(n @ 2..=9) => scheme.palette[(n - 2) as usize],

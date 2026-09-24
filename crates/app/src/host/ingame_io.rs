@@ -63,6 +63,27 @@ pub fn delete_save_confirmed(
     }
 }
 
+/// What a submitted save name did (SQ-1545). The TUI reads its outcome off
+/// `AppState`'s overlays/notices, which a host that draws no dialogs of its own
+/// cannot — this is the same answer, as a value, so such a host can tell success
+/// from failure without scraping notice text.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum SaveAsOutcome {
+    /// Written: `unsaved_progress` cleared, the saves list refreshed, and (for
+    /// an in-game save) `ingame_resume_save` set so the run loop resumes the VM.
+    Saved,
+    /// `buf` was empty; nothing was written and nothing was asked to overwrite.
+    EmptyName,
+    /// A save already exists at `path` (`existing_name` is its display name)
+    /// and `force` was `false`. The TUI opens the overwrite-confirm dialog and
+    /// retries with `force: true` on accept; a host with no dialog of its own
+    /// can retry the same way, pick a different name, or give up.
+    Exists { path: std::path::PathBuf, existing_name: String },
+    /// The write itself failed; `reason` is the same text already pushed as a
+    /// notice.
+    Failed(String),
+}
+
 /// Handle a submitted save name (host "Save State" slot or in-game `@save`).
 /// Called directly from the save-name dialog submit. On success it refreshes the
 /// saves list and clears `unsaved_progress` (both triggers capture the same
@@ -75,6 +96,10 @@ pub fn delete_save_confirmed(
 /// original submit (so a colliding target opens the confirm overlay instead
 /// of silently clobbering the existing save — SQ-0648) and `true` when
 /// resuming after the player has already confirmed the overwrite.
+///
+/// Returns a [`SaveAsOutcome`] alongside the notice it always pushes into
+/// `state` for the TUI — existing callers that ignore the return value see no
+/// change; a headless one can match on it instead of scraping notice text.
 pub fn handle_save_as(
     buf: String,
     dir: &std::path::Path,
@@ -83,7 +108,7 @@ pub fn handle_save_as(
     session: &mut dyn Engine,
     state: &mut AppState,
     force: bool,
-) {
+) -> SaveAsOutcome {
     let ingame = state.ingame_io == Some(crate::session::PendingIo::Save);
     if buf.is_empty() {
         state.push_notice("[Save name cannot be empty]".to_string().as_str());
@@ -94,7 +119,7 @@ pub fn handle_save_as(
                 true,
             ));
         }
-        return;
+        return SaveAsOutcome::EmptyName;
     }
     // SQ-0648: a save-as target that already exists silently overwrote whatever
     // was there — including a save with a DIFFERENT typed name that happens to
@@ -107,13 +132,13 @@ pub fn handle_save_as(
         if let Ok(path) = crate::persist_files::named_save_path(dir, &buf) {
             if let Some(existing_name) = crate::persist_files::existing_save_display_name(&path) {
                 state.overlays.confirm_overwrite_save = Some(crate::state::ConfirmOverwriteSave {
-                    path,
-                    existing_name,
+                    path: path.clone(),
+                    existing_name: existing_name.clone(),
                     pending: crate::state::PendingOverwrite::SaveAs,
                 });
                 state.overlays.save_name_dialog = Some(crate::state::SaveNameDialog::new(buf, ingame));
                 state.overlays.dialog_focus = 1; // Cancel default
-                return;
+                return SaveAsOutcome::Exists { path, existing_name };
             }
         }
     }
@@ -151,9 +176,11 @@ pub fn handle_save_as(
             if ingame {
                 state.ingame_resume_save = Some(true);
             }
+            SaveAsOutcome::Saved
         }
         Err(e) => {
-            state.push_notice(&format!("[Save failed: {}]", e));
+            let reason = e.to_string();
+            state.push_notice(&format!("[Save failed: {}]", reason));
             // In-game: stay pending — re-open the dialog so the user can retry.
             if ingame {
                 state.overlays.save_name_dialog = Some(crate::state::SaveNameDialog::new(
@@ -161,6 +188,7 @@ pub fn handle_save_as(
                     true,
                 ));
             }
+            SaveAsOutcome::Failed(reason)
         }
     }
 }

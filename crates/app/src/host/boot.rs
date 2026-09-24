@@ -138,6 +138,11 @@ pub struct BootedStory {
     pub story_bytes: Vec<u8>,
     pub story_path: PathBuf,
     pub data_base: PathBuf,
+    /// Whether this boot resumed a past game from the archive at `arc_file`
+    /// (`cfg.auto_load` on, a save present, and `Engine::restore_state`
+    /// succeeded) rather than starting fresh. A headless host had no way to
+    /// tell the two apart short of re-reading the archive itself (SQ-1545).
+    pub resumed: bool,
 }
 
 /// An unrecoverable per-story boot failure (unreadable or invalid story, an
@@ -1103,6 +1108,9 @@ pub fn boot_story(req: BootRequest<'_>, hooks: &mut dyn BootHooks) -> Result<Boo
     // When auto_load is false but a save exists and prompt_load_on_launch is true,
     // stash the save for the launch dialog instead of discarding it.
     let mut pending_resume_stash: crate::state::PendingResume = None;
+    // Whether this boot actually resumed a past game (auto_load on, a save
+    // present, and the restore succeeded) — `BootedStory::resumed` (SQ-1545).
+    let mut resumed = false;
     let mut mapper = if arc_file.exists() {
         match load_archive(&arc_file) {
             Ok(ac) => {
@@ -1132,6 +1140,7 @@ pub fn boot_story(req: BootRequest<'_>, hooks: &mut dyn BootHooks) -> Result<Boo
                             // which sets state.turns = ac.meta.turns. Without this, a
                             // resumed game's later save records only post-resume moves.
                             startup_turns = Some(ac.meta.turns);
+                            resumed = true;
                         }
                         Err(e) => {
                             hooks.console(&format!("warning: could not restore game from archive: {}; starting fresh", restore_error_msg(e)));
@@ -1605,5 +1614,6 @@ pub fn boot_story(req: BootRequest<'_>, hooks: &mut dyn BootHooks) -> Result<Boo
         story_bytes,
         story_path,
         data_base,
+        resumed,
     })
 }

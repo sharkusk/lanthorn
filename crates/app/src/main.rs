@@ -3354,11 +3354,10 @@ fn run_event_loop(boot: startup::BootResult, launched_from_library: bool) -> Run
                         };
                         if let Some(term) = term {
                             let cmd = state.take_input();
-                            if !cmd.is_empty() {
-                                state.record_command(&cmd);
-                            }
-                            state.turns += 1;
-                            state.unsaved_progress = true;
+                            // Command history, turn count and unsaved-progress
+                            // bookkeeping now live in `finish_command_turn`
+                            // itself (SQ-1545) — it runs first thing, before
+                            // the rest of that call below.
                             let result = zvm_session_opt_mut(&mut *session)
                                 .expect("z-machine line read is pending")
                                 .submit_line_with_terminator(&cmd, term);
@@ -3785,11 +3784,9 @@ fn run_event_loop(boot: startup::BootResult, launched_from_library: bool) -> Run
                                 // the terminator.
                                 app::state::V6ClickRead::Line { terminator } => {
                                     let cmd = state.take_input();
-                                    if !cmd.is_empty() {
-                                        state.record_command(&cmd);
-                                    }
-                                    state.turns += 1;
-                                    state.unsaved_progress = true;
+                                    // Command history, turn count and unsaved-
+                                    // progress bookkeeping now live in
+                                    // `finish_command_turn` itself (SQ-1545).
                                     let result = {
                                         let z = zvm_session_opt_mut(&mut *session)
                                             .expect("z-machine line read is pending");
@@ -3950,10 +3947,10 @@ fn run_event_loop(boot: startup::BootResult, launched_from_library: bool) -> Run
                     }
                 }
 
-                // Increment the session turn counter. Progress now exists that
-                // isn't captured in a Save State (drives the quit prompt).
-                state.turns += 1;
-                state.unsaved_progress = true;
+                // Turn count and unsaved-progress bookkeeping now live in
+                // `finish_command_turn` itself (SQ-1545) — the `record_command`
+                // above still has to run here too, since a slash command never
+                // reaches that function at all.
 
                 app::trace::hostio(&state.config.user_dir, state.config.trace.hostio, format!("input_line({cmd:?})"));
                 let result = session.submit(&cmd);

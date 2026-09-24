@@ -309,3 +309,95 @@ fn a_cancelled_game_save_resumes_the_game() {
     assert_eq!(b.session.pending_input(), InputKind::Line, "the game is back at its prompt");
     let _ = std::fs::remove_dir_all(&home);
 }
+
+// ── `handle_save_as`'s outcome (SQ-1545) ────────────────────────────────────
+
+/// `handle_save_as` answers a submitted save name directly — the same call the
+/// TUI's save-name dialog submit makes — with no dialog of its own to read the
+/// result off. A fresh name writes and reports `Saved`; the same name again
+/// with `force: false` reports `Exists` (what the TUI turns into its
+/// overwrite-confirm dialog) instead of a host having to notice the dialog
+/// state changed; and a `dir` that cannot be written to reports `Failed` with
+/// the reason, instead of a host scraping `[Save failed: …]` out of a notice.
+#[test]
+fn handle_save_as_reports_saved_exists_and_failed_with_no_dialog_to_read() {
+    let story = fixture_path("Tangle.z5");
+    if !story.is_file() {
+        eprintln!("SKIP: {} absent", story.display());
+        return;
+    }
+    let home = app::scratch_dir("host-save-as-outcome");
+    let mut b = boot(story, &home);
+
+    let out = app::host::ingame_io::handle_save_as(
+        "dup".into(), &b.game_dir, &b.ifid, &mut b.mapper, &mut *b.session, &mut b.state, false,
+    );
+    assert_eq!(out, app::host::ingame_io::SaveAsOutcome::Saved, "a fresh name writes");
+    assert!(b.game_dir.join("dup.lanthorn").is_file(), "and the file is really there");
+
+    let out = app::host::ingame_io::handle_save_as(
+        "dup".into(), &b.game_dir, &b.ifid, &mut b.mapper, &mut *b.session, &mut b.state, false,
+    );
+    match out {
+        app::host::ingame_io::SaveAsOutcome::Exists { path, .. } => {
+            assert_eq!(path, b.game_dir.join("dup.lanthorn"), "names the colliding file");
+        }
+        other => panic!("expected Exists for a name already on disk, got {other:?}"),
+    }
+
+    // A `dir` this process cannot write into: the write itself fails. Unix
+    // only (mirrors `storage::deny_new_files_in`'s own reasoning) — `dir`
+    // creation on-write (`storage::atomic_write_with`) means a merely-absent
+    // directory is not enough to provoke a failure, it gets created.
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        let locked_dir = home.join("locked-game-dir");
+        std::fs::create_dir_all(&locked_dir).unwrap();
+        std::fs::set_permissions(&locked_dir, std::fs::Permissions::from_mode(0o500)).unwrap();
+        // root (common in CI containers) ignores the mode bits — probe first
+        // and skip rather than assert on an unenforceable permission.
+        if std::fs::File::create(locked_dir.join(".probe")).is_ok() {
+            eprintln!("SKIP: cannot enforce a read-only directory in this environment (root?)");
+        } else {
+            let out = app::host::ingame_io::handle_save_as(
+                "elsewhere".into(), &locked_dir, &b.ifid, &mut b.mapper, &mut *b.session, &mut b.state, false,
+            );
+            match out {
+                app::host::ingame_io::SaveAsOutcome::Failed(reason) => {
+                    assert!(!reason.is_empty(), "carries a reason a host can show");
+                }
+                other => panic!("expected Failed for an unwritable dir, got {other:?}"),
+            }
+        }
+        let _ = std::fs::set_permissions(&locked_dir, std::fs::Permissions::from_mode(0o700));
+    }
+    let _ = std::fs::remove_dir_all(&home);
+}
+
+// ── `resolve_zcolour` (SQ-1545) ─────────────────────────────────────────────
+
+/// `render::resolve_zcolour` used to be `pub(crate)`, unreachable from a host
+/// that draws its own transcript `StyleRun`s rather than letting the TUI's
+/// renderer draw them. It is `pub` now — callable straight from here, exactly
+/// as a host would, with no need to restate the packed-zcolour-to-`Color`
+/// mapping.
+#[test]
+fn resolve_zcolour_is_callable_from_outside_render() {
+    use app::colors::ColorScheme;
+    use ratatui::style::Color;
+    use zvm::screen::ZColour;
+
+    let scheme = ColorScheme::terminal_default();
+    assert_eq!(app::render::resolve_zcolour(ZColour::Default, &scheme), Color::Reset);
+    assert_eq!(
+        app::render::resolve_zcolour(ZColour::Standard(4), &scheme),
+        scheme.palette[(4 - 2) as usize],
+        "a Standard colour routes through the theme palette"
+    );
+    assert_eq!(
+        app::render::resolve_zcolour(ZColour::True24(0x102030), &scheme),
+        Color::Rgb(0x10, 0x20, 0x30),
+        "a 24-bit true colour is exact"
+    );
+}

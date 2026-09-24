@@ -926,6 +926,7 @@ pub(crate) fn boot_story(
         story_bytes,
         story_path,
         data_base,
+        resumed: _,
     } = match booted {
         Ok(b) => b,
         Err(e) => {
