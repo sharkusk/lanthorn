@@ -191,6 +191,20 @@ fn host_compose_with(
     text: V6TextMode,
     prose: &dyn Fn(u16, u16) -> (MainText, RasterMetrics),
 ) -> app::render::screen::V6Frame {
+    host_compose_full(b, honor, text, prose, Some(""))
+}
+
+/// [`host_compose_with`], with the input override (SQ-1567 addendum) named by
+/// the caller too — `panel_input` is built from the SAME value, matching how
+/// `V6FrameInputs`'s own builder derives it: the story box and a reading panel
+/// cannot disagree about the host's draft.
+fn host_compose_full(
+    b: &Booted,
+    honor: bool,
+    text: V6TextMode,
+    prose: &dyn Fn(u16, u16) -> (MainText, RasterMetrics),
+    input: Option<&str>,
+) -> app::render::screen::V6Frame {
     let model = b.session.screen();
     let WinNode::Layered(items) = &model.root else { panic!("a v6 frame has a Layered root") };
     let native = v6::native_extent(items, &b.face);
@@ -203,7 +217,8 @@ fn host_compose_with(
         colors: &colors,
         face: &b.face,
         paint: paint.as_deref(),
-        panel_input: Some(""),
+        panel_input: input,
+        input,
         prose,
         reveal: None,
         pager_active: false,
@@ -437,7 +452,7 @@ fn for_model_compose(model: &app::engine::ScreenModel, state: &app::state::AppSt
     let layout = v6::classify_windows(items, state.v6_text.cell());
     let paint = state.v6_paint.borrow();
     let prose = |cols: u16, rows: u16| app::render::screen::build_main_text(state, cols, rows);
-    let inputs = V6FrameInputs::for_model(state, model, paint.as_deref(), &prose);
+    let inputs = V6FrameInputs::for_model(state, model, paint.as_deref(), &prose, Some(state.input.value.as_str()));
     compose_v6_frame(&layout, RasterFrame::native(native), &inputs)
 }
 
@@ -589,6 +604,68 @@ fn record_only_reports_the_caret_instead_of_painting_it() {
                 }
             }
             assert!(differing > 0, "{file} honor={honor}: Rasterise no longer paints the caret");
+        }
+    }
+}
+
+// ── the input line override (SQ-1567 addendum) ───────────────────────────────
+
+/// **`input: None` suppresses the live input line entirely — text and caret
+/// both — regardless of what the prose callback itself asked for.** A host that
+/// owns its own input line can now keep its draft out of the composite without
+/// ever touching `state.input.value`; this is the same idea `RecordOnly`
+/// already applies to the caret's PAINTING, extended to the TEXT.
+#[test]
+fn a_host_input_override_of_none_suppresses_the_live_input_line() {
+    for (file, b) in specimens() {
+        for honor in [true, false] {
+            // Non-vacuity first: with the default (non-suppressing) override the
+            // callback's `awaiting: true` really does draw a caret, or the case
+            // below proves nothing about the override.
+            let shown = host_compose_full(&b, honor, V6TextMode::Rasterise, &prose_awaiting(true), Some(""));
+            assert!(shown.caret.is_some(), "{file} honor={honor}: non-vacuity — awaiting:true drew no caret at all");
+
+            let idle = host_compose_full(&b, honor, V6TextMode::Rasterise, &prose_awaiting(false), Some(""));
+            let suppressed = host_compose_full(&b, honor, V6TextMode::Rasterise, &prose_awaiting(true), None);
+            assert!(suppressed.caret.is_none(), "{file} honor={honor}: input:None still reported a caret");
+            assert_eq!(
+                suppressed.canvas, idle.canvas,
+                "{file} honor={honor}: input:None painted a live line anyway"
+            );
+        }
+    }
+}
+
+/// **`input: Some(text)` draws exactly `text`, in place of whatever the prose
+/// callback computed for the live line, with the caret one glyph past it.**
+/// Lets a host preview its own draft in the game's own font without touching
+/// `AppState`.
+#[test]
+fn a_host_input_override_draws_exactly_the_given_text() {
+    for (file, b) in specimens() {
+        for honor in [true, false] {
+            let baseline =
+                host_compose_full(&b, honor, V6TextMode::RasteriseAndRecord, &prose_awaiting(true), Some(""));
+            let overridden =
+                host_compose_full(&b, honor, V6TextMode::RasteriseAndRecord, &prose_awaiting(true), Some("Q"));
+            let all = run_text(&overridden.text);
+            assert!(all.contains('Q'), "{file} honor={honor}: the override text is not among the runs: {all}");
+            let base_caret =
+                baseline.caret.unwrap_or_else(|| panic!("{file} honor={honor}: no caret with an empty draft"));
+            let over_caret =
+                overridden.caret.unwrap_or_else(|| panic!("{file} honor={honor}: no caret with a draft"));
+            assert_eq!(
+                (over_caret.y, over_caret.h, over_caret.panel),
+                (base_caret.y, base_caret.h, base_caret.panel),
+                "{file} honor={honor}: the caret stays on the input row"
+            );
+            let adv = b.face.advance('Q');
+            assert_eq!(
+                over_caret.x,
+                base_caret.x + adv,
+                "{file} honor={honor}: the caret sits one glyph past the override text"
+            );
+            assert_ne!(overridden.canvas, baseline.canvas, "{file} honor={honor}: the override text painted no pixel");
         }
     }
 }

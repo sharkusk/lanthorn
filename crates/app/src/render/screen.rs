@@ -2831,8 +2831,23 @@ pub struct V6FrameInputs<'a> {
     /// The game's painted ground (`erase_window` fills, SQ-0706), if any.
     pub paint: Option<&'a image::RgbaImage>,
     /// The live input line to echo into a secondary prose window the game is
-    /// reading through (SQ-0746), or `None` while the view is scrolled back.
+    /// reading through (SQ-0746), or `None` while the view is scrolled back —
+    /// or because [`Self::input`] overrides it away (SQ-1567 addendum).
     pub panel_input: Option<&'a str>,
+    /// The live input line's TEXT, overriding whatever [`Self::prose`]'s
+    /// `MainText::input` and [`Self::panel_input`] would otherwise show.
+    /// `Some(text)` draws exactly `text` — in both the story prose box and a
+    /// reading panel — with the caret placed right after it; `None` draws no
+    /// live input text or caret in either place, because the host owns the
+    /// draft and is drawing it itself, the same idea as
+    /// [`V6TextMode::RecordOnly`](crate::render::v6_layout::V6TextMode::RecordOnly)'s
+    /// caret suppression (SQ-1567 addendum: a host with its own input line had
+    /// no way to keep its draft out of the composite without blanking
+    /// `state.input.value` around every call). `from_state` defaults this to
+    /// `Some(&state.input.value)`, so the TUI is unaffected; `for_model` takes
+    /// it explicitly, since a host composing without a render has no
+    /// `AppState::input` of its own.
+    pub input: Option<&'a str>,
     /// The story transcript, windowed to a prose box of `(cols, rows)` text cells
     /// — [`build_main_text`] in the TUI. A callback because the box is only known
     /// once the composite has measured the art around it. Called at most once.
@@ -2860,7 +2875,7 @@ impl<'a> V6FrameInputs<'a> {
         paint: Option<&'a image::RgbaImage>,
         prose: &'a dyn Fn(u16, u16) -> (crate::render::v6_layout::MainText, RasterMetrics),
     ) -> V6FrameInputs<'a> {
-        Self::with_host_pair(state, v6_host_pair(state), paint, prose)
+        Self::with_host_pair(state, v6_host_pair(state), paint, prose, Some(state.input.value.as_str()))
     }
 
     /// [`Self::from_state`] for a host that composes `model`'s frame WITHOUT having
@@ -2871,14 +2886,17 @@ impl<'a> V6FrameInputs<'a> {
     /// terminal render composed an Amiga frame on its own default pair instead of
     /// the machine's white on medium grey. This derives the pair from the model
     /// itself ([`v6_machine_pair`]), the same rule the render publishes.
+    /// `input` is the host's own draft — see [`Self::input`] — since a host
+    /// composing without a render has no `AppState::input` of its own to read.
     pub fn for_model(
         state: &'a AppState,
         model: &ScreenModel,
         paint: Option<&'a image::RgbaImage>,
         prose: &'a dyn Fn(u16, u16) -> (crate::render::v6_layout::MainText, RasterMetrics),
+        input: Option<&'a str>,
     ) -> V6FrameInputs<'a> {
         let machine = v6_machine_pair(model, state.config.honor_game_colours);
-        Self::with_host_pair(state, v6_host_pair_with(state, machine), paint, prose)
+        Self::with_host_pair(state, v6_host_pair_with(state, machine), paint, prose, input)
     }
 
     fn with_host_pair(
@@ -2886,6 +2904,7 @@ impl<'a> V6FrameInputs<'a> {
         host_pair: (image::Rgba<u8>, image::Rgba<u8>),
         paint: Option<&'a image::RgbaImage>,
         prose: &'a dyn Fn(u16, u16) -> (crate::render::v6_layout::MainText, RasterMetrics),
+        input: Option<&'a str>,
     ) -> V6FrameInputs<'a> {
         let mp = state.colors.theme.get("more_prompt").style;
         V6FrameInputs {
@@ -2894,7 +2913,8 @@ impl<'a> V6FrameInputs<'a> {
             colors: &state.colors,
             face: &state.v6_text,
             paint,
-            panel_input: (state.effective_transcript_scroll() == 0).then_some(state.input.value.as_str()),
+            panel_input: (state.effective_transcript_scroll() == 0).then_some(input).flatten(),
+            input,
             prose,
             reveal: crate::reveal::reveal_light(state),
             pager_active: state.pager.active,
@@ -3327,7 +3347,19 @@ fn compose_v6_frame_into(
         let th = th + extension;
         let cols = (tw / u32::from(cell.w())).max(1) as u16;
         let rows = (th / u32::from(cell.h())).max(1) as u16;
-        let (main, rm) = (inputs.prose)(cols, rows);
+        let (mut main, rm) = (inputs.prose)(cols, rows);
+        // `inputs.input` overrides whatever the callback computed for the live
+        // input line — the single override `panel_input` above is already built
+        // from, so the story box and a reading panel cannot disagree about the
+        // host's draft (SQ-1567 addendum). `None` also silences the caret: it
+        // sits behind the same `main.awaiting` gate `draw_story_text_into` reads.
+        match inputs.input {
+            Some(text) => {
+                main.input = text.to_string();
+                main.cursor_col = text.chars().count().min(cols.saturating_sub(1) as usize) as u16;
+            }
+            None => main.awaiting = false,
+        }
         story_box = Some(V6StoryBox { x: sx, y: sy, w: tw, h: th, cols, rows });
         // …sparing the cells another window's own text already holds (SQ-0729).
         // The page fill above spares them; the GLYPHS did not, so the transcript
