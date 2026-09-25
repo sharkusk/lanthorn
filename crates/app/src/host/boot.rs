@@ -1265,7 +1265,22 @@ pub fn boot_story(req: BootRequest<'_>, hooks: &mut dyn BootHooks) -> Result<Boo
     // SQ-0855: and whether a flag put it there, which the base alone cannot say —
     // the post-IFID `reload_style` below re-reads both per-story sources from disk
     // and would otherwise let either of them overrule the flag.
-    state.game_colours_cli = flags.game_colours;
+    // SQ-1563: `overrides.honor_game_colours` (the launch-options dialog's
+    // un-persisted choice for THIS launch, SQ-1532) rides the same hold. It is
+    // one more source `reload_style` cannot see on disk — same shape as the CLI
+    // flag, and already documented as outranking the per-game sidecar exactly
+    // like the flag does (`LaunchOverrides::honor_game_colours`'s doc comment).
+    // Without this, the post-IFID `reload_style` a few lines below — which this
+    // boot calls itself, before ever returning — re-derives the key from the
+    // per-game sidecar, garglk.ini and the global base, finds no record of the
+    // dialog's choice on any of them, and silently overwrites it before the
+    // player's first frame; every LATER reload (a live `/reload-style`, the
+    // style watcher, …) repeats the same overwrite for the same reason.
+    // `flags.game_colours` still wins when both are set — as at line ~590 above,
+    // `overrides.honor_game_colours` is never `Some` while a `--game-colours`
+    // flag has the dialog row locked, but `.or` keeps the same precedence even
+    // if a host builds `LaunchOverrides` by hand.
+    state.game_colours_cli = flags.game_colours.or(overrides.honor_game_colours);
     // SQ-0860: and whether the artwork declared the interpreter colourless, for the
     // same reason — the reload below re-reads the per-story files, and neither of
     // them knows what archive was loaded.

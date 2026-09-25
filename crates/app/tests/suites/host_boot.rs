@@ -183,6 +183,108 @@ fn an_unreadable_story_is_an_error_not_an_exit() {
     let _ = std::fs::remove_dir_all(&home);
 }
 
+// ── SQ-1563: a launch-time "Game colours" override survives a later reload ─────
+
+/// `LaunchOverrides.honor_game_colours` is the launch-options dialog's
+/// un-persisted per-launch choice (SQ-1532) — the same field the TUI's own
+/// launch dialog fills in. The bug: `boot_story` applied it to `cfg` and then
+/// called `reload::reload_style` itself (the post-IFID reload, before ever
+/// returning), whose honour-key recompute knows nothing about a dialog choice
+/// that never touched disk and silently overwrites it — so the override was
+/// already gone by the time the player saw their first frame. Checked twice
+/// to prove the fix holds up: right after `boot_story` returns (where the
+/// bug already bites, since boot's own reload already ran), and after one
+/// MORE explicit `reload_style` call standing in for a later mid-session
+/// recompute (a live `/reload-style`, the style watcher, …) — the case a
+/// fix that only patches the boot-time snapshot, rather than the hold
+/// `reload_style` itself consults, would still fail.
+#[test]
+fn a_launch_dialog_honour_override_survives_a_second_style_reload() {
+    let story = fixture_path("Tangle.z5");
+    if !story.is_file() {
+        eprintln!("SKIP: {} absent", story.display());
+        return;
+    }
+    let home = app::scratch_dir("host-boot-honour-override");
+    let cfg = headless_config(&home);
+    assert!(cfg.honor_game_colours, "premise: the config default is on");
+
+    let overrides = LaunchOverrides { honor_game_colours: Some(false), ..LaunchOverrides::default() };
+    let req = BootRequest {
+        story_path: story,
+        disk_entry: None,
+        overrides: &overrides,
+        cfg,
+        data_base: home.join("saves"),
+        flags: LaunchFlags::default(),
+        terminal: TerminalFacts::default(),
+    };
+    let mut b = boot_story(req, &mut QuietBoot).expect("boots with the launch override");
+    assert!(
+        !b.state.config.honor_game_colours,
+        "the launch dialog's off choice is in force right after boot"
+    );
+
+    // The regression: a SECOND reload (anything that calls `reload_style` mid
+    // session) must not recompute the key back to the config default.
+    app::reload::reload_style(&mut b.state);
+    assert!(
+        !b.state.config.honor_game_colours,
+        "the launch-dialog override must survive a later style reload, not just the boot-time one"
+    );
+    let _ = std::fs::remove_dir_all(&home);
+}
+
+/// A subsequent settings-screen edit of the honour row must still end the
+/// hold — exactly as it already does for the `--game-colours` CLI flag
+/// (`host::settings::apply`, SQ-1559) — whether the hold came from a CLI flag
+/// or from a launch-dialog override.
+#[test]
+fn a_settings_edit_ends_the_launch_dialog_honour_hold() {
+    let story = fixture_path("Tangle.z5");
+    if !story.is_file() {
+        eprintln!("SKIP: {} absent", story.display());
+        return;
+    }
+    let home = app::scratch_dir("host-boot-honour-settings");
+    let overrides = LaunchOverrides { honor_game_colours: Some(false), ..LaunchOverrides::default() };
+    let req = BootRequest {
+        story_path: story,
+        disk_entry: None,
+        overrides: &overrides,
+        cfg: headless_config(&home),
+        data_base: home.join("saves"),
+        flags: LaunchFlags::default(),
+        terminal: TerminalFacts::default(),
+    };
+    let mut b = boot_story(req, &mut QuietBoot).expect("boots with the launch override");
+    assert!(!b.state.config.honor_game_colours, "the override is in force after boot");
+    assert!(
+        b.state.game_colours_cli.is_some(),
+        "the launch override rides the same hold the CLI flag uses"
+    );
+
+    // The player opens settings and turns the row back on: the working copy
+    // carries the edit and releases the pin, exactly what the settings screen
+    // builds (see `host::settings::apply`'s doc comment).
+    let mut working = b.state.config.clone();
+    working.honor_game_colours = true;
+    working.one_run.release(app::config::keys::HONOR_GAME_COLOURS);
+    app::host::settings::apply(&mut b.state, working, None);
+
+    assert!(b.state.config.honor_game_colours, "the deliberate edit takes effect");
+    assert!(
+        b.state.game_colours_cli.is_none(),
+        "the edit ends the hold, exactly as it already does for a CLI flag"
+    );
+
+    // And the edit survives a later reload, rather than the now-absent hold
+    // letting the config default creep back in some other way.
+    app::reload::reload_style(&mut b.state);
+    assert!(b.state.config.honor_game_colours, "the edit is not undone by a later reload");
+    let _ = std::fs::remove_dir_all(&home);
+}
+
 // ── Resume ───────────────────────────────────────────────────────────────────
 
 /// One move, applied the way a host applies it: submit, push the reply, and feed
