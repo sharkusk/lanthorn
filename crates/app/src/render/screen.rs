@@ -3320,7 +3320,18 @@ fn compose_v6_frame_into(
     // the relocated band with the game's own panel colour instead.
     if menu_case && inputs.bottom_anchor_menu && extension > 0 {
         if let Some(story) = layout.story {
-            fill_menu_flank_extension(&mut canvas, story, native, frame.canvas_h, cell);
+            fill_menu_flank_extension(
+                &mut canvas,
+                &obstruction,
+                story,
+                native,
+                frame.canvas_h,
+                inputs.face,
+                &chrome_runs,
+                default_fg,
+                default_bg,
+                inputs.colors,
+            );
         }
     }
     let mut raster_metrics: Option<RasterMetrics> = None;
@@ -7488,35 +7499,85 @@ fn bottom_anchor_menu_runs(
     out
 }
 
-/// SQ-1574: fill the flank columns a Menu-anchor extension opened beside the
-/// relocated command menu, so neither the gap above the band nor any of the
-/// band's own blank cells shows the bare story page beneath it.
-/// `extend_raster_flanks` cannot draw this: its tiling recipe is for a
-/// REPEATING border (Arthur/Shogun/Zork Zero, SQ-0698) and declines on
-/// Journey's shape for the same reason the hybrid ring's `tiled_flanks` does
-/// (SQ-0819) — Journey's flank is one picture seated in a panel beside a
-/// GLYPH-drawn border rule (SQ-0750), and neither is a border to repeat.
+/// The tight opaque bounding box of a flank's own artwork within `gfx` — the
+/// GRAPHICS-only canvas, never the composited one (SQ-1577, this is
+/// [`menu_flank_panel`]'s oracle for the hybrid ring, ported to native pixel
+/// space) — over native columns `[nx0, nx1)`, plus the panel colour sampled
+/// from its own outer edge (the first opaque pixel on its top row, same rule
+/// `menu_flank_panel` uses). `None` when the flank carries no art at all —
+/// Journey's right-hand column, which is eight native pixels of border and
+/// nothing else.
+fn menu_flank_art(gfx: &image::RgbaImage, nx0: u32, nx1: u32) -> Option<(u32, u32, u32, u32, image::Rgba<u8>)> {
+    let nx1 = nx1.min(gfx.width());
+    if nx1 <= nx0 {
+        return None;
+    }
+    let mut top: Option<(u32, image::Rgba<u8>)> = None;
+    let (mut ax0, mut ax1, mut ay1) = (u32::MAX, 0u32, 0u32);
+    for y in 0..gfx.height() {
+        let mut row_first: Option<u32> = None;
+        for x in nx0..nx1 {
+            if gfx.get_pixel(x, y)[3] >= 128 {
+                row_first.get_or_insert(x);
+                ax0 = ax0.min(x);
+                ax1 = ax1.max(x);
+            }
+        }
+        if let Some(x) = row_first {
+            if top.is_none() {
+                top = Some((y, *gfx.get_pixel(x, y)));
+            }
+            ay1 = y;
+        }
+    }
+    let (ay0, panel) = top?;
+    if ax1 < ax0 {
+        return None;
+    }
+    Some((ax0, ay0, ax1 - ax0 + 1, ay1 - ay0 + 1, panel))
+}
+
+/// The Menu plan's side flanks, extended into the rows the bottom-anchored
+/// band opened (SQ-1574) — for a host composing its own [`V6TextMode`] rather
+/// than drawing the TUI's own Hybrid cells and kitty image.
 ///
-/// Filled per CELL-WIDTH block, from the nearest opaque pixel ANYWHERE in that
-/// block scanning UP from the gap — not one exact column, because a thin
-/// border rule is one narrow glyph STROKE inside its text cell (SQ-0750) and
-/// most of a cell's own pixels are transparent even on a row the glyph
-/// occupies, so a probe pinned to the cell's first pixel column can miss the
-/// stroke entirely and find nothing. The nearest painted pixel anywhere in the
-/// block, above the gap, is still the frame the game laid out there — the
-/// picture's own edge colour under the picture column, the border rule's own
-/// ink under the thin outer border column next to it. A block with nothing
-/// painted anywhere above the gap is left alone. Only pixels no earlier layer
-/// touched (alpha 0) are painted, so the band's own runs and their
-/// backgrounds — already on the canvas by the time this runs — are left
-/// byte-for-byte alone.
+/// Two different things can share a flank column and need two different
+/// treatments, exactly as the TUI's own ring keeps them apart
+/// ([`menu_flank_panel`] does the picture, `flank_border_extension` the rule)
+/// rather than reaching for one rule for both (SQ-1577):
+///
+///   * **the flank's own ART**, if it carries any (Journey's picture column,
+///     [`menu_flank_art`]) — RECENTRED vertically in the space the extension
+///     opened, with the ground around it reflooded from the art's own panel
+///     colour. Smearing the picture's own bottom-row pixels down the gap,
+///     which is what this used to do, reads as vertical stripes because the
+///     picture's last row is not one flat colour; the TUI never does that —
+///     it re-places the whole picture and floods around it, never asks a
+///     canvas for a colour to extend.
+///   * **everything else** — a divider/rule column beside the art, or the
+///     whole flank on a border-only column (Journey's right-hand flank) —
+///     carries the nearest painted pixel above the gap down through it, same
+///     as before this quest. Under [`V6TextMode::RecordOnly`] a chrome run's
+///     background BLOCK is never actually painted (the host paints its own
+///     text), so the canvas has nothing there to sample; SQ-1576 falls back
+///     to the run's own resolved colour in that case — the block that WOULD
+///     have been painted, read off the model rather than off pixels the mode
+///     declined to draw.
+#[allow(clippy::too_many_arguments)]
 fn fill_menu_flank_extension(
     canvas: &mut image::RgbaImage,
+    gfx: &image::RgbaImage,
     story: &crate::engine::PositionedWindow,
     native: (u16, u16),
     canvas_h: u32,
-    cell: zvm::screen::V6Cell,
+    face: &crate::native_font::TextFace,
+    chrome_runs: &[&crate::engine::PxText],
+    default_fg: image::Rgba<u8>,
+    default_bg: image::Rgba<u8>,
+    colors: &ColorScheme,
 ) {
+    use crate::render::v6_layout as v6;
+    let cell = face.cell();
     let story_bottom = story.y_px as u32 + story.h_px as u32;
     if canvas_h <= story_bottom || story_bottom == 0 {
         return;
@@ -7525,19 +7586,155 @@ fn fill_menu_flank_extension(
     let sx0 = (story.x_px as u32).min(native.0 as u32);
     let sx1 = (story.x_px as u32 + story.w_px as u32).min(native.0 as u32);
     let cw = u32::from(cell.w().max(1));
+    // The chrome window's own runs printed ABOVE the story bottom — a
+    // flank's divider/rule glyphs. The moved menu band's own runs start AT
+    // story_bottom and are painted back into `canvas` (at their new,
+    // relocated position) before this function ever runs, so they play no
+    // part in this fill.
+    let flank_runs: Vec<&crate::engine::PxText> =
+        chrome_runs.iter().copied().filter(|t| (t.y.max(1) as u32 - 1) < story_bottom).collect();
+
     for (x0, x1) in [(0, sx0), (sx1, native.0 as u32)] {
         let x1 = x1.min(canvas.width());
+        if x1 <= x0 {
+            continue;
+        }
+        // `avail_h` is exactly where the relocated menu band's own runs
+        // begin — `sbox.y + sbox.h` in the acceptance test's own terms —
+        // for EITHER flank, art or not: it is a property of the canvas, not
+        // of what this flank carries.
+        let extension = canvas_h.saturating_sub(u32::from(native.1));
+        let avail_h = story_bottom + extension;
+        // SQ-1577: the flank's own art, if it carries any, recentred in the
+        // taller column rather than smeared from its own bottom edge. This
+        // never touches real band pixels below `avail_h`; it only owns the
+        // gap the extension opened plus the rows the art already occupied
+        // above it. `art_cols` is the art's NEW columns, `ax0..ax1` — the
+        // divider loop below must never touch them: the recentred art can
+        // land anywhere in `0..avail_h`, including rows that are still
+        // "original screen" territory above `story_bottom`, and the
+        // divider loop's own canvas-scan fallback (below) does not know
+        // artwork from a real background — it would gladly pick up one of
+        // the art's own pixels there and smear IT across the whole
+        // remaining gap instead (measured: a single sky-blue pixel reaching
+        // every row down to the relocated band).
+        let mut art_cols: Option<(u32, u32)> = None;
+        if let Some((ax0, ay0, art_w, art_h, panel)) = menu_flank_art(gfx, x0, x1) {
+            let new_ay0 = if avail_h > art_h { (avail_h - art_h) / 2 } else { 0 };
+            let ax1 = (ax0 + art_w).min(canvas.width());
+            art_cols = Some((ax0, ax1));
+            // Clear the art's OLD footprint first, so the flood below can
+            // see it as open ground rather than protecting it as if it
+            // were a divider's own ink.
+            for y in ay0..(ay0 + art_h).min(canvas.height()) {
+                for x in ax0..ax1 {
+                    canvas.put_pixel(x, y, image::Rgba([0, 0, 0, 0]));
+                }
+            }
+            // The panel's own extent is the WHOLE flank width, over BOTH
+            // the original screen rows (replacing the art's old position
+            // and its margin) and the gap the extension opened — but only
+            // where nothing is painted there already. That protects every
+            // divider or border rule this frame draws against whichever
+            // edge (Journey's r30/Amiga press has BOTH an outer rule on the
+            // pane's own left edge and an inner one against the story box;
+            // r83/PC has only the inner one) automatically, with no need to
+            // enumerate which column each one stands in: a divider's own
+            // ink is real, painted content, and this only ever fills a
+            // pixel the composite left transparent.
+            for y in 0..avail_h.min(canvas.height()) {
+                for x in x0..x1.min(canvas.width()) {
+                    if canvas.get_pixel(x, y)[3] == 0 {
+                        canvas.put_pixel(x, y, panel);
+                    }
+                }
+            }
+            for dy in 0..art_h {
+                let y = new_ay0 + dy;
+                if y >= canvas.height() {
+                    break;
+                }
+                for dx in 0..(ax1.saturating_sub(ax0)) {
+                    let p = *gfx.get_pixel(ax0 + dx, ay0 + dy);
+                    if p[3] >= 128 {
+                        canvas.put_pixel(ax0 + dx, y, p);
+                    }
+                }
+            }
+        }
         let mut bx0 = x0;
         while bx0 < x1 {
             let bx1 = (bx0 + cw).min(x1);
-            let panel =
-                (0..above).rev().find_map(|y| (bx0..bx1).map(|x| *canvas.get_pixel(x, y)).find(|p| p[3] > 0));
-            if let Some(panel) = panel {
-                for y in story_bottom..canvas_h.min(canvas.height()) {
+            if art_cols.is_some_and(|(a0, a1)| bx0 < a1 && bx1 > a0) {
+                bx0 = bx1;
+                continue;
+            }
+            // The nearest row above the gap where the WHOLE block is one
+            // uniform opaque colour — a real background (a window's own
+            // page fill, or a divider's reverse block), never a lone glyph
+            // STROKE's own ink: most of a character's cell is transparent
+            // around it, so a bare "any opaque pixel" test (what this used
+            // to be) could catch a single stray letter — or a horizontal
+            // rule character, whose own stroke legitimately fills its
+            // WHOLE cell on the one row it draws — far from any real
+            // background and smear ITS ink down the whole gap. A column
+            // the model actually has a run on (SQ-1576) answers from the
+            // run's own nearest-to-the-gap resolved colour instead — which
+            // can be `None`, a definite "nothing to carry down" rather than
+            // whatever a search happens to land on next — and only a
+            // column the model says NOTHING about at all falls back to
+            // asking the canvas for a genuinely uniform painted row (a
+            // window's own page fill, with no run in the way of it).
+            let nearest_run = flank_runs
+                .iter()
+                .filter(|t| {
+                    let tx0 = t.x.max(1) as u32 - 1;
+                    let tw = face.run_px_styled(&t.text, t.style);
+                    let ty0 = t.y.max(1) as u32 - 1;
+                    // …and touching the gap, with no dead space between —
+                    // a divider's own repeating glyph reaches to within one
+                    // cell of `story_bottom` by construction (SQ-1576). A
+                    // decorative rule far above it (Journey's top edge) is
+                    // not "the nearest thing above the gap" merely because
+                    // nothing else in this column happens to be recorded;
+                    // that column falls through to the ground/page fill
+                    // below instead, same as it always did.
+                    tx0 < bx1 && tx0 + tw > bx0 && ty0 + u32::from(cell.h()) >= story_bottom
+                })
+                .max_by_key(|t| t.y);
+            let block = if let Some(t) = nearest_run {
+                let px0 = t.x.max(1) as u32 - 1;
+                let py = t.y.max(1) as u32 - 1;
+                let tw = face.run_px_styled(&t.text, t.style);
+                let (fg, bg) = v6::chrome_run_ink(t, default_fg, default_bg, colors, || {
+                    v6::region_has_opaque(gfx, px0, py, tw, u32::from(cell.h()))
+                });
+                // A real block (reverse-video, SQ-1576's original report)
+                // wins; a plain glyph with none — Journey's Amiga press
+                // draws its dividers as `│`/`┐`/`└` line-drawing characters,
+                // not reverse blocks — carries its own INK down instead,
+                // matching what `Rasterise`'s bare "nearest opaque pixel"
+                // scan actually finds there: the glyph's own stroke is the
+                // only thing painted in a cell with no block, so that ink is
+                // what a naive scan starting right at the gap always landed
+                // on, and RecordOnly has to agree without ever painting it.
+                Some(bg.unwrap_or(fg))
+            } else {
+                (0..above).rev().find_map(|y| {
+                    let mut px = (bx0..bx1).map(|x| *canvas.get_pixel(x, y));
+                    let first = px.next()?;
+                    (first[3] > 0 && px.all(|p| p == first)).then_some(first)
+                })
+            };
+            // Unconditional, not gated on transparency: `avail_h` is exactly
+            // where the relocated band's own real pixels begin, so nothing
+            // below this bound is ever real content to protect — the
+            // divider's own resolved colour is authoritative over whatever
+            // the panel flood above put there as this flank's baseline.
+            if let Some(block) = block {
+                for y in story_bottom..avail_h.min(canvas.height()) {
                     for x in bx0..bx1 {
-                        if canvas.get_pixel(x, y)[3] == 0 {
-                            canvas.put_pixel(x, y, panel);
-                        }
+                        canvas.put_pixel(x, y, block);
                     }
                 }
             }
