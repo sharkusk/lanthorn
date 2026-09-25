@@ -3491,7 +3491,7 @@ mod tests {
     // ── Inline-image band wrapping ────────────────────────────────────────────
 
     fn dummy_img(w: u32, h: u32, align: crate::inline_image::ImageAlign) -> crate::inline_image::InlineImage {
-        crate::inline_image::InlineImage { pixels: std::sync::Arc::new(image::RgbaImage::new(w, h)), align, scaled: None, margin_px: None, rule: None, link: 0 }
+        crate::inline_image::InlineImage { pixels: std::sync::Arc::new(image::RgbaImage::new(w, h)), align, scaled: None, margin_px: None, rule: None, link: 0, resource: None }
     }
 
     #[test]
@@ -3581,6 +3581,7 @@ mod tests {
             margin_px,
             rule: None,
             link: 0,
+            resource: None,
         }
     }
 
@@ -4347,6 +4348,7 @@ mod tests {
             margin_px: None,
             rule: None,
             link: 42,
+            resource: None,
         });
         state.push_transcript("after");
         state.focus = Focus::Game;
@@ -4385,6 +4387,7 @@ mod tests {
             margin_px: None,
             rule: None,
             link: 42,
+            resource: None,
         });
         state.push_transcript("prose that wraps beside the thumbnail in the right margin");
         state.focus = Focus::Game;
@@ -4573,6 +4576,7 @@ mod tests {
             margin_px: Some(4),
             rule: None,
             link: 0,
+            resource: None,
         };
         let lines = vec![String::new(), "AAAA".to_string()];
         let kinds = vec![TranscriptKind::Story; 2];

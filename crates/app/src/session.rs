@@ -3099,6 +3099,11 @@ impl GameSession {
                     // No Glk hyperlink concept in v6 (SQ-1503; that's a Glulx
                     // `glk_set_hyperlink` mechanism).
                     link: 0,
+                    // SQ-1561 wired `resource` from the two Glk buffer-window draw
+                    // sites only (a v6 picture may come from a disk-native resource
+                    // rather than a Blorb `Pict`, per "disk-native resources win" —
+                    // not the same guarantee).
+                    resource: None,
                 };
                 self.story_pics.push((ev.out_chars, float));
             }
@@ -6522,6 +6527,7 @@ mod tests {
             margin_px: Some(56),
             rule: None,
             link: 0,
+            resource: None,
         };
         let text = "first line\nsecond line";
         // One style chunk covering everything (bold), to verify run splitting.
@@ -6549,6 +6555,7 @@ mod tests {
             margin_px: None,
             rule: None,
             link: 0,
+            resource: None,
         };
         let elems = interleave_story_elems("story text", &[], vec![(0, TranscriptElem::Image(img))], 0, None);
         assert_eq!(elems.len(), 2, "Image then Text");
@@ -6648,7 +6655,7 @@ mod tests {
             pixels: std::sync::Arc::new(image::RgbaImage::new(2, 2)),
             align: crate::inline_image::ImageAlign::InlineUp,
             scaled: None, margin_px: None,
-            rule: None, link: 0,
+            rule: None, link: 0, resource: None,
         }
     }
 

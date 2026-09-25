@@ -73,6 +73,14 @@ pub struct InlineImage {
     /// to view the full-size illustration" uses this. 0 for every Z-machine v6
     /// picture, which has no such concept.
     pub link: u32,
+    /// The Blorb `Pict` resource number this image was decoded from, if it is a
+    /// straight decode of exactly one resource (SQ-1561). A host that ships
+    /// pictures separately (by URL, content-cached) can serve the story's own
+    /// PNG/JPEG chunk by this number instead of re-encoding `pixels`. `None`
+    /// means there is no single resource to point to — either the image was
+    /// composited some other way, or (for archives written before this field
+    /// existed) the number simply was not carried forward.
+    pub resource: Option<u32>,
 }
 
 impl InlineImage {
@@ -122,7 +130,7 @@ mod tests {
     use std::sync::Arc;
 
     fn img(w: u32, h: u32) -> InlineImage {
-        InlineImage { pixels: Arc::new(image::RgbaImage::new(w, h)), align: ImageAlign::InlineUp, scaled: None , margin_px: None, rule: None, link: 0 }
+        InlineImage { pixels: Arc::new(image::RgbaImage::new(w, h)), align: ImageAlign::InlineUp, scaled: None , margin_px: None, rule: None, link: 0, resource: None }
     }
 
     #[test]

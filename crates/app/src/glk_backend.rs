@@ -1501,6 +1501,7 @@ impl GlkBackend for AppGlk {
                 pixels: std::sync::Arc::new(src.to_rgba8()),
                 align: crate::inline_image::ImageAlign::from_glk(x as u32),
                 scaled: scale, margin_px: None, rule: None, link,
+                resource: Some(resnum),
             };
             if let Some(buf) = self.buffers.get_mut(&win) {
                 buf.log.push(BufElem::Image(img));
@@ -1550,6 +1551,7 @@ impl GlkBackend for AppGlk {
             margin_px: None,
             rule: Some(rule),
             link,
+            resource: Some(resnum),
         };
         if let Some(buf) = self.buffers.get_mut(&win) {
             buf.log.push(BufElem::Image(img));
@@ -1842,7 +1844,7 @@ mod tests {
             pixels: std::sync::Arc::new(image::RgbaImage::new(3, 3)),
             align: crate::inline_image::ImageAlign::InlineUp,
             scaled: None, margin_px: None,
-            rule: None, link: 0,
+            rule: None, link: 0, resource: None,
         };
         let log = &mut glk.buffers.get_mut(&2).unwrap().log;
         log.push(BufElem::Text { bits: 0, fg: 0, bg: 0, link: 0, para: crate::state::ParaFmt::default(), glk_style: 0, text: "a\n".into() });
@@ -2355,7 +2357,7 @@ mod tests {
             pixels: std::sync::Arc::new(image::RgbaImage::new(3, 3)),
             align: crate::inline_image::ImageAlign::InlineUp,
             scaled: None, margin_px: None,
-            rule: None, link: 0,
+            rule: None, link: 0, resource: None,
         };
         let log = &mut glk.buffers.get_mut(&pid).unwrap().log;
         log.push(BufElem::Text { bits: 0, fg: 0, bg: 0, link: 0, para: crate::state::ParaFmt::default(), glk_style: 0, text: "foo".into() });
@@ -2452,6 +2454,23 @@ mod tests {
             _ => None,
         });
         assert_eq!(img.map(|i| i.link), Some(77), "the drawn image carries the link it was drawn under");
+    }
+
+    /// SQ-1561: a buffer-window draw's `InlineImage` carries the Blorb `Pict`
+    /// resource number it was decoded from, so an embedding host can serve the
+    /// story's own PNG/JPEG chunk by number instead of re-encoding `pixels`.
+    #[test]
+    fn image_draw_to_buffer_window_carries_its_resource_number() {
+        let blorb = crate::graphics::test_blorb_with_pict(5, &png_bytes());
+        let mut glk = AppGlk::with_graphics(80, 24, (1, 1), crate::graphics::PictSource::new(Some(blorb)));
+        glk.window_open(1, WinType::TextBuffer);
+        assert!(glk.graphics_draw_image(1, /*resnum*/ 5, /*imagealign*/ 1, 0, None, 0));
+        let log = &glk.buffers.get(&1).unwrap().log;
+        let img = log.iter().find_map(|e| match e {
+            BufElem::Image(img) => Some(img),
+            _ => None,
+        });
+        assert_eq!(img.map(|i| i.resource), Some(Some(5)), "the drawn image carries the resnum it was decoded from");
     }
 
     #[test]

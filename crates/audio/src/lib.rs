@@ -105,9 +105,11 @@ pub fn render_mod(bytes: &[u8], max_frames: Option<usize>) -> Option<Pcm> {
 }
 
 /// Master+Z-scale gain in 0.0..=1.0. Master is 0..=100; z_volume is the Z-machine
-/// 1..=8 scale, with 0/255 meaning "loudest" (full).
-#[cfg_attr(not(feature = "playback"), allow(dead_code))]
-fn gain(master: u8, z_volume: u8) -> f32 {
+/// 1..=8 scale, with 0/255 meaning "loudest" (full). Public and unconditional
+/// (SQ-1561): a host that plays sound itself, without the `playback` feature's
+/// rodio/cpal dependency, still needs this exact mapping to match lanthorn's own
+/// TUI volume rather than drift from a hand-copied reimplementation.
+pub fn z_gain(master: u8, z_volume: u8) -> f32 {
     (master.min(100) as f32 / 100.0)
         * match z_volume {
             0 | 255 => 1.0,
@@ -337,7 +339,7 @@ enum SampleVol {
 #[cfg_attr(not(feature = "playback"), allow(dead_code))]
 fn vol_gain(master: u8, v: SampleVol) -> f32 {
     match v {
-        SampleVol::Z(z) => gain(master, z),
+        SampleVol::Z(z) => z_gain(master, z),
         SampleVol::Lin(f) => (master.min(100) as f32 / 100.0) * f.max(0.0),
     }
 }
@@ -400,7 +402,7 @@ impl AudioBackend {
     pub fn play_tone(&mut self, freq_hz: f32, ms: u32, z_volume: u8) {
         let Some((_, handle)) = &self.stream else { return };
         let Ok(sink) = rodio::Sink::try_new(handle) else { return };
-        sink.set_volume(gain(self.master, z_volume));
+        sink.set_volume(z_gain(self.master, z_volume));
         sink.append(rodio::buffer::SamplesBuffer::new(1, SAMPLE_RATE, synth_tone(freq_hz, ms)));
         self.tones.push((sink, z_volume));
     }
@@ -452,7 +454,7 @@ impl AudioBackend {
         Some(sink)
     }
 
-    /// Decode `bytes` per `format`, play on a fresh sink at gain(master, z_volume),
+    /// Decode `bytes` per `format`, play on a fresh sink at z_gain(master, z_volume),
     /// looping per `repeats` (see `repeat_plan`: 255 = forever, 0/omitted = once).
     /// Returns a SoundId to `stop`/track.
     /// Returns None if there is no device, the format is unsupported, or decode fails.
@@ -520,7 +522,7 @@ impl AudioBackend {
             s.set_volume(vol_gain(self.master, *v));
         }
         for (s, z_volume) in &self.tones {
-            s.set_volume(gain(self.master, *z_volume));
+            s.set_volume(z_gain(self.master, *z_volume));
         }
     }
 
@@ -577,23 +579,23 @@ mod tests {
 
     #[test]
     fn vol_gain_z_matches_legacy_gain() {
-        // The z-scale variant must equal the historical gain() for every input,
+        // The z-scale variant must equal the public z_gain() for every input,
         // so the Z-machine path is byte-for-byte unchanged.
         for master in [0u8, 25, 50, 100] {
             for z in [0u8, 1, 4, 8, 255] {
-                assert_eq!(vol_gain(master, SampleVol::Z(z)), gain(master, z));
+                assert_eq!(vol_gain(master, SampleVol::Z(z)), z_gain(master, z));
             }
         }
     }
 
     #[test]
     fn gain_combines_master_and_z_volume() {
-        assert_eq!(gain(100, 8), 1.0);        // full master, loudest z-scale
-        assert_eq!(gain(50, 8), 0.5);         // half master
-        assert_eq!(gain(100, 4), 0.5);        // z 4/8
-        assert_eq!(gain(100, 0), 1.0);        // 0 -> treated as full
-        assert_eq!(gain(100, 255), 1.0);      // 255 -> loudest
-        assert_eq!(gain(0, 8), 0.0);          // muted master
+        assert_eq!(z_gain(100, 8), 1.0);        // full master, loudest z-scale
+        assert_eq!(z_gain(50, 8), 0.5);         // half master
+        assert_eq!(z_gain(100, 4), 0.5);        // z 4/8
+        assert_eq!(z_gain(100, 0), 1.0);        // 0 -> treated as full
+        assert_eq!(z_gain(100, 255), 1.0);      // 255 -> loudest
+        assert_eq!(z_gain(0, 8), 0.0);          // muted master
     }
 
     #[test]
@@ -620,13 +622,13 @@ mod tests {
     fn set_volume_preserves_per_sound_z_scale() {
         // A sound played at a reduced z_volume must keep its z-scale relationship
         // to master after a runtime volume change — set_volume must apply
-        // gain(master, z_volume), not bare master/100.
+        // z_gain(master, z_volume), not bare master/100.
         // Backend may have no device in CI; assert on the pure gain relationship
         // that set_volume now uses, so the test is deterministic without a sink:
-        let quiet = gain(50, 4); // half master, mid z-scale
-        let loud = gain(50, 8); // half master, full z-scale
+        let quiet = z_gain(50, 4); // half master, mid z-scale
+        let loud = z_gain(50, 8); // half master, full z-scale
         assert!(quiet < loud, "z_volume must still scale after a master change");
-        assert_eq!(gain(50, 8), 0.5, "full z-scale at half master == master/100");
+        assert_eq!(z_gain(50, 8), 0.5, "full z-scale at half master == master/100");
     }
 
     #[test]

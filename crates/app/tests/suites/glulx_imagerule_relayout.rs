@@ -126,6 +126,7 @@ fn a_buffer_draw_stores_the_rule_rather_than_a_size() {
     assert_eq!(img.scaled, None, "and NOT collapsed into a frozen pixel size");
     assert_eq!(img.align, ImageAlign::InlineUp, "imagealign_InlineUp (1) decoded");
     assert_eq!((img.pixels.width(), img.pixels.height()), (200, 100), "natural pixels intact");
+    assert_eq!(img.resource, Some(1), "SQ-1561: the Blorb Pict resource number rides along too");
 }
 
 /// The headline behaviour: `imagerule_WidthRatio` at 50% occupies half the band,

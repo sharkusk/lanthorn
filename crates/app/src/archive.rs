@@ -353,6 +353,11 @@ struct InlineImageDto {
     /// not exist yet).
     #[serde(default)]
     link: u32,
+    /// The Blorb `Pict` resource number this image was decoded from (SQ-1561),
+    /// `None` for a composite/non-resource image. Absent in archives written
+    /// before this field existed → `None`, same as a picture that never had one.
+    #[serde(default)]
+    resource: Option<u32>,
 }
 
 /// serde mirror of [`gvm::glk::ImageRule`] (SQ-1424). Spelled out here rather
@@ -887,6 +892,7 @@ pub(crate) fn build_archive_bytes(
                                 margin_px: img.margin_px,
                                 rule: img.rule.map(Into::into),
                                 link: img.link,
+                                resource: img.resource,
                             }));
                         }
                         None => {
@@ -1346,6 +1352,7 @@ pub fn load_archive(path: &Path) -> io::Result<ArchiveContents> {
                 margin_px: dto.margin_px,
                 rule: dto.rule.map(Into::into),
                 link: dto.link,
+                resource: dto.resource,
             })
         })
         .collect();
@@ -1743,6 +1750,7 @@ mod tests {
             margin_px: Some(40),
             rule: None,
             link: 99,
+            resource: Some(7),
         };
 
         let transcript = vec!["West of House".to_string(), String::new()];
@@ -1770,6 +1778,7 @@ mod tests {
         assert_eq!(got.scaled, Some((12, 8)), "scaled round-trips");
         assert_eq!(got.margin_px, Some(40), "margin_px round-trips");
         assert_eq!(got.link, 99, "link round-trips (SQ-1503)");
+        assert_eq!(got.resource, Some(7), "resource round-trips (SQ-1561)");
         assert_eq!(got.pixels.dimensions(), (6, 4), "pixel dims round-trip");
         assert_eq!(
             got.pixels.as_raw(), img.pixels.as_raw(),
@@ -2710,6 +2719,15 @@ mod tests {
         let json = r#"{"lines":["x"],"kinds":["Story"]}"#;
         let td: TranscriptData = serde_json::from_str(json).unwrap();
         assert!(td.runs.is_empty());
+    }
+
+    #[test]
+    fn old_inline_image_json_loads_with_resource_none() {
+        // JSON shaped like an archive written before SQ-1561 added `resource` —
+        // no "resource" key at all, same as every pre-SQ-1561 InlineImageDto.
+        let json = r#"{"align":"MarginLeft","scaled":null,"margin_px":null,"link":0}"#;
+        let dto: InlineImageDto = serde_json::from_str(json).unwrap();
+        assert_eq!(dto.resource, None, "missing `resource` key deserializes to None, not an error");
     }
 
     // -------------------------------------------------------------------------

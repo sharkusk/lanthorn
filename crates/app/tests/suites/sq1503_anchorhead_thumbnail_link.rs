@@ -203,6 +203,7 @@ fn a_hyperlinked_anchorhead_picture_resolves_to_a_click() {
         margin_px: None,
         rule: None,
         link: LINK,
+        resource: None,
     });
     state.push_transcript("after the thumbnail");
 

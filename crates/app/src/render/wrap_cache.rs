@@ -697,6 +697,7 @@ mod tests {
             margin_px: Some(32),
             rule: None,
             link: 0,
+            resource: None,
         })
         .clone()
     }
