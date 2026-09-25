@@ -274,12 +274,9 @@ fn render_story_pane_frame(
     // back out of the header — and only while colours are honoured, since a pair
     // the interpreter paints with is still a game colour. Cleared first, so a frame
     // that declares none can never inherit the last one's.
-    state.v6_page_pair.set(
-        (state.config.honor_game_colours
-            && matches!(model.root, WinNode::Layered(_))
-            && !matches!(crate::state::unpack_zcolour(model.bg), zvm::screen::ZColour::Default))
-        .then_some((model.fg, model.bg)),
-    );
+    // The rule itself is `v6_machine_pair`, so a host composing without this render
+    // derives the same pair (SQ-1566).
+    state.v6_page_pair.set(v6_machine_pair(model, state.config.honor_game_colours));
     // Paint the story-pane background with the game's current background
     // (theme-safe: only the story pane, never the map/chrome; only a concrete,
     // honoured background — Default keeps the theme).
@@ -2654,7 +2651,30 @@ fn v6_default_pair(
 /// other profile and whenever colours are declined, so the three layers below are
 /// unchanged for everything else.
 pub fn v6_host_pair(state: &AppState) -> (image::Rgba<u8>, image::Rgba<u8>) {
-    if let Some((fg, bg)) = state.v6_page_pair.get() {
+    v6_host_pair_with(state, state.v6_page_pair.get())
+}
+
+/// The MACHINE's own packed `(fg, bg)` screen pair for a frame, read off the screen
+/// model alone — or `None` when the frame has none to publish (SQ-1566).
+///
+/// This is the rule `render_story_pane` publishes into `AppState::v6_page_pair` on
+/// every terminal frame, stated once so that a host composing through
+/// [`V6FrameInputs::for_model`] without ever rendering to the terminal derives the
+/// same pair. `Some` only for a Version 6 (Layered) frame whose model carries a
+/// concrete page — which only §8.3's Amiga and the Macintosh publish
+/// (`session::machine_screen_pair`) — and only while game colours are honoured, since
+/// a pair the interpreter paints with is still a game colour.
+pub fn v6_machine_pair(model: &ScreenModel, honor_game_colours: bool) -> Option<(u32, u32)> {
+    (honor_game_colours
+        && matches!(model.root, WinNode::Layered(_))
+        && !matches!(crate::state::unpack_zcolour(model.bg), zvm::screen::ZColour::Default))
+    .then_some((model.fg, model.bg))
+}
+
+/// [`v6_host_pair`] with the machine pair stated rather than read from the
+/// render-time cell.
+fn v6_host_pair_with(state: &AppState, machine: Option<(u32, u32)>) -> (image::Rgba<u8>, image::Rgba<u8>) {
+    if let Some((fg, bg)) = machine {
         return (
             crate::render::v6_layout::packed_to_rgba(fg, RASTER_FALLBACK_INK, &state.colors),
             crate::render::v6_layout::packed_to_rgba(bg, RASTER_FALLBACK_PAGE, &state.colors),
@@ -2840,9 +2860,36 @@ impl<'a> V6FrameInputs<'a> {
         paint: Option<&'a image::RgbaImage>,
         prose: &'a dyn Fn(u16, u16) -> (crate::render::v6_layout::MainText, RasterMetrics),
     ) -> V6FrameInputs<'a> {
+        Self::with_host_pair(state, v6_host_pair(state), paint, prose)
+    }
+
+    /// [`Self::from_state`] for a host that composes `model`'s frame WITHOUT having
+    /// rendered it to the terminal (SQ-1566).
+    ///
+    /// `from_state` takes the machine's screen pair from `AppState::v6_page_pair`,
+    /// a cell only `render_story_pane` writes — so a host that never ran the
+    /// terminal render composed an Amiga frame on its own default pair instead of
+    /// the machine's white on medium grey. This derives the pair from the model
+    /// itself ([`v6_machine_pair`]), the same rule the render publishes.
+    pub fn for_model(
+        state: &'a AppState,
+        model: &ScreenModel,
+        paint: Option<&'a image::RgbaImage>,
+        prose: &'a dyn Fn(u16, u16) -> (crate::render::v6_layout::MainText, RasterMetrics),
+    ) -> V6FrameInputs<'a> {
+        let machine = v6_machine_pair(model, state.config.honor_game_colours);
+        Self::with_host_pair(state, v6_host_pair_with(state, machine), paint, prose)
+    }
+
+    fn with_host_pair(
+        state: &'a AppState,
+        host_pair: (image::Rgba<u8>, image::Rgba<u8>),
+        paint: Option<&'a image::RgbaImage>,
+        prose: &'a dyn Fn(u16, u16) -> (crate::render::v6_layout::MainText, RasterMetrics),
+    ) -> V6FrameInputs<'a> {
         let mp = state.colors.theme.get("more_prompt").style;
         V6FrameInputs {
-            host_pair: v6_host_pair(state),
+            host_pair,
             honor_game_colours: state.config.honor_game_colours,
             colors: &state.colors,
             face: &state.v6_text,
@@ -9977,6 +10024,30 @@ mod tests {
         state.config.text_margin_y = 100;
         let got = reserve_text_margin(area, &state, fill, &mut buf);
         assert!(got.width >= 1 && got.height >= 1, "capped margin keeps >=1 cell: {got:?}");
+    }
+
+    /// SQ-1566: the machine pair is read off the model alone — `Some` only for a
+    /// Layered frame with a concrete page while colours are honoured.
+    #[test]
+    fn v6_machine_pair_reads_the_models_page_only_when_it_is_a_machine_page() {
+        use zvm::screen::ZColour;
+        let pack = crate::state::pack_zcolour;
+        let model = |root: WinNode, fg: ZColour, bg: ZColour| ScreenModel {
+            root,
+            status: StatusModel::HostManaged,
+            bg: pack(bg),
+            fg: pack(fg),
+            content_size: (0, 0),
+        };
+        let layered = || WinNode::Layered(Vec::new());
+        // §8.3.1: 9 is white, 11 medium grey — the Amiga's own pair (SQ-0740).
+        let (white, grey) = (ZColour::Standard(9), ZColour::Standard(11));
+        let amiga = model(layered(), white, grey);
+        assert_eq!(v6_machine_pair(&amiga, true), Some((pack(white), pack(grey))));
+        assert_eq!(v6_machine_pair(&amiga, false), None, "colours declined");
+        assert_eq!(v6_machine_pair(&model(layered(), white, ZColour::Default), true), None, "no page");
+        let buffer = WinNode::Buffer(BufferWindow { primary: true, ..Default::default() });
+        assert_eq!(v6_machine_pair(&model(buffer, white, grey), true), None, "not a v6 frame");
     }
 
     #[test]

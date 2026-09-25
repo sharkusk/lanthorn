@@ -21,6 +21,8 @@
 //!   fixture                  release  turns in  role
 //!   zork0-r393-s890714.z6      393        6      a prose frame: ring art, status grid, transcript
 //!   journey-r83-s890706.z6      83        6      a chrome-heavy frame: text panel, menu strip
+//!   Journey - The Quest         30   6, save,    the Amiga floppy (serial 890322): a machine
+//!     Begins.adf                   restore, +1   page pair, composed from the model (SQ-1566)
 //! ```
 //!
 //! Each boot goes the way `startup.rs` boots (profile off the MOUNT's medium, then
@@ -50,6 +52,7 @@ fn stories_dir() -> std::path::PathBuf {
 /// One boot's facts, travelling together (the `v6_raster_reveal::Booted` shape).
 struct Booted {
     session: GameSession,
+    profile: InterpreterProfile,
     face: app::native_font::TextFace,
     palette: zvm::screen::Palette,
     art_scale: (u32, u32),
@@ -57,8 +60,29 @@ struct Booted {
 }
 
 /// Boot the way `startup.rs` boots — see `v6_raster_reveal::boot`, of which this is
-/// the same chain for a named fixture and release.
+/// the same chain for a named fixture and release — then tap [`TURNS`] times.
 fn boot(file: &str, want_release: u16) -> Option<Booted> {
+    let mut b = boot_at(file, want_release)?;
+    for _ in 0..TURNS {
+        tap(&mut b.session);
+    }
+    Some(b)
+}
+
+/// One move: an empty line or a space, whichever the game is waiting for, and `n`
+/// to any yes-or-no question.
+fn tap(session: &mut GameSession) {
+    let t = match session.pending_input() {
+        InputKind::Line | InputKind::Event => session.submit("").transcript,
+        InputKind::Char => session.submit_char(b' ').transcript,
+    };
+    if t.to_lowercase().contains("y or n") {
+        let _ = session.submit_char(b'n');
+    }
+}
+
+/// [`boot`] without the taps: the boot frame.
+fn boot_at(file: &str, want_release: u16) -> Option<Booted> {
     let path = stories_dir().join(file);
     let (bytes, medium) = match app::hints::load_mounted_story(&path) {
         Ok((loaded, medium)) => (loaded.bytes().to_vec(), medium),
@@ -106,16 +130,7 @@ fn boot(file: &str, want_release: u16) -> Option<Booted> {
     session.set_pict_source(Some(picts));
     session.flush_boot_pictures();
     let _ = session.take_transcript();
-    for _ in 0..TURNS {
-        let t = match session.pending_input() {
-            InputKind::Line | InputKind::Event => session.submit("").transcript,
-            InputKind::Char => session.submit_char(b' ').transcript,
-        };
-        if t.to_lowercase().contains("y or n") {
-            let _ = session.submit_char(b'n');
-        }
-    }
-    Some(Booted { session, face, palette: profile.palette(), art_scale: art_scale.unwrap_or((2, 2)), honoured })
+    Some(Booted { session, profile, face, palette: profile.palette(), art_scale: art_scale.unwrap_or((2, 2)), honoured })
 }
 
 /// The TUI's state for the same frame: raster mode, the machine's face and art
@@ -373,6 +388,127 @@ fn the_story_box_is_the_one_the_prose_callback_was_asked_to_fill() {
     }
 }
 
+// ---------------------------------------------------------------------------
+// SQ-1566: the machine's own page pair, derived from the model alone.
+//
+// `V6FrameInputs::from_state` takes the machine pair from `AppState::v6_page_pair`,
+// a cell only `render_story_pane` writes. A host that never rendered to the
+// terminal therefore composed Journey's Amiga frame on its own default pair
+// instead of the machine's white on medium grey. `V6FrameInputs::for_model` reads
+// the pair off the model (`screen::v6_machine_pair`), and these cases pin it.
+//
+//   fixture                         release  serial  profile  turns in
+//   Journey - The Quest Begins.adf     30    890322   Amiga   6, save, restore, +1
+// ---------------------------------------------------------------------------
+
+const AMIGA_JOURNEY: &str = "Journey - The Quest Begins.adf";
+
+/// Journey r30 off its Amiga floppy: [`TURNS`] taps in, saved, restored into a
+/// FRESH boot the way the app restores (engine, screen, display list, ground), and
+/// then one more move — a restore defect surfaces on the next repaint, not on the
+/// restore itself.
+fn amiga_journey_after_restore() -> Option<Booted> {
+    let mut played = boot(AMIGA_JOURNEY, 30)?;
+    assert!(
+        matches!(played.profile, InterpreterProfile::Amiga),
+        "{AMIGA_JOURNEY} must boot as the Amiga, got {:?}",
+        played.profile
+    );
+    let es = Engine::save_state(&played.session);
+    let screen = played.session.machine.screen.clone();
+    let (dto, fallback, _diags) = played.session.display_list();
+    let pics = played.session.pictures_png_for(&fallback);
+    let ground = played.session.paint_ground_png();
+
+    let mut fresh = boot_at(AMIGA_JOURNEY, 30)?;
+    Engine::restore_state(&mut fresh.session, &es).expect("restore");
+    app::session::restore_screen(&mut fresh.session, screen);
+    fresh.session.load_display_list(&dto, &pics);
+    fresh.session.load_paint_ground(ground.as_deref());
+    tap(&mut fresh.session);
+    Some(fresh)
+}
+
+/// Compose `model`'s frame the way a host with no terminal render does: inputs
+/// from [`V6FrameInputs::for_model`], nothing read from a render-time cell.
+fn for_model_compose(model: &app::engine::ScreenModel, state: &app::state::AppState) -> app::render::screen::V6Frame {
+    let WinNode::Layered(items) = &model.root else { panic!("a v6 frame has a Layered root") };
+    let native = v6::native_extent(items, &state.v6_text);
+    let layout = v6::classify_windows(items, state.v6_text.cell());
+    let paint = state.v6_paint.borrow();
+    let prose = |cols: u16, rows: u16| app::render::screen::build_main_text(state, cols, rows);
+    let inputs = V6FrameInputs::for_model(state, model, paint.as_deref(), &prose);
+    compose_v6_frame(&layout, RasterFrame::native(native), &inputs)
+}
+
+/// The TUI's own `build_v6_raster_canvas` for `model` on `state`.
+fn tui_canvas(model: &app::engine::ScreenModel, state: &app::state::AppState) -> (image::RgbaImage, Option<RasterMetrics>) {
+    let WinNode::Layered(items) = &model.root else { panic!("a v6 frame has a Layered root") };
+    let native = v6::native_extent(items, &state.v6_text);
+    let layout = v6::classify_windows(items, state.v6_text.cell());
+    app::render::screen::build_v6_raster_canvas(&layout, native, state)
+}
+
+fn differing(a: &image::RgbaImage, b: &image::RgbaImage) -> usize {
+    assert_eq!(a.dimensions(), b.dimensions(), "canvas sizes differ");
+    a.enumerate_pixels().filter(|&(x, y, p)| b.get_pixel(x, y) != p).count()
+}
+
+/// **The acceptance case.** On the Amiga floppy, a host that builds its inputs
+/// from the model alone gets the TUI's canvas pixel for pixel in both honour
+/// modes — and without SQ-1566 it did not.
+///
+/// The TUI side is `build_v6_raster_canvas` on the state `render_story_pane` leaves
+/// behind: its `v6_page_pair` cell holding what the render published, which
+/// [`the_terminal_render_publishes_the_pair_the_model_states`] pins independently.
+/// The host side never touches that cell.
+///
+/// Non-vacuity: with colours honoured, the cell-less `from_state` path — the
+/// reported defect — composes a DIFFERENT canvas.
+#[test]
+fn a_host_composes_the_amiga_journey_frame_from_the_model_alone() {
+    let Some(b) = amiga_journey_after_restore() else { return };
+    assert!(b.honoured, "{AMIGA_JOURNEY}: the Amiga press honours game colours, or this case is vacuous");
+    assert_eq!(b.art_scale, (2, 2), "{AMIGA_JOURNEY}: the Amiga's 320x200 picture space doubles");
+    assert_eq!((b.face.cell().w(), b.face.cell().h()), (8, 16), "{AMIGA_JOURNEY}: the Amiga's v6 cell");
+    let model = b.session.screen();
+    for honor in [true, false] {
+        let host_state = tui_state(&b, honor);
+        assert!(host_state.v6_page_pair.get().is_none(), "the host side must have no render-time cell");
+        let host = for_model_compose(&model, &host_state);
+
+        let tui_state = tui_state(&b, honor);
+        tui_state.v6_page_pair.set(app::render::screen::v6_machine_pair(&model, honor));
+        let (tui, tui_metrics) = tui_canvas(&model, &tui_state);
+
+        eprintln!(
+            "{AMIGA_JOURNEY} honor={honor}: canvas {}x{} · machine pair {:?} · host pair {:?} · metrics {tui_metrics:?}",
+            tui.width(),
+            tui.height(),
+            app::render::screen::v6_machine_pair(&model, honor),
+            app::render::screen::v6_host_pair(&tui_state),
+        );
+        let d = differing(&host.canvas, &tui);
+        assert_eq!(d, 0, "{AMIGA_JOURNEY} honor={honor}: {d} pixels differ from the TUI's canvas");
+        assert_eq!(host.metrics, tui_metrics, "{AMIGA_JOURNEY} honor={honor}: scroll metrics");
+        assert!(tui_metrics.is_some(), "{AMIGA_JOURNEY} honor={honor}: no story box on this frame");
+
+        let (stale, _) = tui_canvas(&model, &host_state);
+        let stale_diff = differing(&stale, &tui);
+        eprintln!("{AMIGA_JOURNEY} honor={honor}: the cell-less from_state path differs by {stale_diff} pixels");
+        if honor {
+            let (ink, page) = app::render::screen::v6_host_pair(&tui_state);
+            assert_eq!(ink, image::Rgba([255, 255, 255, 255]), "the Amiga's ink is white (SQ-0740)");
+            assert!(page[0] == page[1] && page[1] == page[2] && page[0] > 0 && page[0] < 255, "a grey page: {page:?}");
+            assert_ne!((ink, page), app::render::screen::v6_host_pair(&host_state), "machine pair == host pair");
+            assert!(stale_diff > 0, "the cell-less from_state path should have composed the host's pair");
+        } else {
+            assert_eq!(app::render::screen::v6_machine_pair(&model, honor), None);
+            assert_eq!(stale_diff, 0, "declined: no machine pair, so the cell changes nothing");
+        }
+    }
+}
+
 /// `page` is the colour the canvas was flattened onto: with a host transcript that
 /// draws nothing, it is every pixel of the story box no chrome glyph claimed.
 #[test]
@@ -506,6 +642,43 @@ fn every_run_names_its_source() {
                 }
                 other => panic!("no source expectation pinned for {other}"),
             }
+        }
+    }
+}
+
+/// The anchor for the TUI side above: on this frame `render_story_pane` publishes
+/// exactly the pair [`v6_machine_pair`](app::render::screen::v6_machine_pair)
+/// derives from the model, in both honour modes.
+#[test]
+fn the_terminal_render_publishes_the_pair_the_model_states() {
+    let Some(b) = amiga_journey_after_restore() else { return };
+    let model = b.session.screen();
+    for honor in [true, false] {
+        let mut state = tui_state(&b, honor);
+        state.game_picker = Some(ratatui_image::picker::Picker::halfblocks());
+        let pane = ratatui::layout::Rect::new(0, 0, 100, 40);
+        let mut buf = ratatui::buffer::Buffer::empty(pane);
+        let _ = app::render::screen::render_story_pane(&model, false, None, &state, pane, &mut buf);
+        let derived = app::render::screen::v6_machine_pair(&model, honor);
+        assert_eq!(state.v6_page_pair.get(), derived, "honor={honor}");
+        assert_eq!(derived.is_some(), honor, "honor={honor}: the Amiga frame has a machine pair only while honoured");
+    }
+}
+
+/// Zork Zero r393 and Journey r83 have no machine pair, so `for_model` composes
+/// them exactly as the TUI always has.
+#[test]
+fn the_ordinary_presses_compose_unchanged_from_the_model() {
+    for (file, b) in specimens() {
+        let model = b.session.screen();
+        for honor in [true, false] {
+            assert_eq!(app::render::screen::v6_machine_pair(&model, honor), None, "{file} honor={honor}");
+            let state = tui_state(&b, honor);
+            let host = for_model_compose(&model, &state);
+            let (tui, tui_metrics) = tui_canvas(&model, &state);
+            let d = differing(&host.canvas, &tui);
+            assert_eq!(d, 0, "{file} honor={honor}: {d} pixels differ from the TUI's canvas");
+            assert_eq!(host.metrics, tui_metrics, "{file} honor={honor}");
         }
     }
 }
