@@ -1556,10 +1556,8 @@ pub fn boot_story(req: BootRequest<'_>, hooks: &mut dyn BootHooks) -> Result<Boo
     // a story that opens with a few newlines (every Inform 7 Glulx one does) had
     // those blank rows counted as text the reader must not miss, which paged a
     // banner that fit and ate the first keystroke of the first command (SQ-1434).
-    if startup_transcript.is_none()
-        && crate::pager::should_arm(session.pending_input(), crate::pager::more_suppressed(&*session))
-    {
-        state.pager.arm(crate::pager::opening_baseline(&state));
+    if startup_transcript.is_none() {
+        crate::pager::arm_opening_banner(&mut state, &*session);
     }
 
     // If an archived transcript was loaded on startup, replace the fresh one.

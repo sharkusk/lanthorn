@@ -378,6 +378,17 @@ pub fn reset_game(
             state.transcript_runs.clear();
             state.transcript_para.clear();
             state.transcript_scroll = 0;
+            // Wipe any pager state the OLD game left behind — mid-[more]
+            // catch-up (`active`), a stale pending arm, or a row-total baseline
+            // describing a transcript that no longer exists — before the fresh
+            // banner below is measured (SQ-1575). NOT `reset_transcript_
+            // sidecars`'s `baseline_stale` flag: that tells `pager::apply_frame`
+            // to CALIBRATE instead of measure on the next surfaced frame, which
+            // is right for a restore/history-jump landing on scrollback the
+            // player already read, and wrong here — a fresh banner is unread and
+            // must still be measured so it can page.
+            state.pager = crate::pager::Pager::default();
+            state.last_transcript_total_rows = 0;
             if clear_map {
                 *mapper = Mapper::default();
             }
@@ -390,6 +401,11 @@ pub fn reset_game(
             } else {
                 crate::state::apply_transcript_elems(state, &banner_elems);
             }
+            // [more] pager for the restarted banner, exactly as a fresh boot arms
+            // it — see `arm_opening_banner` (SQ-1575). Unlike boot's resumed-
+            // transcript case, a restart has no "already read" scrollback to
+            // skip: the fresh banner just landed above and is always unread.
+            crate::pager::arm_opening_banner(state, &*session);
             if let Some(snap) = start_loc {
                 let snap_number = snap.number;
                 let seed_result = TurnResult {

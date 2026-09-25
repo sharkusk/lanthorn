@@ -210,6 +210,24 @@ pub fn opening_baseline(state: &crate::state::AppState) -> u16 {
         .min(u16::MAX as usize) as u16
 }
 
+/// Arm the opening-banner pager: the ruleset a fresh boot and a restart both
+/// want, so neither has to spell `should_arm` + `arm` by hand and the two paths
+/// cannot drift apart (SQ-1575 — `reset_game` never armed at all, so a
+/// restarted game's banner never paused where a fresh boot's would). Engages
+/// only when the game is now waiting on player input and the v6 "never print
+/// [MORE]" veto isn't in force, baselined at the banner's first row of prose
+/// ([`opening_baseline`]).
+///
+/// This is the ruleset shared by every opening-banner arm, not the whole
+/// precondition for any one caller: `startup.rs` skips calling it entirely for
+/// a resumed transcript (that scrollback was already read), which is a
+/// boot-specific fact this helper knows nothing about and must not guess at.
+pub fn arm_opening_banner(state: &mut crate::state::AppState, session: &dyn crate::engine::Engine) {
+    if should_arm(session.pending_input(), more_suppressed(session)) {
+        state.pager.arm(opening_baseline(state));
+    }
+}
+
 /// What drove the turn whose output the pager is about to measure.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Driver {

@@ -255,29 +255,36 @@ fn magpie_still_pages_when_the_prologue_really_does_overflow() {
     assert!(state.transcript_scroll > 0, "and the view parks back on the first screenful");
 }
 
-/// The call site, guarded at the source (SQ-1434).
+/// The call site, guarded at the source (SQ-1434, extended by SQ-1575).
 ///
 /// The cases above mirror `startup.rs`'s opening-banner arm rather than calling
 /// `startup.rs` — booting the app for real needs a terminal, a config directory
 /// and a story picker — so nothing in them can see the arm going back to a bare
-/// `arm(0)`. `state.pager.arm(…)` appears exactly once in production, and this
-/// asks that the once names `opening_baseline`.
+/// `arm(0)`. The actual `state.pager.arm(…)` call now lives in exactly one place
+/// in production, `pager::arm_opening_banner`, shared by a fresh boot AND
+/// `reset_game` (SQ-1575: reset used to arm nothing at all) so the two paths
+/// cannot drift apart. This asks that the one call still starts from
+/// `opening_baseline`, and that both boot and reset still go through the shared
+/// helper rather than re-spelling `should_arm` + `arm` by hand.
 #[test]
-fn the_startup_arm_uses_the_opening_baseline() {
-    // The opening-banner arm moved with the rest of the story boot into the
-    // library's `host::boot` (SQ-1537), which the TUI's `startup.rs` calls.
-    let src = std::fs::read_to_string(
-        std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("src/host/boot.rs"),
-    )
-    .expect("host/boot.rs is in this crate");
-    let arms: Vec<&str> = src
+fn the_opening_banner_arm_uses_the_shared_helper() {
+    let pager_src =
+        std::fs::read_to_string(std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("src/pager.rs"))
+            .expect("pager.rs is in this crate");
+    // Excludes the `#[cfg(test)] mod tests` block's own `state.pager.arm(...)`
+    // calls, which exercise the type directly and are not the production call.
+    let production_src = pager_src
+        .split("#[cfg(all(test, feature = \"t-render\"))]")
+        .next()
+        .expect("pager.rs has a test module");
+    let arms: Vec<&str> = production_src
         .match_indices("state.pager.arm(")
-        .map(|(i, _)| src[i..].lines().next().unwrap_or_default())
+        .map(|(i, _)| production_src[i..].lines().next().unwrap_or_default())
         .collect();
     assert_eq!(
         arms.len(),
         1,
-        "host/boot.rs should arm the opening-banner pager exactly once; found {arms:?}"
+        "pager.rs should arm the opening-banner pager exactly once in production; found {arms:?}"
     );
     assert!(
         arms[0].contains("opening_baseline"),
@@ -285,6 +292,16 @@ fn the_startup_arm_uses_the_opening_baseline() {
          (SQ-1434) — found `{}`",
         arms[0].trim()
     );
+
+    for (file, label) in [("src/host/boot.rs", "boot"), ("src/host/reset.rs", "reset_game")] {
+        let src = std::fs::read_to_string(std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join(file))
+            .unwrap_or_else(|e| panic!("{file} is in this crate: {e}"));
+        let calls = src.matches("pager::arm_opening_banner(").count();
+        assert_eq!(
+            calls, 1,
+            "{label} ({file}) should call the shared opening-banner arm exactly once; found {calls}"
+        );
+    }
 }
 
 /// The engine control: a Z-machine boot shows neither the symptom nor a change.

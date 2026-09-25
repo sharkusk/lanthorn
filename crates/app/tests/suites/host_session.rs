@@ -426,3 +426,114 @@ fn resolve_zcolour_is_callable_from_outside_render() {
         "a 24-bit true colour is exact"
     );
 }
+
+// ── Opening-banner pager after reset (SQ-1575) ─────────────────────────────
+
+/// Render one frame of the story pane and resolve any pending pager arm against
+/// it — the same measure-then-`apply_frame` step the TUI's render loop performs
+/// after every frame, driven headlessly.
+fn settle_pager(b: &mut BootedStory, w: u16, h: u16) {
+    use ratatui::buffer::Buffer;
+    use ratatui::layout::Rect;
+    let area = Rect::new(0, 0, w, h);
+    let mut buf = Buffer::empty(area);
+    let char_mode = b.session.pending_input() == InputKind::Char;
+    let m = app::render::screen::render_story_pane(&b.session.screen(), char_mode, None, &b.state, area, &mut buf);
+    app::pager::apply_frame(&mut b.state, m.max_scroll, m.viewport_rows, m.prompt_rows, m.total_rows, m.transcript_surface);
+}
+
+/// A restarted game's banner must pause at `[more]` exactly where a fresh boot
+/// of the same story would — SQ-1575: `reset_game` used to arm nothing at all,
+/// so the restarted view sat at the bottom of the new banner while a fresh
+/// launch of the identical story paused partway through it.
+///
+/// Compared against a genuinely FRESH boot's own armed state rather than a
+/// hardcoded row, per the acceptance criteria: both boots use the same story
+/// fixture at the same pane, in separate scratch homes so neither auto-resumes
+/// a save the other left behind. Measured (`zzz_probe_zork0_boot_state`, since
+/// removed): Zork Zero r393's 13-line banner wraps to 20 rows; at 80x20 the
+/// viewport is 18 rows (1 for the `[more]` bar), so it overflows by 2 — a fresh
+/// boot's own opening arm already engages here, which is this case's premise.
+#[test]
+fn reset_game_arms_the_opening_pager_like_a_fresh_boot() {
+    let story = fixture_path("zork0-r393-s890714.z6");
+    if !story.is_file() {
+        eprintln!("SKIP: {} absent", story.display());
+        return;
+    }
+    let pane = (80u16, 20u16);
+
+    // The reference: a genuinely fresh boot, never played, never reset.
+    let fresh_home = app::scratch_dir("host-reset-pager-fresh");
+    let mut fresh = boot(story.clone(), &fresh_home);
+    settle_pager(&mut fresh, pane.0, pane.1);
+    assert!(
+        fresh.state.pager.active,
+        "premise: Zork Zero's prologue overflows an {}x{} pane on a fresh boot — this case is only \
+         about SQ-1575 while that premise holds",
+        pane.0, pane.1
+    );
+
+    // The subject: boot the same story in its own home, settle its own opening
+    // frame, play a move, then reset it — the exact action `/reset-game` and
+    // "Play again" perform.
+    let subject_home = app::scratch_dir("host-reset-pager-subject");
+    let mut subject = boot(story.clone(), &subject_home);
+    settle_pager(&mut subject, pane.0, pane.1);
+    let _ = command(&mut subject, "look");
+    app::host::reset::reset_game(
+        &mut *subject.session,
+        &mut subject.mapper,
+        &mut subject.state,
+        &subject.story_bytes,
+        &subject.story_path,
+        &subject.game_dir,
+        None,
+        app::host::reset::ResetOptions { clear_map: false, delete_data: false },
+    );
+    settle_pager(&mut subject, pane.0, pane.1);
+
+    assert!(subject.state.pager.active, "a restarted game's banner must pause too, same as a fresh boot");
+    assert_eq!(
+        subject.state.transcript_scroll, fresh.state.transcript_scroll,
+        "and park at the SAME row a fresh boot of the identical story parks at"
+    );
+
+    let _ = std::fs::remove_dir_all(&fresh_home);
+    let _ = std::fs::remove_dir_all(&subject_home);
+}
+
+/// The other half of the ruleset: a story whose banner fits the pane does not
+/// pause after reset, same as it doesn't after a fresh boot — a generously
+/// large pane so Tangle's banner (a handful of lines) fits outright.
+#[test]
+fn reset_game_does_not_pause_when_the_new_banner_fits() {
+    let story = fixture_path("Tangle.z5");
+    if !story.is_file() {
+        eprintln!("SKIP: {} absent", story.display());
+        return;
+    }
+    let pane = (80u16, 60u16);
+    let home = app::scratch_dir("host-reset-pager-fits");
+    let mut b = boot(story, &home);
+    settle_pager(&mut b, pane.0, pane.1);
+    assert!(!b.state.pager.active, "premise: Tangle's banner fits an 80x60 pane on a fresh boot");
+
+    let _ = command(&mut b, "south");
+    app::host::reset::reset_game(
+        &mut *b.session,
+        &mut b.mapper,
+        &mut b.state,
+        &b.story_bytes,
+        &b.story_path,
+        &b.game_dir,
+        None,
+        app::host::reset::ResetOptions { clear_map: false, delete_data: false },
+    );
+    settle_pager(&mut b, pane.0, pane.1);
+
+    assert!(!b.state.pager.active, "the fresh banner fits the pane — no pager after reset, same as a fresh boot");
+    assert_eq!(b.state.transcript_scroll, 0, "and the view stays at the bottom, on the prompt");
+
+    let _ = std::fs::remove_dir_all(&home);
+}
