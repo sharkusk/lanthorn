@@ -364,7 +364,8 @@ pub fn hint_download_for(ifid: &str) -> Option<HintDownload> {
 /// files print it when the advertised screen width (a single header byte, so
 /// ≤255) is below their longest menu-item name, which can reach 512 chars — so
 /// it fires for any real terminal. Matched on the stable phrase (not the width
-/// number) so the hint boot can auto-skip it. See `hint_opening` in main.rs.
+/// number) so the hint boot can auto-skip it. See
+/// `host::hints::hint_opening`.
 pub fn is_narrow_screen_warning(text: &str) -> bool {
     let t = text.to_ascii_lowercase();
     t.contains("your screen is only") && t.contains("characters wide")

@@ -4386,37 +4386,18 @@ fn is_slash(input: &str, prefix: char) -> bool {
 
 // ── Hints open helper ─────────────────────────────────────────────────────────
 
-/// The opening transcript for a freshly-booted hint companion, with the
-/// InvisiClues narrow-screen warning auto-skipped.
+/// Open the hints panel for the current story.
 ///
-/// The izm hint files open on a "your screen is only N characters wide…" banner
-/// and wait for a keypress before showing the topic menu (the menu lives in the
-/// upper window). When the boot output is that banner, press one key here so the
-/// player lands straight on the menu; the keypress erases the banner. If the
-/// output isn't the banner (or the file isn't waiting for a key), fall back to
-/// the raw opening — no harm, the banner just shows as before.
+/// If a panel is already open this is a no-op. Resolution, VM boot and the
+/// InvisiClues narrow-screen banner skip all live in
+/// [`app::host::hints::open`] now (SQ-1586) — this is the TUI's own caller,
+/// turning that `Result` into the status-message behaviour the TUI has always
+/// had: `Ok(None)` (nothing resolves automatically) shows
+/// [`app::host::hints::NO_HINT_MESSAGE`]; `Err` shows the failure's own text.
 ///
-/// Gated on `skip_warning` (the `hint_skip_screen_warning` config, default on);
-/// when off, the banner is left in place for the player to dismiss.
-fn hint_opening(vm: &mut app::session::GameSession, skip_warning: bool) -> String {
-    let opening = vm.take_transcript();
-    if skip_warning
-        && hints::is_narrow_screen_warning(&opening)
-        && matches!(vm.pending_input(), app::session::InputKind::Char)
-    {
-        return vm.submit_char(b' ').transcript;
-    }
-    opening
-}
-
-/// Open the hints panel for the current story, resolving the hint source.
-///
-/// If a panel is already open this is a no-op.  Discovery order:
-/// 1. Remembered per-IFID association.
-/// 2. Sibling hint file.
-/// 3. Inside a sibling ZIP.
-/// 4. AskUser: status message + TODO for file-browser wiring.
-/// 5. None: status "no hints found".
+/// TODO: wire the file browser to pick a hint file (.z3/.z5/.z8) for the
+/// `Ok(None)` case, then call `save_hint_assoc(user_dir, ifid, &picked)` and
+/// retry.
 fn open_hints(
     state: &mut AppState,
     story_path: &std::path::Path,
@@ -4427,94 +4408,16 @@ fn open_hints(
         return;
     }
 
-    // Built-in HINT detection: check story dictionary for "hint"/"hints".
-    // state.dict_words is populated at startup from the story's Z-machine dictionary.
-    let builtin_hint = hints::story_supports_hint(state.dict_words.iter().cloned());
-
     let index = hints::load_hint_index(user_dir);
-    let resolution = hints::resolve_hint_source(story_path, ifid, &index);
-
-    match resolution {
-        hints::HintResolution::File(p) => {
-            match hints::load_story_bytes(&p) {
-                Ok(bytes) => {
-                    match app::session::GameSession::new(bytes, state.config.honor_game_colours, false, state.config.interpreter_number) {
-                        Ok(mut vm) => {
-                            vm.machine.undo_cap = state.config.undo_levels;
-                            let opening = hint_opening(&mut vm, state.config.hint_skip_screen_warning);
-                            let transcript: Vec<String> =
-                                opening.split('\n').map(|l| l.to_owned()).collect();
-                            let label = p
-                                .file_name()
-                                .and_then(|n| n.to_str())
-                                .unwrap_or("Hints")
-                                .to_owned();
-                            state.overlays.hints = Some(app::state::HintSession {
-                                source: app::state::HintSource::Zcode(vm),
-                                transcript,
-                                scroll: 0,
-                                clear_anchor: None,
-                                scroll_anim: None,
-                                input: String::new(),
-                                label,
-                                builtin_hint,
-                            });
-                        }
-                        Err(e) => {
-                            state.set_status(format!("hints: failed to load hint VM: {:?}", e));
-                        }
-                    }
-                }
-                Err(e) => {
-                    state.set_status(format!("hints: cannot read hint file: {}", e));
-                }
-            }
+    match app::host::hints::open(story_path, ifid, &index, &state.dict_words, &state.config) {
+        Ok(Some(session)) => {
+            state.overlays.hints = Some(session);
         }
-        hints::HintResolution::ZipEntry { zip_path, entry } => {
-            let pred = |name: &str| name == entry;
-            match hints::read_zip_entry(&zip_path, pred) {
-                Ok(Some(bytes)) => {
-                    match app::session::GameSession::new(bytes, state.config.honor_game_colours, false, state.config.interpreter_number) {
-                        Ok(mut vm) => {
-                            vm.machine.undo_cap = state.config.undo_levels;
-                            let opening = hint_opening(&mut vm, state.config.hint_skip_screen_warning);
-                            let transcript: Vec<String> =
-                                opening.split('\n').map(|l| l.to_owned()).collect();
-                            let label = entry.rsplit('/').next().unwrap_or(&entry).to_owned();
-                            state.overlays.hints = Some(app::state::HintSession {
-                                source: app::state::HintSource::Zcode(vm),
-                                transcript,
-                                scroll: 0,
-                                clear_anchor: None,
-                                scroll_anim: None,
-                                input: String::new(),
-                                label,
-                                builtin_hint,
-                            });
-                        }
-                        Err(e) => {
-                            state.set_status(format!("hints: failed to load hint VM: {:?}", e));
-                        }
-                    }
-                }
-                Ok(None) => {
-                    state.set_status("hints: hint entry not found in zip");
-                }
-                Err(e) => {
-                    state.set_status(format!("hints: cannot read zip entry: {}", e));
-                }
-            }
+        Ok(None) => {
+            state.set_status(app::host::hints::NO_HINT_MESSAGE);
         }
-        hints::HintResolution::AskUser => {
-            // TODO: wire the file browser to pick a hint file (.z3/.z5/.z8), then call
-            // save_hint_assoc(user_dir, ifid, &picked) and restart as File path above.
-            // For now, surface a status message so the user knows what to do.
-            state.set_status(
-                "no hint file found — place <story>.hints.z5 next to the story, or use /hints <path>",
-            );
-        }
-        hints::HintResolution::None => {
-            state.set_status("no hints found");
+        Err(e) => {
+            state.set_status(e.to_string());
         }
     }
 }

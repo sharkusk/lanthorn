@@ -27,6 +27,8 @@ mod host_session;
 mod sq1564_command_bar_prompt;
 #[path = "suites/host_turn.rs"]
 mod host_turn;
+#[path = "suites/sq1586_host_hints_open.rs"]
+mod sq1586_host_hints_open;
 
 #[path = "suites/adf_disk_image.rs"]
 mod adf_disk_image;

@@ -21,6 +21,9 @@
 //! - [`sound`] — the [`SoundSink`](sound::SoundSink) a host plays sound through,
 //!   and [`sound_finished`](sound::sound_finished) for reporting one back.
 //! - [`ingame_io`] — the game's own SAVE/RESTORE and filename requests.
+//! - [`hints`] — resolve and boot a story's InvisiClues-style hint session
+//!   ([`hints::open`], SQ-1586), and a cheap "would it find one?" check
+//!   ([`hints::available`]).
 //! - [`input`] — player input that is not a typed line: a v6 mouse click
 //!   ([`deliver_v6_click`](input::deliver_v6_click), SQ-1568).
 //! - [`settings`] — apply a changed config to a running session, as the
@@ -33,6 +36,7 @@
 pub mod assist;
 pub mod boot;
 pub mod clock;
+pub mod hints;
 pub mod ingame_io;
 pub mod input;
 pub mod persist;
