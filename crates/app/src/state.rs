@@ -5390,8 +5390,18 @@ impl AppState {
             self.assist_preamble_shown = true;
             let intro = self.colors.theme.get(crate::assist::AssistTone::Help.selector()).style;
             let line = crate::assist::preamble(self.symbols.assist_gutter);
+            // Capture where the line will land BEFORE pushing it, not
+            // `len() - 1` after: in inline-prompt mode (`command_bar = false`)
+            // `push_transcript_internal_styled` INSERTS above the trailing
+            // game `>` prompt rather than appending (SQ-0270), so the prompt
+            // — not the intro — ends up last, and `len() - 1` afterward names
+            // the wrong line (SQ-1587). Nothing mutates `self` between this
+            // call and the one below, so it agrees with the index
+            // `push_transcript_internal_styled`'s own `insert_above_prompt_at()`
+            // call computes internally.
+            let intro_at = self.insert_above_prompt_at().unwrap_or(self.transcript.len());
             self.push_transcript_internal_styled(&line, TranscriptKind::Assist, intro);
-            self.assist_intro_line = Some(self.transcript.len() - 1);
+            self.assist_intro_line = Some(intro_at);
         }
         let style = self.colors.theme.get(assist.tone().selector()).style;
         for line in assist.lines() {
