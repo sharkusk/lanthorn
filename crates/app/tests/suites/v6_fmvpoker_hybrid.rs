@@ -1807,3 +1807,211 @@ fn fmvpoker_restore_does_not_widen_the_banner_window_honoring_game_colours() {
 fn fmvpoker_restore_does_not_widen_the_banner_window_theme_only() {
     fmvpoker_restore_does_not_widen_the_banner_window(false);
 }
+
+/// The published `px_runs` count for fmvpoker's story window, or 0 if it is not
+/// currently publishing one.
+fn fmvpoker_px_run_count(session: &GameSession) -> usize {
+    let model = session.screen();
+    let WinNode::Layered(items) = &model.root else { panic!("v6 Layered root") };
+    let layout = app::render::v6_layout::classify_windows(items, zvm::screen::V6Cell::DEFAULT);
+    let Some(story) = layout.story else { return 0 };
+    let WinNode::Buffer(b) = &story.node else { panic!("window 0 is the primary prose Buffer") };
+    b.px_runs.len()
+}
+
+/// SQ-1583: fmvpoker's HOLD/un-HOLD toggle never goes through an `erase_window`
+/// or `erase_screen_rect` call — it just reprints "HOLD" or a same-width blank at
+/// the card's own `set_cursor` position — so `ZWindow::record_streamed`'s
+/// append-only shadow (see its own doc: it never erases the way `paint_run`
+/// does) piles up a fresh run at the identical pixel rect every single toggle,
+/// forever. `v6_screen_model`'s `prune_covered_px_runs` collapses the run of
+/// EXACT repeats each toggle produces (see its own doc for why it stops at exact
+/// duplicates) down to the newest of each, which bounds card (a)'s column to at
+/// most two runs — its own newest "HOLD" or blank, plus at most one now-stale
+/// run of the OTHER text that has not yet been superseded by a later exact copy
+/// of itself — however many turns pass.
+///
+/// Specimen: `fmvpoker.z6` (a freely-distributed story, but outside SQ-1015's
+/// fetched set — local `stories/` only, so this vacuously skips on CI), dealt
+/// via `fmvpoker_dealt_hand` (24 keys to the draw announcement — see its own
+/// doc), then card (a)'s HOLD label toggled on and off 30 turns running: 30
+/// separate `submit_char(b'a')` calls, each one a real in-game keypress a player
+/// mashing the same key produces.
+fn fmvpoker_stale_hold_labels_are_pruned(honor: bool) {
+    let Some((mut session, mut state)) = fmvpoker_dealt_hand(honor) else { return };
+
+    let mut counts = Vec::new();
+    let mut held = false;
+    for n in 0..30 {
+        let r = session.submit_char(b'a');
+        assert!(r.fault.is_none(), "honor={honor}: fmvpoker faulted toggling hold at turn {n}: {:?}", r.fault);
+        app::state::apply_transcript_elems(&mut state, &r.transcript_elems);
+        *state.v6_paint.borrow_mut() = Engine::paint_surface(&session);
+        held = !held;
+        counts.push(fmvpoker_px_run_count(&session));
+    }
+
+    // Premise: this specimen really does exercise SQ-1583's growth — the raw
+    // shadow must have piled up well past what the published list is allowed to
+    // hold, or the test proves nothing.
+    let raw_streamed = session.machine.screen.v6.as_ref().unwrap().windows[0].streamed.len();
+    assert!(
+        raw_streamed > 20,
+        "premise (honor={honor}): 30 hold toggles must pile up more than 20 runs in the raw \
+         shadow, or this specimen is not exercising SQ-1583's growth at all (raw={raw_streamed})"
+    );
+
+    // The PUBLISHED list must not track the raw shadow's growth — bounded at a
+    // small constant across all 30 turns, not merely at the end of them (a fix
+    // that only prunes on the LAST call and leaves every intermediate frame
+    // unbounded would still flunk a host reading it mid-session).
+    let max_seen = *counts.iter().max().unwrap();
+    assert!(
+        max_seen <= 10,
+        "honor={honor}: px_runs grew to {max_seen} over 30 hold toggles (raw shadow {raw_streamed}) \
+         — pruning is not keeping the published list bounded (SQ-1583). Per-turn counts: {counts:?}"
+    );
+
+    // No two published runs are exact duplicates of each other — pruning's own
+    // invariant, checked on the list it actually produced rather than trusted
+    // from its implementation.
+    let model = session.screen();
+    let WinNode::Layered(items) = &model.root else { panic!("v6 Layered root") };
+    let layout = app::render::v6_layout::classify_windows(items, zvm::screen::V6Cell::DEFAULT);
+    let story = layout.story.expect("fmvpoker publishes a story window");
+    let WinNode::Buffer(b) = &story.node else { panic!("window 0 is the primary prose Buffer") };
+    for (i, a) in b.px_runs.iter().enumerate() {
+        for c in &b.px_runs[i + 1..] {
+            assert!(
+                (a.x, a.y, &a.text, a.style, a.fg, a.bg) != (c.x, c.y, &c.text, c.style, c.fg, c.bg),
+                "honor={honor}: two published runs at ({},{}) {:?} are exact duplicates of each \
+                 other — pruning left a copy it should have dropped (SQ-1583)",
+                a.x, a.y, a.text
+            );
+        }
+    }
+
+    // Card (a)'s column holds at most ONE run of each distinct text that has
+    // ever been printed there ("HOLD" and the blank) — never the whole history
+    // of 15 toggles' worth of either. It is not always down to exactly the
+    // current state (a stale run of the OTHER text can still be the newest copy
+    // of ITSELF, kept because `honor_game_colours` off never lets a later blank
+    // repaint over it — see `prune_covered_px_runs`'s doc), but it can never be
+    // more than one of each.
+    let holds_at_a = b.px_runs.iter().filter(|t| t.x == 70 && t.y == 203 && t.text == "HOLD").count();
+    let blanks_at_a = b.px_runs.iter().filter(|t| t.x == 70 && t.y == 203 && t.text.trim().is_empty()).count();
+    assert!(
+        holds_at_a <= 1 && blanks_at_a <= 1,
+        "honor={honor}: card (a) is currently {} after {} toggles, and its published runs at \
+         (70,203) hold {holds_at_a} \"HOLD\" and {blanks_at_a} blank — 30 toggles' worth of \
+         EITHER surviving as more than one copy is exactly the pile-up SQ-1583 reports: {:?}",
+        if held { "HELD" } else { "not held" },
+        counts.len(),
+        b.px_runs.iter().map(|t| (t.x, t.y, t.text.clone())).collect::<Vec<_>>()
+    );
+    // …and the CURRENT state is always represented among them.
+    assert!(
+        (held && holds_at_a == 1) || (!held && blanks_at_a == 1),
+        "honor={honor}: card (a) is currently {}, but its published runs at (70,203) don't show \
+         it: {:?}",
+        if held { "HELD" } else { "not held" },
+        b.px_runs.iter().map(|t| (t.x, t.y, t.text.clone())).collect::<Vec<_>>()
+    );
+}
+
+#[test]
+fn fmvpoker_stale_hold_labels_are_pruned_honoring_game_colours() {
+    fmvpoker_stale_hold_labels_are_pruned(true);
+}
+
+#[test]
+fn fmvpoker_stale_hold_labels_are_pruned_theme_only() {
+    fmvpoker_stale_hold_labels_are_pruned(false);
+}
+
+/// SQ-1583, the falsifiable half: pruning `px_runs` must not move a single pixel
+/// of the Rasterise composite. `draw_story_canvas_runs_into` draws this exact
+/// list in this exact order, so a run pruning drops is provably repainted by a
+/// LATER run still in the list — proven directly here, by rebuilding the
+/// composite from the RAW, unpruned shadow (the same per-field mapping
+/// `v6_screen_model` used before SQ-1583, reconstructed from zvm's own
+/// `ZWindow::streamed`) and diffing it against the published, pruned one.
+///
+/// Same specimen and the same 6-toggle setup `fmvpoker_stale_hold_labels_are_pruned`
+/// uses to reach a frame with both covered and still-visible runs in it.
+fn fmvpoker_pruning_does_not_change_the_composite(honor: bool) {
+    let Some((mut session, mut state)) = fmvpoker_dealt_hand(honor) else { return };
+    for n in 0..6 {
+        let r = session.submit_char(b'a');
+        assert!(r.fault.is_none(), "honor={honor}: fmvpoker faulted toggling hold at turn {n}: {:?}", r.fault);
+        app::state::apply_transcript_elems(&mut state, &r.transcript_elems);
+        *state.v6_paint.borrow_mut() = Engine::paint_surface(&session);
+    }
+
+    let model = session.screen();
+    let WinNode::Layered(items) = &model.root else { panic!("v6 Layered root") };
+    let native = app::render::v6_layout::native_extent(items, &app::native_font::TextFace::cell_only(zvm::screen::V6Cell::DEFAULT));
+    let layout = app::render::v6_layout::classify_windows(items, zvm::screen::V6Cell::DEFAULT);
+    let story = layout.story.expect("fmvpoker publishes a story window");
+    let (pruned_img, _) = app::render::screen::build_v6_raster_canvas(&layout, native, &state);
+
+    // The raw, unpruned shadow this list would have carried before SQ-1583.
+    let raw: Vec<app::engine::PxText> = session
+        .machine
+        .screen
+        .v6
+        .as_ref()
+        .expect("v6 screen state")
+        .windows[0]
+        .streamed
+        .iter()
+        .map(|t| app::engine::PxText {
+            y: t.y,
+            x: t.x,
+            text: t.text.clone(),
+            style: t.style,
+            fg: app::state::pack_zcolour(t.fg),
+            bg: app::state::pack_zcolour(t.bg),
+            grow: t.grow,
+            gcol: t.gcol,
+        })
+        .collect();
+    let WinNode::Buffer(pruned_b) = &story.node else { panic!("window 0 is the primary prose Buffer") };
+    assert!(
+        raw.len() > pruned_b.px_runs.len(),
+        "premise (honor={honor}): the raw shadow ({} runs) must be larger than the published, \
+         pruned list ({} runs) or this frame exercises no pruning at all",
+        raw.len(),
+        pruned_b.px_runs.len()
+    );
+
+    // Rebuild the SAME layout with the story window's `px_runs` swapped for the
+    // raw, unpruned list, and re-render.
+    let mut items_unpruned = items.clone();
+    let story_i = items
+        .iter()
+        .position(|it| std::ptr::eq(it, story))
+        .expect("the story window's index in its own items slice");
+    let WinNode::Buffer(ub) = &mut items_unpruned[story_i].node else { panic!("window 0 is a Buffer") };
+    ub.px_runs = raw;
+    let layout_unpruned = app::render::v6_layout::classify_windows(&items_unpruned, zvm::screen::V6Cell::DEFAULT);
+    let (raw_img, _) = app::render::screen::build_v6_raster_canvas(&layout_unpruned, native, &state);
+
+    let differing = pruned_img.pixels().zip(raw_img.pixels()).filter(|(a, b)| a != b).count();
+    assert_eq!(
+        differing, 0,
+        "honor={honor}: pruning covered runs out of px_runs changed {differing} pixels of the \
+         Rasterise composite — a run this dropped was NOT provably repainted by a later one \
+         (SQ-1583)"
+    );
+}
+
+#[test]
+fn fmvpoker_pruning_does_not_change_the_composite_honoring_game_colours() {
+    fmvpoker_pruning_does_not_change_the_composite(true);
+}
+
+#[test]
+fn fmvpoker_pruning_does_not_change_the_composite_theme_only() {
+    fmvpoker_pruning_does_not_change_the_composite(false);
+}

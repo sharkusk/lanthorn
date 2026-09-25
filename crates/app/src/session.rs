@@ -3629,20 +3629,32 @@ impl GameSession {
                     // `BufferWindow::px_runs`. The transcript is still what renders
                     // it; this is the same text read as pixels, for the one window
                     // shape that is a canvas rather than a page.
-                    px_runs: win
-                        .streamed
-                        .iter()
-                        .map(|t| crate::engine::PxText {
-                            y: t.y,
-                            x: t.x,
-                            text: t.text.clone(),
-                            style: t.style,
-                            fg: crate::state::pack_zcolour(t.fg),
-                            bg: crate::state::pack_zcolour(t.bg),
-                            grow: t.grow,
-                            gcol: t.gcol,
-                        })
-                        .collect(),
+                    //
+                    // Pruned of runs a LATER one in the same list EXACTLY
+                    // duplicates (SQ-1583): `ZWindow::record_streamed` shadows
+                    // every glyph it is ever handed and never erases the way
+                    // `paint_run` does (see that method's own doc) — so fmvpoker's
+                    // HOLD/un-HOLD toggle, which reprints "HOLD" or the same blank
+                    // over and over at the identical pixels, piles up copies of
+                    // both forever instead of leaving just the newest of each. See
+                    // `prune_covered_px_runs`'s own doc for why this stops at exact
+                    // duplicates rather than "any later, bigger rect" — the latter
+                    // looks equivalent and is not, once `honor_game_colours` is off.
+                    px_runs: prune_covered_px_runs(
+                        win.streamed
+                            .iter()
+                            .map(|t| crate::engine::PxText {
+                                y: t.y,
+                                x: t.x,
+                                text: t.text.clone(),
+                                style: t.style,
+                                fg: crate::state::pack_zcolour(t.fg),
+                                bg: crate::state::pack_zcolour(t.bg),
+                                grow: t.grow,
+                                gcol: t.gcol,
+                            })
+                            .collect(),
+                    ),
                     ..Default::default()
                 })
             } else if !win.prose.is_empty() {
@@ -4020,6 +4032,43 @@ fn v6_face_lines(face: Option<&crate::native_font::TextFace>) -> Vec<String> {
         out.push(format!("    pen: steps the cell — {}px for every character", cell.w()));
     }
     out
+}
+
+/// Drop a run that a LATER one in the same list (same paint order) exactly
+/// duplicates — same position, text, style and colours — see the call site in
+/// `v6_screen_model` for why this exists (SQ-1583).
+///
+/// **Exact duplicates only, deliberately** — not "any later run whose rect
+/// contains this one's", which looked like the obvious rule and is unsound: a
+/// later run only REPAINTS a pixel in the composite when it puts opaque ink or
+/// an opaque background there, and `draw_story_canvas_runs_into` makes the
+/// background conditional on `honor_game_colours` — `bg` is forced `None` for
+/// every run when the player is not honouring game colours, so an all-blank run
+/// (fmvpoker's un-HOLD) paints NOTHING in that mode and a glyph run only ever
+/// paints its own ink pixels, never blanks the cell around them. A rect-sized
+/// run genuinely does not erase what is behind it there, so treating "later run,
+/// bigger rect" as coverage changed the Rasterise composite by hundreds of
+/// pixels the moment `honor_game_colours` was off (caught by
+/// `fmvpoker_pruning_does_not_change_the_composite_theme_only`).
+///
+/// An EXACT duplicate has no such mode dependency: whatever pixels the earlier
+/// run would have painted, in EITHER mode, the later one paints identically (same
+/// text ⇒ same glyph ink pattern, same style, same fg/bg ⇒ same resolved colour
+/// in that same mode) — so dropping it is provably invisible to the composite.
+/// It is also, on its own, enough to keep fmvpoker's HOLD/un-HOLD toggle bounded:
+/// each card position alternates between exactly two distinct prints (its own
+/// "HOLD" and its own same-width blank), so every occurrence but the newest of
+/// each collapses onto that newest one — see
+/// `fmvpoker_stale_hold_labels_are_pruned`'s doc for the shape this leaves.
+fn prune_covered_px_runs(runs: Vec<crate::engine::PxText>) -> Vec<crate::engine::PxText> {
+    let has_later_duplicate = |i: usize| {
+        let r = &runs[i];
+        runs[i + 1..].iter().any(|l| {
+            l.x == r.x && l.y == r.y && l.text == r.text && l.style == r.style && l.fg == r.fg && l.bg == r.bg
+        })
+    };
+    let keep: Vec<bool> = (0..runs.len()).map(|i| !has_later_duplicate(i)).collect();
+    runs.into_iter().zip(keep).filter_map(|(run, k)| k.then_some(run)).collect()
 }
 
 /// The MACHINE's own screen pair for a Version 6 frame, `(foreground,
