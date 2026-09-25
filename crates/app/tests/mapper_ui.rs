@@ -130,3 +130,5 @@ mod sq1345_zork1_forest_shadow;
 mod sq1351_nguhd_topics;
 #[path = "suites/sq1551_host_map_editing.rs"]
 mod sq1551_host_map_editing;
+#[path = "suites/sq1562_folded_updown_layout.rs"]
+mod sq1562_folded_updown_layout;

@@ -1134,6 +1134,21 @@ pub struct LayoutConnector {
     /// another connector's trunk, not a room edge — it has a departure marker but no arrival end
     /// of its own.
     pub merge: bool,
+    /// Other directions this SAME room pair also connects by, collapsed onto this one line
+    /// instead of drawing their own (SQ-1562, exposing [`mapper::route::RoutedConnector::secondary_exit`]
+    /// — a passage the field report's Canyon View↔Rocky Ledge shape hid completely: an Up/Down
+    /// riding a pair that also has a compass exit used to have no trace anywhere in this struct).
+    /// One entry per direction folded at the EXIT end (`origin`) — `render_svg_body`'s own SQ-1368
+    /// badge pass rides this connector's own `points`'s LAST point to draw each one's marker (a
+    /// lettered badge for a direction [`mapper::direction::portal_kind`] answers `Some` for,
+    /// otherwise a plain compass tag), so a host wanting the same badge reads that same point as
+    /// the anchor rather than re-deriving one. Always empty for a merge stub (`merge` above) —
+    /// its `points`'s ends are trunk junctions, not room edges, so SQ-1368's own pass never badges
+    /// one either.
+    pub secondary_exit: Vec<Direction>,
+    /// Directions folded at the ENTRY end (`dest`) — mirrors `secondary_exit`, anchored at this
+    /// connector's `points`'s FIRST point instead.
+    pub secondary_entry: Vec<Direction>,
 }
 
 /// An Up/Down/In/Out passage with no drawn line of its own — a lettered badge only (SQ-1540).
@@ -1270,6 +1285,15 @@ pub fn layer_layout(rm: &RenderMap, graph: Option<&MapGraph>) -> Option<LayerLay
         .max()
         .unwrap_or(PassageWeight::Hard);
 
+        // Empty for a merge stub, matching `render_svg_body`'s own `!conn.merge` guard on the
+        // same fields (see that pass's SQ-1368 comment) — a merge stub's `pts` end is a trunk
+        // junction, not a room edge, so there is no valid anchor to badge either fold at.
+        let (secondary_exit, secondary_entry) = if conn.merge {
+            (Vec::new(), Vec::new())
+        } else {
+            (conn.secondary_exit.clone(), conn.secondary_entry.clone())
+        };
+
         connectors.push(LayoutConnector {
             origin: conn.origin,
             dest: conn.dest,
@@ -1283,6 +1307,8 @@ pub fn layer_layout(rm: &RenderMap, graph: Option<&MapGraph>) -> Option<LayerLay
             exit_kind,
             entry_kind,
             merge: conn.merge,
+            secondary_exit,
+            secondary_entry,
         });
     }
     // A `StackedExit`'s own secondary directions ride an already-drawn connector's marker too
