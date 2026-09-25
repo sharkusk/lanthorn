@@ -412,67 +412,6 @@ pub(crate) fn poll_tidy_jobs(
     redraw
 }
 
-/// Play out a v6 turn's picture sequence, one frame per hold (SQ-0708).
-///
-/// A v6 turn can queue several `draw_picture`s — Arthur's intro paints the
-/// graveyard plate and then Merlin fourteen instructions later, in ONE turn — and
-/// compositing them all before anything renders hands the player the finished
-/// screen instantly. The real machines blitted each picture as its opcode ran, so
-/// you watched the graveyard paint and then Merlin paint onto it. The session
-/// snapshots the screens the turn passed through; this walks them.
-///
-/// The turn itself already ran to completion, so nothing here blocks the story
-/// interpreter, and nothing sleeps: the deadline joins the loop's other clocks in
-/// `next_deadline`, which is what keeps the poll waking in time and the keyboard
-/// live all the way through. Returns `true` when a frame actually advanced.
-pub(crate) fn poll_picture_pacing(state: &mut AppState, session: &mut dyn Engine) -> bool {
-    let Some(gs) = app::engine_helpers::zvm_session_opt_mut(session) else {
-        // Not a Z-machine engine: no sequence can be in flight, so make sure a
-        // stale deadline from a previous session cannot linger.
-        state.picture_pace_next = None;
-        return false;
-    };
-    let Some(hold) = gs.paced_picture_hold() else {
-        state.picture_pace_next = None;
-        return false;
-    };
-    let now = std::time::Instant::now();
-    match state.picture_pace_next {
-        // First sight of this frame: start its clock. It is already on screen —
-        // the turn that produced it forced a redraw — so nothing changes yet.
-        None => {
-            state.picture_pace_next = Some(now + hold);
-            false
-        }
-        Some(due) if now >= due => {
-            gs.advance_paced_pictures();
-            // Arm the next frame's hold from THIS instant rather than from the
-            // deadline just missed, so a slow frame cannot compound into a
-            // sequence that races to catch up.
-            state.picture_pace_next = gs.paced_picture_hold().map(|h| now + h);
-            true
-        }
-        Some(_) => false,
-    }
-}
-
-/// Collapse any in-flight picture sequence to its settled composite (SQ-0708) —
-/// the player pressed a key, or the pane resized under it.
-///
-/// The player outranks paced output, the same rule the `[more]` pager runs on.
-/// Unlike the pager this never CONSUMES the key: the sequence is decoration over
-/// a turn that has already finished, so eating a keystroke to dismiss it would
-/// swallow a character the player meant for the story. The two cannot deadlock
-/// for the same reason — pacing blocks nothing and waits for nothing, so a key
-/// settles the pictures and goes on to whatever else wanted it, `[more]` included.
-///
-/// Returns `true` when frames were dropped (the screen jumps to the final state).
-pub(crate) fn settle_picture_pacing(state: &mut AppState, session: &mut dyn Engine) -> bool {
-    state.picture_pace_next = None;
-    app::engine_helpers::zvm_session_opt_mut(session)
-        .is_some_and(|gs| gs.settle_paced_pictures())
-}
-
 /// Refill the command band from the engine, once per loop tick: its object
 /// columns whenever the VM has run since the last fill (`turn_epoch`-gated,
 /// SQ-1175 — objects cannot move while the VM is parked at a read), and its

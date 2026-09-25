@@ -500,3 +500,129 @@ fn a_picture_beside_the_last_one_is_not_held_by_an_animation_sharing_its_turn() 
         );
     }
 }
+
+// ── The lib-level pacing driver: host::clock (SQ-1570) ───────────────────────
+//
+// The functions above exercise `GameSession::paced_picture_hold` /
+// `advance_paced_pictures` / `settle_paced_pictures` directly. Everything below
+// exercises the driver that actually SITS ON TOP of them for a real host —
+// `app::host::clock::poll_picture_pacing` / `settle_picture_pacing` /
+// `next_deadline` — which used to live only inside the TUI binary's
+// `loop_tick.rs` and so could never be reached from an integration test at all.
+
+/// Window 7's canvas out of a screen model — where Zork Zero's boot art (banner,
+/// pillars, compass) lives, mirroring `win0_canvas` above for Arthur's plates.
+fn win7_canvas(model: &app::engine::ScreenModel) -> Option<image::RgbaImage> {
+    let WinNode::Layered(items) = &model.root else { return None };
+    items.iter().find_map(|pw| match &pw.node {
+        WinNode::Graphics(g) if g.win == 7 => Some((*g.canvas).clone()),
+        _ => None,
+    })
+}
+
+/// Sleep past `dl`, the way a host that only calls `next_deadline()` and sleeps
+/// would.
+fn sleep_until(dl: std::time::Instant) {
+    let remaining = dl.saturating_duration_since(std::time::Instant::now());
+    std::thread::sleep(remaining + std::time::Duration::from_millis(2));
+}
+
+/// The host-clock pacer, driven exactly the way an embedding host drives it —
+/// sleep to `next_deadline()`, poll, repeat, until the clock goes quiet — against
+/// Zork Zero r393's boot sequence: the eight-frame compass animation
+/// `assembly_turns_do_not_pace_only_reveals_do` above already pins as a genuine
+/// paced reveal (it cycles through one 45×40 rect at (277,1), overlapping itself
+/// frame after frame).
+///
+/// Two things this pins that the session-level tests above cannot, because they
+/// call `advance_paced_pictures` directly and never touch a clock: (1)
+/// `next_deadline` must actually report the pacer's deadline (folded in by
+/// SQ-1570 — before it, a host driving only `next_deadline` and sleeping would
+/// miss every paced frame), and (2) polling strictly AT each reported deadline,
+/// not before, reveals frames one at a time in order, same count and same final
+/// pixels as advancing the session directly.
+#[test]
+fn host_clock_paces_zork_zeros_boot_compass_frame_by_frame() {
+    // Reference: how many intermediate frames the session itself queues, and
+    // what the settled composite looks like once they have all played out —
+    // established the same way `the_sequence_settles_on_the_composite_it_started_from`
+    // does above, just on a separate session so the timed run below starts fresh.
+    let Some(mut reference) = boot("zork0-r393-s890714.z6", true) else { return };
+    assert!(
+        reference.paced_picture_hold().is_some(),
+        "Zork Zero's boot compass animation should already be queued"
+    );
+    let reference_frames = play_out(&mut reference);
+    assert!(reference_frames >= 1, "the compass animation must leave at least one frame to pace through");
+    let settled = win7_canvas(&reference.screen()).expect("the boot art lives in window 7");
+
+    // The lib driver, against a fresh session: nothing here calls
+    // `advance_paced_pictures` or `paced_picture_hold` — only the three
+    // `host::clock` functions a headless host would call.
+    let Some(mut session) = boot("zork0-r393-s890714.z6", true) else { return };
+    let mut state = app::state::AppState::default();
+
+    assert!(
+        app::host::clock::next_deadline(&state).is_none(),
+        "nothing has polled the pacer yet, so no clock should be armed"
+    );
+
+    let guard = std::time::Instant::now() + std::time::Duration::from_secs(10);
+    let mut revealed = 0usize;
+    loop {
+        {
+            let engine: &mut dyn Engine = &mut session;
+            if app::host::clock::poll_picture_pacing(&mut state, engine) {
+                revealed += 1;
+            }
+        }
+        match app::host::clock::next_deadline(&state) {
+            Some(dl) => {
+                assert_eq!(
+                    Some(dl),
+                    state.picture_pace_next,
+                    "next_deadline must report exactly the pacer's own deadline"
+                );
+                sleep_until(dl);
+            }
+            None => break,
+        }
+        assert!(std::time::Instant::now() < guard, "the pacer never reported settling");
+    }
+
+    assert_eq!(
+        revealed, reference_frames,
+        "the lib driver must reveal exactly as many frames as advancing the session directly does"
+    );
+    let final_canvas = win7_canvas(&session.screen_now()).expect("the boot art is still up");
+    assert!(final_canvas == settled, "the lib driver's last frame must be the settled composite");
+    assert!(app::host::clock::next_deadline(&state).is_none(), "settled: nothing left to wake for");
+}
+
+/// `settle_picture_pacing` collapses whatever is left, the way a keypress or a
+/// resize does — mid-sequence, dropping straight to the settled composite and
+/// disarming `next_deadline` in the same call.
+#[test]
+fn host_clock_settle_collapses_the_remainder_and_disarms_the_deadline() {
+    let Some(mut session) = boot("zork0-r393-s890714.z6", true) else { return };
+    let settled = win7_canvas(&session.screen()).expect("the boot art lives in window 7");
+    let mut state = app::state::AppState::default();
+
+    // Arm the clock, but poll it only once — leave frames unplayed.
+    {
+        let engine: &mut dyn Engine = &mut session;
+        app::host::clock::poll_picture_pacing(&mut state, engine);
+    }
+    assert!(state.picture_pace_next.is_some(), "the first poll must arm the clock");
+    assert!(app::host::clock::next_deadline(&state).is_some(), "and next_deadline must see it armed");
+
+    let dropped = {
+        let engine: &mut dyn Engine = &mut session;
+        app::host::clock::settle_picture_pacing(&mut state, engine)
+    };
+    assert!(dropped, "there was a sequence in flight to collapse");
+    assert!(state.picture_pace_next.is_none(), "settling must disarm the clock");
+    assert!(app::host::clock::next_deadline(&state).is_none(), "nothing left to wake for once settled");
+    let after = win7_canvas(&session.screen_now()).expect("the boot art is still up");
+    assert!(after == settled, "settling must land on exactly the settled composite");
+}

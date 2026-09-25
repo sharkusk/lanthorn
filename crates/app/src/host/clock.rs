@@ -1,5 +1,6 @@
 //! The game's clocks (SQ-1539): timed input, Glk timers, sound finish
-//! routines and Sound2 volume ramps, as calls a host makes on its own schedule.
+//! routines, Sound2 volume ramps, and the v6 picture pacer (SQ-0708, SQ-1570),
+//! as calls a host makes on its own schedule.
 //!
 //! The engines expose each clock as data — a Z-machine read's timeout
 //! (`pending_timeout`), a Glulx game's `glk_request_timer_events` interval
@@ -145,14 +146,85 @@ pub fn fire_due(
 }
 
 /// The soonest game clock: the Z-machine timed-input deadline, the Glulx Glk
-/// timer, or the earliest pending Sound2 volume-ramp completion. `None` when no
-/// clock is armed — the host has nothing to wake for but the player.
+/// timer, the earliest pending Sound2 volume-ramp completion, or the next frame
+/// of an in-flight v6 picture sequence ([`picture_pace_next`](AppState::picture_pace_next),
+/// SQ-1570). `None` when no clock is armed — the host has nothing to wake for
+/// but the player.
 pub fn next_deadline(state: &AppState) -> Option<Instant> {
     let next_volume_deadline = state.glulx_volume_notify.values().map(|(t, _)| *t).min();
-    [state.input_deadline, state.glulx_timer_next_fire, next_volume_deadline]
+    [
+        state.input_deadline,
+        state.glulx_timer_next_fire,
+        next_volume_deadline,
+        state.picture_pace_next,
+    ]
         .into_iter()
         .flatten()
         .min()
+}
+
+/// Play out a v6 turn's picture sequence, one frame per hold (SQ-0708).
+///
+/// A v6 turn can queue several `draw_picture`s — Arthur's intro paints the
+/// graveyard plate and then Merlin fourteen instructions later, in ONE turn — and
+/// compositing them all before anything renders hands the player the finished
+/// screen instantly. The real machines blitted each picture as its opcode ran, so
+/// you watched the graveyard paint and then Merlin paint onto it. The session
+/// snapshots the screens the turn passed through; this walks them.
+///
+/// The turn itself already ran to completion, so nothing here blocks the story
+/// interpreter, and nothing sleeps: the deadline joins the loop's other clocks in
+/// [`next_deadline`], which is what keeps the poll waking in time and the
+/// keyboard live all the way through. Returns `true` when a frame actually
+/// advanced, so the caller knows to repaint.
+///
+/// Lifted out of the TUI's `loop_tick` (SQ-1570) so every embedding host gets
+/// the same pacer instead of re-deriving it; the TUI calls this directly.
+pub fn poll_picture_pacing(state: &mut AppState, session: &mut dyn Engine) -> bool {
+    let Some(gs) = zvm_session_opt_mut(session) else {
+        // Not a Z-machine engine: no sequence can be in flight, so make sure a
+        // stale deadline from a previous session cannot linger.
+        state.picture_pace_next = None;
+        return false;
+    };
+    let Some(hold) = gs.paced_picture_hold() else {
+        state.picture_pace_next = None;
+        return false;
+    };
+    let now = Instant::now();
+    match state.picture_pace_next {
+        // First sight of this frame: start its clock. It is already on screen —
+        // the turn that produced it forced a redraw — so nothing changes yet.
+        None => {
+            state.picture_pace_next = Some(now + hold);
+            false
+        }
+        Some(due) if now >= due => {
+            gs.advance_paced_pictures();
+            // Arm the next frame's hold from THIS instant rather than from the
+            // deadline just missed, so a slow frame cannot compound into a
+            // sequence that races to catch up.
+            state.picture_pace_next = gs.paced_picture_hold().map(|h| now + h);
+            true
+        }
+        Some(_) => false,
+    }
+}
+
+/// Collapse any in-flight picture sequence to its settled composite (SQ-0708) —
+/// the player pressed a key, or the pane resized under it.
+///
+/// The player outranks paced output, the same rule the `[more]` pager runs on.
+/// Unlike the pager this never CONSUMES the key: the sequence is decoration over
+/// a turn that has already finished, so eating a keystroke to dismiss it would
+/// swallow a character the player meant for the story. The two cannot deadlock
+/// for the same reason — pacing blocks nothing and waits for nothing, so a key
+/// settles the pictures and goes on to whatever else wanted it, `[more]` included.
+///
+/// Returns `true` when frames were dropped (the screen jumps to the final state).
+pub fn settle_picture_pacing(state: &mut AppState, session: &mut dyn Engine) -> bool {
+    state.picture_pace_next = None;
+    zvm_session_opt_mut(session).is_some_and(|gs| gs.settle_paced_pictures())
 }
 
 /// What the game is waiting for right now.

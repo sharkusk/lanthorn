@@ -2120,7 +2120,9 @@ fn run_event_loop(boot: startup::BootResult, launched_from_library: bool) -> Run
         needs_redraw |= state.poll_v6_encode_job();
         // Play out a v6 turn's picture sequence one frame at a time (SQ-0708).
         // Runs before the draw, so an advanced frame paints on this very pass.
-        needs_redraw |= loop_tick::poll_picture_pacing(&mut state, &mut *session);
+        // Lives in the library now (`host::clock::poll_picture_pacing`, SQ-1570)
+        // so a headless host gets the same pacer.
+        needs_redraw |= app::host::clock::poll_picture_pacing(&mut state, &mut *session);
         needs_redraw |= app::host::clock::refresh_input(&mut state, &mut *session);
         // The command band's object columns are LIVE: refilled from the engine
         // every tick, so a take/drop moves an object between *here* and
@@ -2240,17 +2242,10 @@ fn run_event_loop(boot: startup::BootResult, launched_from_library: bool) -> Run
         };
         let base_poll_ms = if state.has_active_animation() || sound_active || timer_active || selecting_at_edge { TIDY_POLL_MS } else { 50 };
         // Clamp to whichever clock is due first: the game's own (the Z-machine
-        // timed-input deadline, the Glulx Glk-timer deadline, or the soonest
-        // pending Sound2 volume-ramp completion — `host::clock::next_deadline`)…
-        let next_deadline = [
-            app::host::clock::next_deadline(&state),
-            // …and the v6 picture pacer, so the loop wakes to land the next frame
-            // of a turn's picture sequence on time (SQ-0708).
-            state.picture_pace_next,
-        ]
-            .into_iter()
-            .flatten()
-            .min();
+        // timed-input deadline, the Glulx Glk-timer deadline, the soonest pending
+        // Sound2 volume-ramp completion, or the v6 picture pacer's next frame —
+        // all folded into `host::clock::next_deadline` (SQ-1570).
+        let next_deadline = app::host::clock::next_deadline(&state);
         let poll_ms = match next_deadline {
             Some(dl) => {
                 let remaining = dl.saturating_duration_since(std::time::Instant::now()).as_millis() as u64;
@@ -2428,7 +2423,7 @@ fn run_event_loop(boot: startup::BootResult, launched_from_library: bool) -> Run
         if matches!(&event, Event::Key(k) if k.kind == KeyEventKind::Press)
             || matches!(&event, Event::Resize(_, _))
         {
-            loop_tick::settle_picture_pacing(&mut state, &mut *session);
+            app::host::clock::settle_picture_pacing(&mut state, &mut *session);
         }
 
         // SQ-1511: a resize may have changed the CELL, not only the grid — mark
