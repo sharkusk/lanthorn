@@ -166,6 +166,16 @@ const HOST_PAGE: image::Rgba<u8> = image::Rgba([0, 0, 0, 255]);
 /// Compose `b`'s current frame with no `AppState` anywhere: every input is the
 /// host's own.
 fn host_compose(b: &Booted, honor: bool, text: V6TextMode) -> app::render::screen::V6Frame {
+    host_compose_with(b, honor, text, &host_prose)
+}
+
+/// [`host_compose`] with the host's prose callback named by the caller.
+fn host_compose_with(
+    b: &Booted,
+    honor: bool,
+    text: V6TextMode,
+    prose: &dyn Fn(u16, u16) -> (MainText, RasterMetrics),
+) -> app::render::screen::V6Frame {
     let model = b.session.screen();
     let WinNode::Layered(items) = &model.root else { panic!("a v6 frame has a Layered root") };
     let native = v6::native_extent(items, &b.face);
@@ -179,7 +189,7 @@ fn host_compose(b: &Booted, honor: bool, text: V6TextMode) -> app::render::scree
         face: &b.face,
         paint: paint.as_deref(),
         panel_input: Some(""),
-        prose: &host_prose,
+        prose,
         reveal: None,
         pager_active: false,
         more_prompt_pair: (HOST_INK, HOST_PAGE),
@@ -271,8 +281,9 @@ fn the_frames_text_comes_back_as_runs_without_moving_a_pixel() {
 }
 
 /// `RecordOnly` leaves the text to the host: the canvas differs from the
-/// rasterised one ONLY inside the recorded glyph boxes — so no glyph was imaged
-/// that the run list does not account for — and does differ.
+/// rasterised one ONLY inside the recorded glyph boxes and the reported caret
+/// cell (SQ-1567) — so nothing was left out that the frame does not account for —
+/// and does differ.
 #[test]
 fn record_only_images_no_glyph_the_runs_do_not_account_for() {
     for (file, b) in specimens() {
@@ -280,10 +291,12 @@ fn record_only_images_no_glyph_the_runs_do_not_account_for() {
             let full = host_compose(&b, honor, V6TextMode::RasteriseAndRecord);
             let bare = host_compose(&b, honor, V6TextMode::RecordOnly);
             assert_eq!(full.text, bare.text, "{file} honor={honor}: both modes see the same text");
+            assert_eq!(full.caret, bare.caret, "{file} honor={honor}: both modes see the same caret");
+            let cell_w = u32::from(b.face.cell().w());
             let inside = |x: u32, y: u32| {
                 bare.text.iter().any(|r| {
                     (r.y..r.y + r.h).contains(&y) && r.boxes.iter().any(|&(bx, w)| (bx..bx + w).contains(&x))
-                })
+                }) || bare.caret.is_some_and(|c| (c.x..c.x + cell_w).contains(&x) && (c.y..c.y + c.h).contains(&y))
             };
             let mut differing = 0usize;
             for (x, y, p) in full.canvas.enumerate_pixels() {
@@ -294,6 +307,205 @@ fn record_only_images_no_glyph_the_runs_do_not_account_for() {
             }
             eprintln!("{file} honor={honor}: {differing} glyph pixels left to the host");
             assert!(differing > 0, "{file} honor={honor}: RecordOnly imaged the text anyway");
+        }
+    }
+}
+
+// ── what the composite measured (SQ-1567) ────────────────────────────────────
+
+/// [`host_prose`]'s lines with `awaiting` set as asked — the frame with and
+/// without a live input caret.
+fn prose_awaiting(awaiting: bool) -> impl Fn(u16, u16) -> (MainText, RasterMetrics) {
+    move |cols, rows| {
+        let (mut main, metrics) = host_prose(cols, rows);
+        main.awaiting = awaiting;
+        (main, metrics)
+    }
+}
+
+/// A host whose transcript is EMPTY: no line, no live input. Only the page is left
+/// inside the story box.
+fn empty_prose(_cols: u16, rows: u16) -> (MainText, RasterMetrics) {
+    let main = MainText {
+        lines: Vec::new(),
+        styles: Vec::new(),
+        input: String::new(),
+        cursor_col: 0,
+        awaiting: false,
+        floats: Vec::new(),
+    };
+    let metrics = RasterMetrics { total_rows: 0, viewport_rows: rows, max_scroll: 0, first_visible_row: 0 };
+    (main, metrics)
+}
+
+/// `story` is the box the prose callback was ASKED to fill: its grid is the
+/// callback's own arguments, captured as it was called, and its pixels lie inside
+/// the canvas and hold that grid.
+#[test]
+fn the_story_box_is_the_one_the_prose_callback_was_asked_to_fill() {
+    for (file, b) in specimens() {
+        for honor in [true, false] {
+            let asked = std::cell::Cell::new(None);
+            let prose = |cols: u16, rows: u16| {
+                asked.set(Some((cols, rows)));
+                host_prose(cols, rows)
+            };
+            let f = host_compose_with(&b, honor, V6TextMode::RecordOnly, &prose);
+            let (cols, rows) = asked.get().unwrap_or_else(|| panic!("{file} honor={honor}: prose never asked for"));
+            let s = f.story.unwrap_or_else(|| panic!("{file} honor={honor}: prose was asked for but no story box reported"));
+            eprintln!("{file} honor={honor}: story {s:?} · canvas {}x{}", f.canvas.width(), f.canvas.height());
+            assert_eq!((s.cols, s.rows), (cols, rows), "{file} honor={honor}: the grid the callback received");
+            assert!(s.w > 0 && s.h > 0, "{file} honor={honor}: a degenerate story box {s:?}");
+            assert!(
+                s.x + s.w <= f.canvas.width() && s.y + s.h <= f.canvas.height(),
+                "{file} honor={honor}: story box {s:?} leaves the {}x{} canvas",
+                f.canvas.width(),
+                f.canvas.height()
+            );
+            let cell = b.face.cell();
+            assert!(
+                u32::from(s.cols) * u32::from(cell.w()) <= s.w && u32::from(s.rows) * u32::from(cell.h()) <= s.h,
+                "{file} honor={honor}: the {}x{} grid does not fit in {s:?}",
+                s.cols,
+                s.rows
+            );
+        }
+    }
+}
+
+/// `page` is the colour the canvas was flattened onto: with a host transcript that
+/// draws nothing, it is every pixel of the story box no chrome glyph claimed.
+#[test]
+fn page_is_the_flatten_colour_inside_an_empty_story_box() {
+    for (file, b) in specimens() {
+        for honor in [true, false] {
+            let f = host_compose_with(&b, honor, V6TextMode::RasteriseAndRecord, &empty_prose);
+            let s = f.story.unwrap_or_else(|| panic!("{file} honor={honor}: no story box on this frame"));
+            if !honor {
+                assert_eq!(f.page, HOST_PAGE, "{file}: colours declined, so the page is the host's own");
+            }
+            assert!(f.caret.is_none(), "{file} honor={honor}: no live input, yet a caret was reported");
+            // A chrome window the game printed INSIDE window 0 keeps its text there
+            // (SQ-0728); those glyph boxes are the chrome's, not the page's.
+            let claimed = |x: u32, y: u32| {
+                f.text.iter().any(|r| {
+                    (r.y..r.y + r.h).contains(&y) && r.boxes.iter().any(|&(bx, w)| (bx..bx + w).contains(&x))
+                })
+            };
+            let mut checked = 0usize;
+            for y in s.y..s.y + s.h {
+                for x in s.x..s.x + s.w {
+                    if claimed(x, y) {
+                        continue;
+                    }
+                    checked += 1;
+                    let p = *f.canvas.get_pixel(x, y);
+                    assert_eq!(p, f.page, "{file} honor={honor}: ({x},{y}) inside the empty story box {s:?}");
+                }
+            }
+            eprintln!("{file} honor={honor}: page {:?} over {checked} story-box pixels", f.page);
+            assert!(checked > 0, "{file} honor={honor}: non-vacuity — the whole box was claimed");
+        }
+    }
+}
+
+/// **The caret is reported, and under `RecordOnly` no longer painted.** The canvas
+/// with a live caret is the canvas without one, pixel for pixel, and the caret the
+/// frame reports sits just after the last prose glyph. Under `Rasterise` it is still
+/// drawn — exactly in the cell it reports.
+#[test]
+fn record_only_reports_the_caret_instead_of_painting_it() {
+    for (file, b) in specimens() {
+        for honor in [true, false] {
+            let live = host_compose_with(&b, honor, V6TextMode::RecordOnly, &prose_awaiting(true));
+            let idle = host_compose_with(&b, honor, V6TextMode::RecordOnly, &prose_awaiting(false));
+            assert!(idle.caret.is_none(), "{file} honor={honor}: a caret with no live input");
+            let c = live.caret.unwrap_or_else(|| panic!("{file} honor={honor}: awaiting input, no caret"));
+            eprintln!("{file} honor={honor}: caret {c:?}");
+            assert!(!c.panel, "{file} honor={honor}: the host's prose caret is not a panel's");
+            assert!(live.canvas == idle.canvas, "{file} honor={honor}: RecordOnly painted the caret");
+            // After the last prose glyph: the live input is empty, so the caret is
+            // where the pen finished "What next?".
+            let last = live
+                .text
+                .iter()
+                .rev()
+                .find(|r| r.source == v6::V6RunSource::StoryProse)
+                .unwrap_or_else(|| panic!("{file} honor={honor}: no story prose among the runs"));
+            assert_eq!(last.text, PROSE[1], "{file} honor={honor}: the last prose run");
+            let (lx, _) = *last.boxes.last().expect("a run has a box");
+            let end = lx + b.face.advance(last.text.chars().last().expect("non-empty"));
+            assert_eq!((c.x, c.y, c.h), (end, last.y, last.h), "{file} honor={honor}: caret vs {last:?}");
+
+            // Rasterise is unchanged: the caret is drawn, and ONLY the caret differs.
+            let drawn = host_compose_with(&b, honor, V6TextMode::Rasterise, &prose_awaiting(true));
+            let bare = host_compose_with(&b, honor, V6TextMode::Rasterise, &prose_awaiting(false));
+            assert_eq!(drawn.caret, Some(c), "{file} honor={honor}: Rasterise reports the same caret");
+            let cw = u32::from(b.face.cell().w());
+            let mut differing = 0usize;
+            for (x, y, p) in drawn.canvas.enumerate_pixels() {
+                if bare.canvas.get_pixel(x, y) != p {
+                    differing += 1;
+                    assert!(
+                        (c.x..c.x + cw).contains(&x) && (c.y..c.y + c.h).contains(&y),
+                        "{file} honor={honor}: ({x},{y}) changed outside the caret cell {c:?}"
+                    );
+                }
+            }
+            assert!(differing > 0, "{file} honor={honor}: Rasterise no longer paints the caret");
+        }
+    }
+}
+
+/// Every run says which part of the composite drew it. Zork Zero's status runs are
+/// chrome and the host's prose is story prose; Journey's menu is not story prose.
+#[test]
+fn every_run_names_its_source() {
+    use v6::V6RunSource as Src;
+    for (file, b) in specimens() {
+        for honor in [true, false] {
+            let f = host_compose(&b, honor, V6TextMode::RecordOnly);
+            let summary: Vec<String> =
+                f.text.iter().map(|r| format!("{:?}@{}:{:?}", r.source, r.y, r.text.trim())).collect();
+            eprintln!("{file} honor={honor}: {}", summary.join(" | "));
+            for r in &f.text {
+                let host = PROSE.iter().any(|p| p.contains(r.text.as_str()));
+                if r.source == Src::StoryProse {
+                    assert!(host, "{file} honor={honor}: {r:?} is story prose the host never wrote");
+                }
+            }
+            let prose: Vec<&str> =
+                f.text.iter().filter(|r| r.source == Src::StoryProse).map(|r| r.text.as_str()).collect();
+            assert_eq!(prose, PROSE, "{file} honor={honor}: the host's prose, and only it, is StoryProse");
+            let game: Vec<&V6TextRun> = f.text.iter().filter(|r| r.source != Src::StoryProse).collect();
+            assert!(!game.is_empty(), "{file} honor={honor}: non-vacuity — no chrome run on this frame");
+            match file {
+                "zork0-r393-s890714.z6" => {
+                    for r in &game {
+                        assert!(
+                            matches!(r.source, Src::Chrome | Src::GridCell),
+                            "{file} honor={honor}: a status run that is not chrome: {r:?}"
+                        );
+                    }
+                }
+                "journey-r83-s890706.z6" => {
+                    // The menu strip under the text panel is a grid window's
+                    // PIXEL-positioned runs, so every run there is `Chrome` — measured,
+                    // not assumed: the verbs and the party's column headings.
+                    let s = f.story.expect("Journey r83 has a story box on this frame");
+                    let menu: Vec<&&V6TextRun> = game.iter().filter(|r| r.y >= s.y + s.h).collect();
+                    for label in ["The Party", "Individual Commands", "Start", "Background", "Help"] {
+                        assert!(
+                            menu.iter().any(|r| r.text == label),
+                            "{file} honor={honor}: non-vacuity — menu label {label:?} not below the story box"
+                        );
+                    }
+                    for r in &menu {
+                        assert_eq!(r.source, Src::Chrome, "{file} honor={honor}: a menu run: {r:?}");
+                    }
+                }
+                other => panic!("no source expectation pinned for {other}"),
+            }
         }
     }
 }

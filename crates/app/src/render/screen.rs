@@ -2868,6 +2868,34 @@ pub struct V6Frame {
     /// Every glyph the frame imaged, as runs in native pixels — empty under
     /// [`V6TextMode::Rasterise`](crate::render::v6_layout::V6TextMode::Rasterise).
     pub text: Vec<crate::render::v6_layout::V6TextRun>,
+    /// The story prose box — exactly the box [`V6FrameInputs::prose`] was asked to
+    /// fill, extension rows included — or `None` when this frame asked for no prose
+    /// (no story window, a picture or plate owns the screen, a canvas or `Grid` in
+    /// the story slot) (SQ-1567).
+    pub story: Option<V6StoryBox>,
+    /// The page the composite was flattened onto: every pixel no layer painted is
+    /// this colour, including the story box of a frame with no prose (SQ-1567).
+    pub page: image::Rgba<u8>,
+    /// The input caret, where one was drawn. Painted into `canvas` in every mode
+    /// but [`V6TextMode::RecordOnly`](crate::render::v6_layout::V6TextMode::RecordOnly),
+    /// which leaves it to the host (SQ-1567).
+    pub caret: Option<crate::render::v6_layout::V6Caret>,
+}
+
+/// The story prose box a v6 composite laid the transcript into (SQ-1567), in the
+/// canvas's native pixels.
+///
+/// `(x, y)` is the top-left of the prose region and `(w, h)` its extent, `h`
+/// including any [`RasterFrame`](crate::render::v6_layout::RasterFrame) extension
+/// rows; `cols` x `rows` is the text-cell grid the prose callback was called with.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct V6StoryBox {
+    pub x: u32,
+    pub y: u32,
+    pub w: u32,
+    pub h: u32,
+    pub cols: u16,
+    pub rows: u16,
 }
 
 /// [`build_v6_raster_frame`] from a [`V6FrameInputs`] rather than an `AppState` —
@@ -2879,16 +2907,20 @@ pub fn compose_v6_frame(
 ) -> V6Frame {
     use crate::render::v6_layout as v6;
     let mut glyphs = v6::GlyphSink::new(inputs.text);
-    let (canvas, metrics, frame) = compose_v6_frame_into(layout, want, inputs, &mut glyphs);
-    V6Frame { canvas, metrics, frame, text: glyphs.into_runs() }
+    let mut built = compose_v6_frame_into(layout, want, inputs, &mut glyphs);
+    built.caret = glyphs.caret_at();
+    built.text = glyphs.into_runs();
+    built
 }
 
+/// The composite itself. Returns a [`V6Frame`] whose `text` and `caret` are left
+/// empty — both are the glyph sink's, which [`compose_v6_frame`] owns.
 fn compose_v6_frame_into(
     layout: &crate::render::v6_layout::V6Layout<'_>,
     want: crate::render::v6_layout::RasterFrame,
     inputs: &V6FrameInputs<'_>,
     glyphs: &mut crate::render::v6_layout::GlyphSink,
-) -> (image::RgbaImage, Option<RasterMetrics>, crate::render::v6_layout::RasterFrame) {
+) -> V6Frame {
     use crate::render::v6_layout as v6;
     // The game's own screen. Everything between here and the flank extension is
     // stated in it and is unchanged by SQ-1032: the extension only ever adds rows
@@ -3158,6 +3190,9 @@ fn compose_v6_frame_into(
     }
     extend_raster_flanks(&mut canvas, &obstruction, layout.story, &layout.chrome, frame, cell);
     let mut raster_metrics: Option<RasterMetrics> = None;
+    // The box the prose callback is asked to fill, reported as it was asked
+    // (SQ-1567). Set only where the callback runs.
+    let mut story_box: Option<V6StoryBox> = None;
     if let Some((sx, sy, sw, sh)) = story_clear {
         // Paint the story page opaque (SQ-0510, reopened). Leaving it
         // transparent let whoever composites the image pick the colour
@@ -3192,7 +3227,7 @@ fn compose_v6_frame_into(
         // screen. See `story_window_is_a_canvas`: fmvpoker alone.
         if story_window_is_a_canvas(layout, native) {
             v6::draw_story_canvas_runs_into(&mut canvas, layout.story, ink, page, honor, inputs.colors, inputs.face, glyphs);
-            return finish_v6_raster_canvas(canvas, page, raster_metrics, frame);
+            return finish_v6_raster_canvas(canvas, page, raster_metrics, None, frame);
         }
         // **A `Grid` in the story slot contributes its RECT and nothing else**
         // (SQ-1026). With no primary `Buffer` on the frame, `classify_windows`
@@ -3213,7 +3248,7 @@ fn compose_v6_frame_into(
         // No prose box and no scroll metrics, exactly as when a plate owns the
         // screen — there is no transcript on this frame.
         if !matches!(layout.story.map(|s| &s.node), Some(WinNode::Buffer(_))) {
-            return finish_v6_raster_canvas(canvas, page, raster_metrics, frame);
+            return finish_v6_raster_canvas(canvas, page, raster_metrics, None, frame);
         }
         // Whether any prose belongs on THIS frame, and where (SQ-0707). An
         // absolutely-placed plate is drawn INSTEAD of prose, not under it: the
@@ -3221,7 +3256,7 @@ fn compose_v6_frame_into(
         // screen. `None` = the plate owns the screen, and rasterizing scrollback
         // onto it would paint the PREVIOUS screen's text across the art.
         let Some((tx, ty, tw, th)) = v6::story_prose_box((sx, sy, sw, sh), layout.story_gfx, cell) else {
-            return finish_v6_raster_canvas(canvas, page, raster_metrics, frame);
+            return finish_v6_raster_canvas(canvas, page, raster_metrics, None, frame);
         };
         // Window-0 inline pictures (drop-caps, room icons) arrive as
         // transcript-anchored floats (`transcript_images` sidecar):
@@ -3246,6 +3281,7 @@ fn compose_v6_frame_into(
         let cols = (tw / u32::from(cell.w())).max(1) as u16;
         let rows = (th / u32::from(cell.h())).max(1) as u16;
         let (main, rm) = (inputs.prose)(cols, rows);
+        story_box = Some(V6StoryBox { x: sx, y: sy, w: tw, h: th, cols, rows });
         // …sparing the cells another window's own text already holds (SQ-0729).
         // The page fill above spares them; the GLYPHS did not, so the transcript
         // was drawn straight through them. fmvpoker's dealt hand is the report:
@@ -3312,6 +3348,7 @@ fn compose_v6_frame_into(
                 let adv = inputs.face.advance(ch);
                 glyphs.blit(
                     &mut canvas, ch, pen, sy + last_row * u32::from(cell.h()), adv, u32::from(cell.h()), prompt_ink, Some(block), 0, inputs.face,
+                    v6::V6RunSource::Pager,
                 );
                 pen += adv;
             }
@@ -3333,7 +3370,7 @@ fn compose_v6_frame_into(
     // identical on every protocol/terminal. Touches alpha==0 pixels
     // ONLY — art, status bands, glyphs and drop-caps are all opaque and
     // are left byte-for-byte alone. (SQ-0510)
-    finish_v6_raster_canvas(canvas, page, raster_metrics, frame)
+    finish_v6_raster_canvas(canvas, page, raster_metrics, story_box, frame)
 }
 
 /// Seal a v6 raster composite: resolve every still-transparent pixel to the story
@@ -3343,10 +3380,11 @@ fn finish_v6_raster_canvas(
     mut canvas: image::RgbaImage,
     page: image::Rgba<u8>,
     raster_metrics: Option<RasterMetrics>,
+    story: Option<V6StoryBox>,
     frame: crate::render::v6_layout::RasterFrame,
-) -> (image::RgbaImage, Option<RasterMetrics>, crate::render::v6_layout::RasterFrame) {
+) -> V6Frame {
     crate::render::v6_layout::flatten_onto_page(&mut canvas, page);
-    (canvas, raster_metrics, frame)
+    V6Frame { canvas, metrics: raster_metrics, frame, text: Vec::new(), story, page, caret: None }
 }
 
 /// SQ-1032: the same composite with more transparent native rows below it.

@@ -1655,10 +1655,52 @@ pub enum V6TextMode {
     /// Image every glyph AND report it as a [`V6TextRun`].
     RasteriseAndRecord,
     /// Report every glyph and image NONE of them: the canvas carries the art,
-    /// the grounds, the page, the reveal rule and the caret block, and the host
-    /// draws the text — including each run's `bg` block, which the glyph blit
-    /// would otherwise have painted.
+    /// the grounds, the page and the reveal rule, and the host draws the text —
+    /// including each run's `bg` block, which the glyph blit would otherwise have
+    /// painted — and the input caret, which is reported as a [`V6Caret`] instead
+    /// of being painted (SQ-1567). A caret in the canvas would change the host's
+    /// ART on every keystroke of a frame whose text it asked to draw itself.
     RecordOnly,
+}
+
+/// Which part of the composite a [`V6TextRun`] belongs to (SQ-1567) — so a host
+/// drawing the text itself can style, select or skip each kind on its own terms.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum V6RunSource {
+    /// A PIXEL-positioned run a chrome grid window carries (`px_texts`) — Zork
+    /// Zero's banner, Arthur's status line, Journey's menu: placed where the game
+    /// painted it, stepped by the face's pen.
+    Chrome,
+    /// A chrome grid window's CELL, addressed by column — a grid with no pixel runs.
+    GridCell,
+    /// A secondary prose window's lines, and the live input echoed into one the
+    /// game reads through (SQ-0729, SQ-0746).
+    Panel,
+    /// The host's transcript in the story prose box, and its live input line.
+    StoryProse,
+    /// The story window's own streamed runs, where the window is a canvas rather
+    /// than a page (SQ-0729) — fmvpoker.
+    StoryCanvas,
+    /// The `[more]` pager's own prompt block (SQ-0455).
+    Pager,
+}
+
+/// Where the composite put the input caret, native pixels (SQ-1567).
+///
+/// The caret is one text cell wide — [`TextFace::cell`](crate::native_font::TextFace::cell)
+/// — and `h` tall, in the ink of the text it follows. Reported in every
+/// [`V6TextMode`], and painted in every mode but [`V6TextMode::RecordOnly`].
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct V6Caret {
+    /// Left edge of the caret cell, native px.
+    pub x: u32,
+    /// Top of the caret cell, native px.
+    pub y: u32,
+    /// Height of the caret cell, native px — the text cell's.
+    pub h: u32,
+    /// `true` when the caret is in a SECONDARY prose window the game is reading
+    /// through ([`V6RunSource::Panel`]), `false` when it ends the story prose.
+    pub panel: bool,
 }
 
 /// One run of characters a v6 composite imaged (or would have), in the game's
@@ -1689,19 +1731,55 @@ pub struct V6TextRun {
     /// One `(x, w)` per character of `text`: the glyph box's native left edge and
     /// width.
     pub boxes: Vec<(u32, u32)>,
+    /// Which part of the composite drew it (SQ-1567). Runs of different sources
+    /// never join.
+    pub source: V6RunSource,
 }
 
 /// Where a composite's glyphs go: into the canvas, into a [`V6TextRun`] list, or
 /// both, per [`V6TextMode`]. The ONE place every composite glyph passes through,
-/// so the list cannot describe a different screen from the pixels (SQ-1543).
+/// so the list cannot describe a different screen from the pixels (SQ-1543) —
+/// and, since SQ-1567, the one place the input caret passes through too.
 pub(crate) struct GlyphSink {
     mode: V6TextMode,
     runs: Vec<V6TextRun>,
+    caret: Option<V6Caret>,
 }
 
 impl GlyphSink {
     pub(crate) fn new(mode: V6TextMode) -> GlyphSink {
-        GlyphSink { mode, runs: Vec::new() }
+        GlyphSink { mode, runs: Vec::new(), caret: None }
+    }
+
+    /// The input caret block (SQ-1567): reported always, painted as the `w`x`h`
+    /// block `fill_cell` draws in `ink` in every mode but
+    /// [`V6TextMode::RecordOnly`] — the same gate [`Self::blit`] images a glyph by.
+    ///
+    /// Both carets can be live on one frame (the transcript's and a panel's are
+    /// gated on the same "view at the bottom" rule), and a frame reports one. The
+    /// PANEL's wins: it exists only when the game is reading through that panel,
+    /// which is where the player is typing.
+    pub(crate) fn caret(
+        &mut self,
+        canvas: &mut RgbaImage,
+        x: u32,
+        y: u32,
+        w: u32,
+        h: u32,
+        ink: Rgba<u8>,
+        panel: bool,
+    ) {
+        if self.mode != V6TextMode::RecordOnly {
+            fill_cell(canvas, x, y, w, h, ink);
+        }
+        if !self.caret.is_some_and(|c| c.panel) {
+            self.caret = Some(V6Caret { x, y, h, panel });
+        }
+    }
+
+    /// Where the input caret went, if the frame drew one — see [`Self::caret`].
+    pub(crate) fn caret_at(&self) -> Option<V6Caret> {
+        self.caret
     }
 
     /// [`crate::render::bitfont::blit_glyph_styled`], recorded per the mode.
@@ -1717,6 +1795,7 @@ impl GlyphSink {
         bg: Option<Rgba<u8>>,
         style: u8,
         tf: &crate::native_font::TextFace,
+        source: V6RunSource,
     ) {
         if self.mode != V6TextMode::RecordOnly {
             crate::render::bitfont::blit_glyph_styled(canvas, glyph, px, py, cw, ch, fg, bg, style, Some(tf));
@@ -1739,6 +1818,7 @@ impl GlyphSink {
                 && run.fg == fg
                 && run.bg == bg
                 && run.style == style
+                && run.source == source
                 && contiguous;
             if joins {
                 run.text.push(glyph);
@@ -1746,7 +1826,7 @@ impl GlyphSink {
                 return;
             }
         }
-        self.runs.push(V6TextRun { y: py, h: ch, fg, bg, style, text: glyph.to_string(), boxes: vec![(px, cw)] });
+        self.runs.push(V6TextRun { y: py, h: ch, fg, bg, style, text: glyph.to_string(), boxes: vec![(px, cw)], source });
     }
 
     pub(crate) fn into_runs(self) -> Vec<V6TextRun> {
@@ -1943,7 +2023,7 @@ pub(crate) fn build_chrome_canvas_into(
                         let (fg, bg) = chrome_run_ink(t, default_fg, default_bg, colors, || {
                             region_has_opaque(&art, pen, py, span_w, font_h)
                         });
-                        glyphs.blit(&mut canvas, ch, pen, py, font_w, font_h, fg, bg, t.style, tf);
+                        glyphs.blit(&mut canvas, ch, pen, py, font_w, font_h, fg, bg, t.style, tf, V6RunSource::Chrome);
                         pen += adv;
                     }
                 }
@@ -1973,7 +2053,7 @@ pub(crate) fn build_chrome_canvas_into(
                     // A grid CELL is addressed by column and stays on the grid —
                     // the game's own `set_cursor` counted these columns, so a pen
                     // here would place a character where nothing asked for it.
-                    glyphs.blit(&mut canvas, cell.ch, px, py, font_w, font_h, fg, cellbg, cell.style, tf);
+                    glyphs.blit(&mut canvas, cell.ch, px, py, font_w, font_h, fg, cellbg, cell.style, tf, V6RunSource::GridCell);
                 }
             }
         }
@@ -2049,7 +2129,7 @@ pub(crate) fn draw_secondary_prose_into(
                 if pen + adv > right {
                     break;
                 }
-                glyphs.blit(canvas, ch, pen, y0, font_w, font_h, fg, None, 0, tf);
+                glyphs.blit(canvas, ch, pen, y0, font_w, font_h, fg, None, 0, tf, V6RunSource::Panel);
                 pen += adv;
             }
         }
@@ -2076,9 +2156,9 @@ pub(crate) fn draw_secondary_prose_into(
             // The caret is the cell after the input, drawn as the block the
             // transcript's own caret uses.
             if i == input.chars().count() {
-                fill_cell(canvas, pen, y0, font_w, font_h, fg);
+                glyphs.caret(canvas, pen, y0, font_w, font_h, fg, true);
             } else {
-                glyphs.blit(canvas, ch, pen, y0, font_w, font_h, fg, None, 0, tf);
+                glyphs.blit(canvas, ch, pen, y0, font_w, font_h, fg, None, 0, tf, V6RunSource::Panel);
             }
             pen += adv;
         }
@@ -2161,7 +2241,7 @@ pub(crate) fn draw_story_canvas_runs_into(
                     break;
                 }
             }
-            glyphs.blit(canvas, ch, pen, py, font_w, font_h, fg, bg, t.style, tf);
+            glyphs.blit(canvas, ch, pen, py, font_w, font_h, fg, bg, t.style, tf, V6RunSource::StoryCanvas);
             pen += tf.advance_styled(ch, t.style);
         }
     }
@@ -2925,7 +3005,7 @@ pub(crate) fn draw_story_text_into(canvas: &mut RgbaImage, main: &MainText, ox: 
             }
             let hit = reveal.filter(|_| lit.iter().any(|&(s, e)| col >= s && col < e));
             if !blocked(pen, py) {
-                glyphs.blit(canvas, glyph, pen, py, font_w, font_h, hit.map_or(fg, |r| r.ink), None, style, tf);
+                glyphs.blit(canvas, glyph, pen, py, font_w, font_h, hit.map_or(fg, |r| r.ink), None, style, tf, V6RunSource::StoryProse);
                 // …and the rule under it, AFTER the glyph so it reads as one line
                 // rather than as a row the descenders punch holes in — the same
                 // order `blit_metric_glyph` draws SQ-1028's in. Spanning the whole
@@ -2957,7 +3037,7 @@ pub(crate) fn draw_story_text_into(canvas: &mut RgbaImage, main: &MainText, ox: 
                     break;
                 }
                 if !blocked(ox + pen, py) {
-                    glyphs.blit(canvas, glyph, ox + pen, py, font_w, font_h, fg, None, 0, tf);
+                    glyphs.blit(canvas, glyph, ox + pen, py, font_w, font_h, fg, None, 0, tf, V6RunSource::StoryProse);
                 }
                 pen += adv;
             }
@@ -2968,7 +3048,7 @@ pub(crate) fn draw_story_text_into(canvas: &mut RgbaImage, main: &MainText, ox: 
                 + main.input.chars().take(main.cursor_col as usize).map(|c| tf.advance(c)).sum::<u32>())
             .min(right.saturating_sub(font_w));
             if !blocked(ox + caret, py) {
-                fill_cell(canvas, ox + caret, py, font_w, font_h, fg);
+                glyphs.caret(canvas, ox + caret, py, font_w, font_h, fg, false);
             }
         }
     }
@@ -3964,6 +4044,43 @@ mod tests {
         let xs: Vec<u32> = runs[0].boxes.iter().map(|&(x, _)| x).collect();
         assert_eq!(xs, (0..8).map(|i| 4 + i * FONT_W).collect::<Vec<_>>(), "each glyph at its own pen");
         assert!(runs.iter().all(|r| r.fg == ink && r.bg.is_none() && r.h == FONT_H));
+        assert!(runs.iter().all(|r| r.source == V6RunSource::StoryProse), "the transcript is story prose");
+    }
+
+    /// SQ-1567: the input caret is reported in every mode and painted in every mode
+    /// but `RecordOnly` — where the canvas is the canvas with no live input at all.
+    #[test]
+    fn glyph_sink_reports_the_caret_and_record_only_does_not_paint_it() {
+        let tf = crate::native_font::TextFace::cell_only(zvm::screen::V6Cell::DEFAULT);
+        let ink = Rgba([255, 255, 255, 255]);
+        let draw = |mode: V6TextMode, awaiting: bool| {
+            let main = MainText {
+                lines: vec!["Hi there".into(), "> ".into()],
+                styles: Vec::new(),
+                input: String::new(),
+                cursor_col: 0,
+                awaiting,
+                floats: Vec::new(),
+            };
+            let mut canvas = RgbaImage::new(10 * FONT_W, 3 * FONT_H);
+            let mut sink = GlyphSink::new(mode);
+            draw_story_text_into(&mut canvas, &main, 4, 2, 10, 3, ink, &[], &tf, None, &mut sink);
+            (canvas, sink.caret_at())
+        };
+        let want = Some(V6Caret { x: 4 + 2 * FONT_W, y: 2 + FONT_H, h: FONT_H, panel: false });
+        for mode in [V6TextMode::Rasterise, V6TextMode::RasteriseAndRecord, V6TextMode::RecordOnly] {
+            let (live, caret) = draw(mode, true);
+            let (idle, none) = draw(mode, false);
+            assert_eq!(caret, want, "{mode:?}: the caret sits after the prompt row's pen");
+            assert_eq!(none, None, "{mode:?}: no live input, no caret");
+            let caret_px = |c: &RgbaImage| (0..FONT_H).all(|dy| (0..FONT_W).all(|dx| *c.get_pixel(4 + 2 * FONT_W + dx, 2 + FONT_H + dy) == ink));
+            if mode == V6TextMode::RecordOnly {
+                assert_eq!(live, idle, "RecordOnly must not paint the caret");
+            } else {
+                assert!(caret_px(&live), "{mode:?}: the caret block is painted");
+                assert!(!caret_px(&idle), "{mode:?}: non-vacuity — no block without input");
+            }
+        }
     }
 
     #[test]

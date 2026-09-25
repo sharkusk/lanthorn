@@ -591,13 +591,20 @@ asked for, and a second copy of either is the SQ-1020 trap.
 
 The frame's text also comes back as data. Every glyph the composite draws goes
 through one sink (`v6_layout::GlyphSink`), and under `V6TextMode::RasteriseAndRecord`
-or `RecordOnly` it reports `V6TextRun`s — row, colours, style and one native-pixel
-box per character — so a host with real text rendering can draw the characters
-itself rather than ship them as pixels, SQ-0750's rule carried off the terminal.
-`RecordOnly` leaves every glyph (and its background block) out of the canvas;
-`v6_headless_compose` checks that it changes no pixel outside a recorded box, and
-that a host's hand-built inputs reproduce the TUI's canvas on Zork Zero and
-Journey.
+or `RecordOnly` it reports `V6TextRun`s — row, colours, style, one native-pixel
+box per character, and a `V6RunSource` saying which part of the composite drew it
+(chrome run, grid cell, secondary panel, story prose, story canvas, `[more]`
+prompt) — so a host with real text rendering can draw the characters itself
+rather than ship them as pixels, SQ-0750's rule carried off the terminal. The
+`V6Frame` also reports what the composite measured around that text (SQ-1567):
+the story prose box the transcript callback was asked to fill (`story`, extension
+rows included, with its cell grid), the page the canvas was flattened onto
+(`page`), and the input caret (`caret`). `RecordOnly` leaves every glyph (and its
+background block) out of the canvas, and the caret too — it is reported, not
+painted, so a host's art does not change on every keystroke; `Rasterise` still
+paints it. `v6_headless_compose` checks that RecordOnly changes no pixel outside a
+recorded box or the reported caret, that a host's hand-built inputs reproduce the
+TUI's canvas on Zork Zero and Journey, and each of the measured facts above.
 
 ## Input: a suspend/resume handshake
 
