@@ -2862,6 +2862,20 @@ pub struct V6FrameInputs<'a> {
     /// What happens to each glyph — see
     /// [`V6TextMode`](crate::render::v6_layout::V6TextMode).
     pub text: crate::render::v6_layout::V6TextMode,
+    /// Bottom-anchor a text-only command strip under the story window — Hybrid's
+    /// `BottomPlan::Menu` (Journey), published for a host that draws its own
+    /// chrome under [`V6TextMode::RecordOnly`](crate::render::v6_layout::V6TextMode::RecordOnly)
+    /// and so cannot reach that private plan itself (SQ-1574). `false` (every
+    /// constructor's default) reproduces today's `Raster`/`Extended` behaviour
+    /// exactly — [`compose_v6_frame`] declines the extension on such a frame, as
+    /// it always has, because the composite is one image in the game's own
+    /// coordinates and moving the game's chrome inside it is a composition
+    /// change, not a layout one. Set this to take that composition change: the
+    /// canvas grows, the band's own runs move down with it
+    /// ([`bottom_anchor_menu_runs`]), the side flanks fill the gap that opens
+    /// beside it, and the story's prose box fills the gap above. No effect on a
+    /// frame that is not Journey's shape ([`menu_strip_below_story`]).
+    pub bottom_anchor_menu: bool,
 }
 
 impl<'a> V6FrameInputs<'a> {
@@ -2920,6 +2934,7 @@ impl<'a> V6FrameInputs<'a> {
             pager_active: state.pager.active,
             more_prompt_pair: v6_default_pair(mp, state.term_default_colors.fg, state.term_default_colors.bg),
             text: crate::render::v6_layout::V6TextMode::Rasterise,
+            bottom_anchor_menu: false,
         }
     }
 }
@@ -3088,6 +3103,14 @@ fn compose_v6_frame_into(
     // by `want.extension()` and names the chrome windows that travel down with the
     // frame's bottom edge — usually none. The two are one decision, because a band
     // that cannot be moved is a frame that cannot grow.
+    //
+    // SQ-1574: whether this IS Journey's shape — a text-only command strip under
+    // the story window — decided once, outside the block, because both the
+    // decision below and `moved`'s construction further down need the same
+    // answer and must not disagree about it.
+    let menu_case = layout
+        .story
+        .is_some_and(|s| menu_strip_below_story(s, &obstruction, &layout.chrome, native, cell));
     let anchored = 'ext: {
         if want.extension() == 0 {
             break 'ext None;
@@ -3101,7 +3124,12 @@ fn compose_v6_frame_into(
         // declines the identical frame for the identical reason (SQ-0819), so
         // extending here would strand the menu mid-canvas over an unextended flank.
         // Declining leaves Journey exactly as `Raster` draws it.
-        if menu_strip_below_story(story, &obstruction, &layout.chrome, native, cell) {
+        //
+        // SQ-1574: `inputs.bottom_anchor_menu` is a host's opt-in to take that
+        // composition change anyway — see `V6FrameInputs::bottom_anchor_menu`. It
+        // is `false` on every existing caller (`from_state`/`for_model` both
+        // default it), so `Raster`/`Extended` keep declining exactly as before.
+        if menu_case && !inputs.bottom_anchor_menu {
             break 'ext None;
         }
         // …and ANY chrome the game put below its story window, which the test above
@@ -3142,7 +3170,18 @@ fn compose_v6_frame_into(
             // together — and the canvas it moves onto has to be expressible as a
             // screen height. Anything else is unrecognised, and unrecognised declines
             // exactly as it did before (CLAUDE.md: skip rather than guess).
-            match bottom_anchored_chrome(&layout.chrome, story, native) {
+            //
+            // SQ-1574: Journey's band shares ONE chrome window with runs the story
+            // sits ABOVE (the picture surround, the side rules — see
+            // `bottom_anchored_menu_band`'s doc), so `bottom_anchored_chrome`'s
+            // whole-window unit never qualifies it; a host that opted in takes the
+            // run-level version instead.
+            let found = if menu_case && inputs.bottom_anchor_menu {
+                bottom_anchored_menu_band(&layout.chrome, story)
+            } else {
+                bottom_anchored_chrome(&layout.chrome, story, native)
+            };
+            match found {
                 Some(ws) if u16::try_from(want.canvas_h).is_ok() => ws,
                 _ => break 'ext None,
             }
@@ -3186,6 +3225,15 @@ fn compose_v6_frame_into(
     // parser error is output and nothing else; a CLICKABLE band under a story window
     // is Journey's, and Journey declines the extension one test earlier.
     let moved: Vec<crate::engine::PositionedWindow> = match &anchored {
+        // SQ-1574: Journey's band moves as RUNS (`bottom_anchor_menu_runs`), not as
+        // a whole window — see `bottom_anchored_menu_band`'s doc. Every other title
+        // still moves as the whole window `bottom_anchor` always has.
+        Some(ws) if extension > 0 && menu_case && inputs.bottom_anchor_menu => match layout.story {
+            Some(story) => {
+                ws.iter().map(|&i| bottom_anchor_menu_runs(layout.chrome[i], story, extension, cell)).collect()
+            }
+            None => Vec::new(),
+        },
         Some(ws) if extension > 0 => {
             ws.iter().map(|&i| bottom_anchor(layout.chrome[i], extension, cell)).collect()
         }
@@ -3264,6 +3312,17 @@ fn compose_v6_frame_into(
         canvas = grow_canvas_rows(canvas, frame.canvas_h);
     }
     extend_raster_flanks(&mut canvas, &obstruction, layout.story, &layout.chrome, frame, cell);
+    // SQ-1574: `extend_raster_flanks` above is a no-op on Journey's shape by its
+    // own design (it declines on the same `menu_strip_below_story` test, SQ-0819
+    // — its tiling recipe is for a REPEATING border, and Journey's flank is one
+    // picture in a panel). A host that opted into the Menu-anchor extension still
+    // needs its flanks filled, so this fills the gap the extension opened beside
+    // the relocated band with the game's own panel colour instead.
+    if menu_case && inputs.bottom_anchor_menu && extension > 0 {
+        if let Some(story) = layout.story {
+            fill_menu_flank_extension(&mut canvas, story, native, frame.canvas_h, cell);
+        }
+    }
     let mut raster_metrics: Option<RasterMetrics> = None;
     // The box the prose callback is asked to fill, reported as it was asked
     // (SQ-1567). Set only where the callback runs.
@@ -3789,7 +3848,17 @@ fn build_hybrid_frame(
     // native height — nothing to reclaim, degrade to centred).
     let scaled_h = (native.1 as f32 * scale_center.s).round() as u32;
     let slack = pane_dev.1.saturating_sub(scaled_h);
-    let plan = hybrid_bottom_plan(story, &gfx, &layout.chrome, native, slack, state.v6_text.cell());
+    // SQ-1574: through the PUBLISHED decision (`hybrid_bottom_plan_for`) rather
+    // than `hybrid_bottom_plan` directly, so a host reading the public plan and
+    // this render cannot disagree — converted straight back to the private enum
+    // this function's own body still matches on below, so nothing past this line
+    // changes.
+    let plan = match hybrid_bottom_plan_for(layout, native, state.v6_text.cell(), slack).kind {
+        V6BottomPlan::Letterbox => BottomPlan::Letterbox,
+        V6BottomPlan::Extend => BottomPlan::Extend,
+        V6BottomPlan::Frame => BottomPlan::Frame,
+        V6BottomPlan::Menu => BottomPlan::Menu,
+    };
     let reclaim = !matches!(plan, BottomPlan::Letterbox);
     // Resolve the story scale, the story viewport, and an
     // optional bottom-anchored menu scale.
@@ -5691,6 +5760,89 @@ enum BottomPlan {
     Frame,
 }
 
+/// [`BottomPlan`], published (SQ-1574): the four shapes a v6 title's Hybrid
+/// vertical extension can take. Identical to `BottomPlan` case for case — this
+/// exists only because that one is private, and a host that draws its own v6
+/// chrome under [`V6TextMode::RecordOnly`](crate::render::v6_layout::V6TextMode::RecordOnly)
+/// has no path to the TUI's `build_hybrid_frame` to read it off.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum V6BottomPlan {
+    /// No slack to reclaim, or the frame already encloses the story with
+    /// nothing below it to stretch — keep the centred letterbox.
+    Letterbox,
+    /// Top-anchor the story and grow it to the pane bottom; nothing below the
+    /// side art to stretch (Arthur).
+    Extend,
+    /// Top-anchor the story and grow it to the pane bottom, AND stretch the
+    /// side art flanking it to the pane bottom too (Zork Zero, Shogun).
+    Frame,
+    /// Top-anchor the story and chrome; bottom-anchor a text-only command
+    /// strip to the pane's own bottom edge, with the story filling the gap
+    /// between the two (Journey).
+    Menu,
+}
+
+/// [`V6BottomPlan`] plus what a host needs to lay a `Menu` band out without
+/// re-deriving [`menu_band_runs`]/[`menu_band_rows`] itself (SQ-1574).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct V6HybridPlan {
+    pub kind: V6BottomPlan,
+    /// Whether this plan stretches the side art flanking the story down to
+    /// the pane's own bottom edge — `Frame` and `Menu` both do (SQ-0511), by
+    /// two different treatments (a plain stretch for `Frame`'s repeating
+    /// border art, a panel fill around Journey's picture for `Menu` — see
+    /// [`V6FrameInputs::bottom_anchor_menu`]); `Extend` and `Letterbox` leave
+    /// the flanks exactly as the game drew them.
+    pub stretch_flanks: bool,
+    /// `Menu` only: the game's own native-pixel row the band's top sits at —
+    /// the story window's own bottom edge. `None` for every other plan.
+    pub band_top_native: Option<u32>,
+    /// `Menu` only: the band's own height in GAME TEXT ROWS —
+    /// [`menu_band_rows`]'s answer, and what Hybrid draws chrome text at one
+    /// row per terminal row with (SQ-0543). `0` for every other plan.
+    pub band_rows: u16,
+}
+
+/// [`hybrid_bottom_plan`], published for an embedding host (SQ-1574).
+///
+/// Builds the identical art-only obstruction canvas [`compose_v6_frame`]'s own
+/// raster composite already asks these same questions of
+/// (`build_graphics_canvas(&layout.chrome, native)`) and hands it to the same
+/// private decision, so this and the TUI's own Hybrid renderer — which calls
+/// this too, rather than `hybrid_bottom_plan` directly — cannot disagree.
+///
+/// `slack_native_rows` only ever gates one branch of the private decision —
+/// `Letterbox` when it is zero, every other plan otherwise — so a host with no
+/// pane to letterbox against may pass any nonzero placeholder to ask "if there
+/// were room to grow, which plan would this title take?".
+pub fn hybrid_bottom_plan_for(
+    layout: &crate::render::v6_layout::V6Layout<'_>,
+    native: (u16, u16),
+    cell: zvm::screen::V6Cell,
+    slack_native_rows: u32,
+) -> V6HybridPlan {
+    use crate::render::v6_layout as v6;
+    let none = V6HybridPlan { kind: V6BottomPlan::Letterbox, stretch_flanks: false, band_top_native: None, band_rows: 0 };
+    let Some(story) = layout.story else { return none };
+    let gfx = v6::build_graphics_canvas(&layout.chrome, native);
+    let plan = hybrid_bottom_plan(story, &gfx, &layout.chrome, native, slack_native_rows, cell);
+    let kind = match plan {
+        BottomPlan::Letterbox => V6BottomPlan::Letterbox,
+        BottomPlan::Extend => V6BottomPlan::Extend,
+        BottomPlan::Frame => V6BottomPlan::Frame,
+        BottomPlan::Menu => V6BottomPlan::Menu,
+    };
+    let stretch_flanks = matches!(plan, BottomPlan::Frame | BottomPlan::Menu);
+    let (band_top_native, band_rows) = if matches!(plan, BottomPlan::Menu) {
+        let chrome_runs: Vec<&crate::engine::PxText> = paint_runs(&layout.chrome).collect();
+        let band = menu_band_runs(&chrome_runs, story);
+        (Some(story.y_px as u32 + story.h_px as u32), menu_band_rows(&band, cell))
+    } else {
+        (None, 0)
+    };
+    V6HybridPlan { kind, stretch_flanks, band_top_native, band_rows }
+}
+
 /// SQ-0570: is this frame a full-screen PICTURE takeover — a picture painted
 /// across the whole screen with the story window grown over it?
 ///
@@ -7275,6 +7427,123 @@ fn bottom_anchor(
         }
     }
     out
+}
+
+/// SQ-1574: [`bottom_anchored_chrome`] for Journey's shape — which chrome windows
+/// carry ANY of the menu band's own runs, as indices into `chrome`.
+///
+/// `bottom_anchored_chrome` requires a window to lie WHOLLY below the story
+/// window — every run it carries has to be down there with it, which is what
+/// makes moving the window as a unit safe. Journey's shape breaks that premise:
+/// its whole frame (the picture surround, the side rules, the command menu) is
+/// one chrome grid spanning the full native screen, so the band's own runs share
+/// a window with runs that belong ABOVE the story window and must NOT move.
+/// [`bottom_anchor_menu_runs`] is what a qualifying window gets instead: only
+/// the runs at or below the story's bottom edge travel down, everything else —
+/// the window's own rect included — stays exactly where the game put it.
+///
+/// `None` when nothing qualifies — nothing for a caller to move.
+fn bottom_anchored_menu_band(
+    chrome: &[&crate::engine::PositionedWindow],
+    story: &crate::engine::PositionedWindow,
+) -> Option<Vec<usize>> {
+    let story_bottom = i32::from(story.y_px) + i32::from(story.h_px);
+    let out: Vec<usize> = chrome
+        .iter()
+        .enumerate()
+        .filter_map(|(i, w)| match &w.node {
+            WinNode::Grid(g) => g
+                .px_texts
+                .iter()
+                .any(|t| i32::from(t.y.max(1)) > story_bottom)
+                .then_some(i),
+            _ => None,
+        })
+        .collect();
+    (!out.is_empty()).then_some(out)
+}
+
+/// SQ-1574: [`bottom_anchor`] for one window found by [`bottom_anchored_menu_band`]
+/// — only the runs AT OR BELOW the story window's bottom edge move; every run
+/// above it, and the window's own rect, stay exactly where the game put them, so
+/// the picture surround and side rules above the story window are untouched.
+fn bottom_anchor_menu_runs(
+    w: &crate::engine::PositionedWindow,
+    story: &crate::engine::PositionedWindow,
+    rows: u32,
+    cell: zvm::screen::V6Cell,
+) -> crate::engine::PositionedWindow {
+    let story_bottom = i32::from(story.y_px) + i32::from(story.h_px);
+    let px = u16::try_from(rows).unwrap_or(u16::MAX);
+    let cells = u16::try_from(rows / u32::from(cell.h().max(1))).unwrap_or(u16::MAX);
+    let mut out = w.clone();
+    if let WinNode::Grid(g) = &mut out.node {
+        for t in &mut g.px_texts {
+            if i32::from(t.y.max(1)) > story_bottom {
+                t.y = t.y.saturating_add(px);
+                t.grow = t.grow.saturating_add(cells);
+            }
+        }
+    }
+    out
+}
+
+/// SQ-1574: fill the flank columns a Menu-anchor extension opened beside the
+/// relocated command menu, so neither the gap above the band nor any of the
+/// band's own blank cells shows the bare story page beneath it.
+/// `extend_raster_flanks` cannot draw this: its tiling recipe is for a
+/// REPEATING border (Arthur/Shogun/Zork Zero, SQ-0698) and declines on
+/// Journey's shape for the same reason the hybrid ring's `tiled_flanks` does
+/// (SQ-0819) — Journey's flank is one picture seated in a panel beside a
+/// GLYPH-drawn border rule (SQ-0750), and neither is a border to repeat.
+///
+/// Filled per CELL-WIDTH block, from the nearest opaque pixel ANYWHERE in that
+/// block scanning UP from the gap — not one exact column, because a thin
+/// border rule is one narrow glyph STROKE inside its text cell (SQ-0750) and
+/// most of a cell's own pixels are transparent even on a row the glyph
+/// occupies, so a probe pinned to the cell's first pixel column can miss the
+/// stroke entirely and find nothing. The nearest painted pixel anywhere in the
+/// block, above the gap, is still the frame the game laid out there — the
+/// picture's own edge colour under the picture column, the border rule's own
+/// ink under the thin outer border column next to it. A block with nothing
+/// painted anywhere above the gap is left alone. Only pixels no earlier layer
+/// touched (alpha 0) are painted, so the band's own runs and their
+/// backgrounds — already on the canvas by the time this runs — are left
+/// byte-for-byte alone.
+fn fill_menu_flank_extension(
+    canvas: &mut image::RgbaImage,
+    story: &crate::engine::PositionedWindow,
+    native: (u16, u16),
+    canvas_h: u32,
+    cell: zvm::screen::V6Cell,
+) {
+    let story_bottom = story.y_px as u32 + story.h_px as u32;
+    if canvas_h <= story_bottom || story_bottom == 0 {
+        return;
+    }
+    let above = story_bottom.min(canvas.height());
+    let sx0 = (story.x_px as u32).min(native.0 as u32);
+    let sx1 = (story.x_px as u32 + story.w_px as u32).min(native.0 as u32);
+    let cw = u32::from(cell.w().max(1));
+    for (x0, x1) in [(0, sx0), (sx1, native.0 as u32)] {
+        let x1 = x1.min(canvas.width());
+        let mut bx0 = x0;
+        while bx0 < x1 {
+            let bx1 = (bx0 + cw).min(x1);
+            let panel =
+                (0..above).rev().find_map(|y| (bx0..bx1).map(|x| *canvas.get_pixel(x, y)).find(|p| p[3] > 0));
+            if let Some(panel) = panel {
+                for y in story_bottom..canvas_h.min(canvas.height()) {
+                    for x in bx0..bx1 {
+                        if canvas.get_pixel(x, y)[3] == 0 {
+                            canvas.put_pixel(x, y, panel);
+                        }
+                    }
+                }
+            }
+            bx0 = bx1;
+        }
+    }
 }
 
 /// Every paint run the game put BELOW its story window — the content of the

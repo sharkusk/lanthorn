@@ -34,7 +34,7 @@
 use app::engine::{Engine, WinNode};
 use app::graphics::PictSource;
 use app::interpreter::InterpreterProfile;
-use app::render::screen::{compose_v6_frame, RasterMetrics, V6FrameInputs};
+use app::render::screen::{compose_v6_frame, RasterMetrics, V6BottomPlan, V6FrameInputs};
 use app::render::v6_layout::{self as v6, MainText, RasterFrame, V6TextMode, V6TextRun};
 use app::session::{GameSession, InputKind};
 
@@ -224,6 +224,7 @@ fn host_compose_full(
         pager_active: false,
         more_prompt_pair: (HOST_INK, HOST_PAGE),
         text,
+        bottom_anchor_menu: false,
     };
     compose_v6_frame(&layout, RasterFrame::native(native), &inputs)
 }
@@ -728,6 +729,7 @@ fn fmvpoker_compose(session: &GameSession, text: V6TextMode, input: Option<&str>
         pager_active: false,
         more_prompt_pair: (HOST_INK, HOST_PAGE),
         text,
+        bottom_anchor_menu: false,
     };
     compose_v6_frame(&layout, RasterFrame::native(native), &inputs)
 }
@@ -1107,6 +1109,7 @@ fn drop_cap_margin_px_matches_where_the_raster_path_places_the_text_pixel() {
             pager_active: false,
             more_prompt_pair: (HOST_INK, HOST_PAGE),
             text: V6TextMode::RecordOnly,
+            bottom_anchor_menu: false,
         };
         let f = compose_v6_frame(&layout, RasterFrame::native(native), &inputs);
         let s = f.story.unwrap_or_else(|| panic!("honor={honor}: no story box on Zork Zero's boot frame"));
@@ -1119,5 +1122,152 @@ fn drop_cap_margin_px_matches_where_the_raster_path_places_the_text_pixel() {
         let (px, _) = *painted.boxes.first().expect("a run has a box");
         let expected_x = s.x + u32::from(rf.text_col) * u32::from(cell.w());
         assert_eq!(px, expected_x, "honor={honor}: the prose beside the drop-cap is not at margin_px's own column");
+    }
+}
+
+// ---------------------------------------------------------------------------
+// SQ-1574: `hybrid_bottom_plan_for` — the private Hybrid `BottomPlan`,
+// published for a host that draws its own v6 chrome and so has no path to the
+// TUI's `build_hybrid_frame` to read it off.
+//
+// Each case renders the SAME frame through the TUI's real Hybrid path (a real
+// `render_story_pane` call, at a real 8x18-ish kitty cell) and reads the plan
+// it actually took off `state.v6_ring_plan` — the same oracle
+// `v6_journey_menu_band.rs` pins the `Menu` plan against — then asks
+// `hybrid_bottom_plan_for` the identical question and compares. `slack_native_
+// rows` only ever gates the `Letterbox` branch (zero vs. nonzero), so a case
+// passes whichever of `0`/`1` matches the pane it rendered the oracle at,
+// never a value derived by re-implementing the render's own slack arithmetic —
+// which would just restate the thing under test.
+// ---------------------------------------------------------------------------
+
+/// A pane tall enough to leave real vertical slack below the story window at
+/// any of this suite's titles — [`v6_extended_frame`]'s own `TALL`, reused
+/// because it is already proven to reach `Extend`/`Frame`/`Menu` on this exact
+/// corpus (module doc there). CELL matches `v6_journey_menu_band.rs`'s own
+/// sweep (8x18).
+const PLAN_TALL: (u16, u16) = (100, 50);
+/// A pane wide enough that the vertical axis is always the binding one — the
+/// letterbox margin lands left/right instead of top/bottom, so the SLACK this
+/// suite's `hybrid_bottom_plan` asks about is zero by construction, whatever
+/// the title. Confirmed against the real oracle in
+/// `hybrid_bottom_plan_for_matches_the_tuis_own_decision` rather than merely
+/// asserted here.
+const PLAN_SNUG: (u16, u16) = (240, 23);
+const PLAN_CELL: (u16, u16) = (8, 18);
+
+/// Render `b`'s current frame through the TUI's real Hybrid path at `pane`, and
+/// read back the plan it took (`state.v6_ring_plan`) alongside
+/// `hybrid_bottom_plan_for`'s own answer for the identical layout/native/cell —
+/// `slack_native_rows` is `0` at [`PLAN_SNUG`], `1` (any nonzero placeholder,
+/// per the function's own doc) at [`PLAN_TALL`].
+#[allow(deprecated)]
+fn plan_oracle_and_answer(b: &Booted, honor: bool, pane: (u16, u16)) -> (&'static str, V6BottomPlan) {
+    let mut state = tui_state(b, honor);
+    state.config.v6_render = app::config::V6RenderMode::Hybrid;
+    state.game_picker =
+        Some(ratatui_image::picker::Picker::from_fontsize(ratatui_image::FontSize::new(PLAN_CELL.0, PLAN_CELL.1)));
+    let model = b.session.screen();
+    let area = ratatui::layout::Rect::new(0, 0, pane.0, pane.1);
+    let mut buf = ratatui::buffer::Buffer::empty(ratatui::layout::Rect::new(0, 0, area.right() + 1, area.bottom() + 1));
+    let _ = app::render::screen::render_story_pane(&model, false, None, &state, area, &mut buf);
+    let oracle = state.v6_ring_plan.get();
+
+    let WinNode::Layered(items) = &model.root else { panic!("a v6 frame has a Layered root") };
+    let native = v6::native_extent(items, &state.v6_text);
+    let layout = v6::classify_windows(items, state.v6_text.cell());
+    let slack = if pane == PLAN_SNUG { 0 } else { 1 };
+    let answer = app::render::screen::hybrid_bottom_plan_for(&layout, native, state.v6_text.cell(), slack).kind;
+    (oracle, answer)
+}
+
+fn assert_plan(file: &str, honor: bool, pane: (u16, u16), oracle: &str, answer: V6BottomPlan, want: V6BottomPlan) {
+    assert_eq!(
+        oracle, want_str(want),
+        "{file} honor={honor} {pane:?}: premise — the TUI's own Hybrid render must take the {want:?} plan \
+         for this case to test what it says it does. Got {oracle:?}"
+    );
+    assert_eq!(
+        answer, want,
+        "{file} honor={honor} {pane:?}: hybrid_bottom_plan_for disagreed with the TUI's own Hybrid render \
+         (oracle {oracle:?})"
+    );
+}
+
+/// Arthur one tap past the mount (the title CARD, before the poles have grown
+/// to enclose the story window) — the one frame in his corpus where they stop
+/// short of the screen bottom on both sides (`Extend`), measured by sweeping
+/// taps against the real oracle: `Extend` through tap 4, `Frame` from tap 5
+/// onward through `look`. [`boot`]'s generic space/taps=6 (or
+/// `v6_extended_frame.rs`'s own 12-tap-then-`look` specimen) lands past that
+/// point, on the `Frame` frame instead — a different, equally real Arthur
+/// frame, just not this suite's `Extend` case.
+fn boot_arthur_extend() -> Option<Booted> {
+    let mut b = boot_at("arthur-r74-s890714.z6", 74)?;
+    match b.session.pending_input() {
+        InputKind::Line | InputKind::Event => {
+            b.session.submit("");
+        }
+        InputKind::Char => {
+            b.session.submit_char(b'n');
+        }
+    }
+    Some(b)
+}
+
+fn want_str(p: V6BottomPlan) -> &'static str {
+    match p {
+        V6BottomPlan::Letterbox => "letterbox",
+        V6BottomPlan::Extend => "extend",
+        V6BottomPlan::Frame => "frame",
+        V6BottomPlan::Menu => "menu",
+    }
+}
+
+/// Menu (Journey, both releases — a disk image is a different BUILD, CLAUDE.md),
+/// Extend (Arthur), Frame (Zork Zero, Shogun) at [`PLAN_TALL`], and Letterbox at
+/// [`PLAN_SNUG`] on the same corpus — `hybrid_bottom_plan_for` takes the answer
+/// the TUI's own private `hybrid_bottom_plan` actually reaches, on every shape it
+/// has, not a hardcoded expectation.
+#[test]
+fn hybrid_bottom_plan_for_matches_the_tuis_own_decision() {
+    let cases: &[(&str, u16, V6BottomPlan)] = &[
+        ("journey-r83-s890706.z6", 83, V6BottomPlan::Menu),
+        (AMIGA_JOURNEY, 30, V6BottomPlan::Menu),
+        ("zork0-r393-s890714.z6", 393, V6BottomPlan::Frame),
+        ("shogun-r322-s890706.z6", 322, V6BottomPlan::Frame),
+    ];
+    for (file, release, want) in cases.iter().copied() {
+        let Some(b) = boot(file, release) else { continue };
+        for honor in [true, false] {
+            let (oracle, answer) = plan_oracle_and_answer(&b, honor, PLAN_TALL);
+            assert_plan(file, honor, PLAN_TALL, oracle, answer, want);
+        }
+    }
+    let Some(b) = boot_arthur_extend() else { return };
+    for honor in [true, false] {
+        let (oracle, answer) = plan_oracle_and_answer(&b, honor, PLAN_TALL);
+        assert_plan("arthur-r74-s890714.z6", honor, PLAN_TALL, oracle, answer, V6BottomPlan::Extend);
+    }
+}
+
+/// A pane whose vertical axis is always the binding one — no slack to reclaim,
+/// whatever the title — takes `Letterbox`. Journey is not a specimen here: its
+/// `Menu` plan is decided BEFORE slack is (SQ-0830, `hybrid_bottom_plan`'s own
+/// doc) — a command menu is a fact about the frame, not the pane — so it never
+/// takes `Letterbox` at any pane and is covered by the `Menu` case above instead.
+#[test]
+fn hybrid_bottom_plan_for_is_letterbox_with_no_slack() {
+    let cases: &[(&str, u16)] = &[
+        ("zork0-r393-s890714.z6", 393),
+        ("shogun-r322-s890706.z6", 322),
+        ("arthur-r74-s890714.z6", 74),
+    ];
+    for (file, release) in cases.iter().copied() {
+        let Some(b) = boot(file, release) else { continue };
+        for honor in [true, false] {
+            let (oracle, answer) = plan_oracle_and_answer(&b, honor, PLAN_SNUG);
+            assert_plan(file, honor, PLAN_SNUG, oracle, answer, V6BottomPlan::Letterbox);
+        }
     }
 }

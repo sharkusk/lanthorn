@@ -46,6 +46,8 @@ use std::path::PathBuf;
 use app::engine::{Engine, PxText, WinNode};
 use app::graphics::PictSource;
 use app::interpreter::InterpreterProfile;
+use app::render::screen::{compose_v6_frame, RasterMetrics, V6FrameInputs};
+use app::render::v6_layout::{self as v6, MainText, RasterFrame, V6TextMode};
 use app::session::{GameSession, InputKind};
 
 use ratatui::buffer::Buffer;
@@ -343,5 +345,199 @@ fn the_menus_last_game_row_lands_on_the_panes_last_row() {
                 }
             }
         }
+    }
+}
+
+// ── (c) SQ-1574: a RASTER host's Menu-anchor compose path ──
+//
+// The TUI's own render is Hybrid, which reclaims the letterbox slack by moving
+// TERMINAL CELLS around — nothing in (a)/(b) above touches `compose_v6_frame`.
+// This is the OTHER path: a host whose Hybrid draws its own chrome text under
+// `V6TextMode::RecordOnly` opts into `V6FrameInputs::bottom_anchor_menu` and
+// gets the identical bottom-anchored band out of the RASTER composite instead
+// — canvas grown, band runs re-seated, flanks filled, story between.
+
+const HOST_INK: image::Rgba<u8> = image::Rgba([220, 220, 220, 255]);
+const HOST_PAGE: image::Rgba<u8> = image::Rgba([0, 0, 0, 255]);
+
+fn empty_prose(_cols: u16, rows: u16) -> (MainText, RasterMetrics) {
+    (
+        MainText { lines: Vec::new(), styles: Vec::new(), input: String::new(), cursor_col: 0, awaiting: false, floats: Vec::new() },
+        RasterMetrics { total_rows: 0, viewport_rows: rows, max_scroll: 0, first_visible_row: 0 },
+    )
+}
+
+/// Compose `session`'s current frame with a bare host cell (matching this
+/// file's own `menu_rows_of`, `zvm::screen::V6Cell::DEFAULT`) — no `AppState`,
+/// every input the host's own, exactly `v6_headless_compose.rs`'s
+/// `host_compose_full` pattern.
+fn menu_anchor_compose(
+    session: &GameSession,
+    frame: RasterFrame,
+    text: V6TextMode,
+    bottom_anchor_menu: bool,
+) -> app::render::screen::V6Frame {
+    let tf = app::native_font::TextFace::cell_only(zvm::screen::V6Cell::DEFAULT);
+    let model = session.screen();
+    let WinNode::Layered(items) = &model.root else { panic!("a v6 frame has a Layered root") };
+    let colors = app::colors::ColorScheme::terminal_default();
+    let layout = v6::classify_windows(items, tf.cell());
+    let inputs = V6FrameInputs {
+        host_pair: (HOST_INK, HOST_PAGE),
+        honor_game_colours: true,
+        colors: &colors,
+        face: &tf,
+        paint: None,
+        panel_input: None,
+        input: None,
+        prose: &empty_prose,
+        reveal: None,
+        pager_active: false,
+        more_prompt_pair: (HOST_INK, HOST_PAGE),
+        text,
+        bottom_anchor_menu,
+    };
+    compose_v6_frame(&layout, frame, &inputs)
+}
+
+/// A pane tall enough to leave real surplus below Journey's story window at the
+/// bare 8x16 cell this file composes at — mirrors `v6_extended_frame.rs`'s own
+/// `TALL` (800x900 device px at its 8x18 kitty cell); the exact cell differs
+/// but the point is the same, real surplus at a whole magnification.
+const TALL_PANE_DEV: (u32, u32) = (800, 900);
+
+/// **The compose-path acceptance case.** With `bottom_anchor_menu` on, the
+/// canvas grows by the extension, the menu band's own runs land `extension`
+/// native pixels lower while keeping the SAME distance from the new bottom
+/// that the game put them from the screen's own, `story` fills the gap between
+/// the top chrome and the relocated band, and the opened flank columns carry
+/// the game's own panel colour rather than the bare story page. Declining
+/// (`bottom_anchor_menu` off) is BYTE-IDENTICAL between `Raster` and
+/// `Extended`, exactly as before this quest.
+///
+/// FALSIFY by reverting the `menu_case && !inputs.bottom_anchor_menu` bypass in
+/// `screen.rs`'s `compose_v6_frame_into`: every assertion below about the
+/// EXTENDED frame fails, because `anchored.canvas.height()` stays `native.1`
+/// (the frame never grows) — the pre-quest behaviour this suite otherwise pins.
+#[test]
+fn menu_anchor_compose_bottom_anchors_the_band_and_fills_the_flanks() {
+    for (file, release) in RELEASES {
+        let Some(session) = boot(file) else { return };
+        let model = session.screen();
+        let WinNode::Layered(items) = &model.root else { panic!("a v6 frame has a Layered root") };
+        let tf = app::native_font::TextFace::cell_only(zvm::screen::V6Cell::DEFAULT);
+        let native = v6::native_extent(items, &tf);
+        let cell = tf.cell();
+        let layout = v6::classify_windows(items, cell);
+        let story = layout.story.expect("Journey has a story window on this frame");
+        let story_bottom = story.y_px as u32 + story.h_px as u32;
+
+        let want = RasterFrame::extended(native, TALL_PANE_DEV, cell, Some(2.0), true);
+        let extension = want.extension();
+        assert!(extension > 0, "{file} (r{release}): premise — this pane must actually extend");
+
+        // Raster/Extended keep declining, byte for byte, exactly as before this
+        // quest — the whole point of the flag defaulting off.
+        let raster = menu_anchor_compose(&session, RasterFrame::native(native), V6TextMode::Rasterise, false);
+        let extended_declined = menu_anchor_compose(&session, want, V6TextMode::Rasterise, false);
+        assert_eq!(
+            extended_declined.canvas.as_raw(),
+            raster.canvas.as_raw(),
+            "{file} (r{release}): Extended must decline Journey's menu exactly as Raster does with \
+             bottom_anchor_menu off"
+        );
+        assert_eq!(
+            extended_declined.canvas.dimensions(),
+            (native.0 as u32, native.1 as u32),
+            "{file} (r{release}): a declined extension must not grow the canvas"
+        );
+
+        // The Menu-anchor path.
+        let anchored = menu_anchor_compose(&session, want, V6TextMode::Rasterise, true);
+        assert_eq!(
+            anchored.canvas.dimensions(),
+            (native.0 as u32, want.canvas_h),
+            "{file} (r{release}): the canvas must grow by the extension"
+        );
+
+        // The band's own runs, before and after — `RecordOnly` reports them as
+        // data rather than pixels, which is the whole point of the flag (a
+        // host drawing its own chrome text needs their POSITIONS).
+        let before = menu_anchor_compose(&session, RasterFrame::native(native), V6TextMode::RecordOnly, false);
+        let after = menu_anchor_compose(&session, want, V6TextMode::RecordOnly, true);
+        let band_before: Vec<_> = before.text.iter().filter(|r| r.y >= story_bottom).collect();
+        let band_after: Vec<_> = after.text.iter().filter(|r| r.y >= story_bottom + extension).collect();
+        assert!(!band_before.is_empty(), "{file} (r{release}): the menu band must carry runs");
+        assert_eq!(
+            band_before.len(),
+            band_after.len(),
+            "{file} (r{release}): the moved band must carry exactly the same runs as the unmoved one — \
+             before {band_before:?}, after {band_after:?}"
+        );
+        for (b, a) in band_before.iter().zip(band_after.iter()) {
+            assert_eq!(a.text, b.text, "{file} (r{release}): a moved run's text must not change");
+            assert_eq!(
+                a.y,
+                b.y + extension,
+                "{file} (r{release}): run {:?} must land exactly `extension` ({extension}) rows lower",
+                b.text
+            );
+            // …at the SAME distance from the frame's NEW bottom edge that the game
+            // put it at from the screen's own — `bottom_anchor`'s own invariant
+            // (SQ-1132), carried to the run-level mover (SQ-1574).
+            assert_eq!(
+                want.canvas_h - a.y,
+                u32::from(native.1) - b.y,
+                "{file} (r{release}): run {:?} must keep its distance from the frame's bottom edge",
+                b.text
+            );
+        }
+        // Nothing above the story's own bottom moved — the picture surround and
+        // side rules the band shares a window with (SQ-1574's whole reason for
+        // being) are untouched.
+        let above_before: Vec<_> = before.text.iter().filter(|r| r.y < story_bottom).collect();
+        let above_after: Vec<_> = after.text.iter().filter(|r| r.y < story_bottom).collect();
+        assert_eq!(
+            above_before.len(),
+            above_after.len(),
+            "{file} (r{release}): runs above the story window must be unaffected by the extension"
+        );
+        for (b, a) in above_before.iter().zip(above_after.iter()) {
+            assert_eq!(a.y, b.y, "{file} (r{release}): run {:?} above the story window must not move", b.text);
+        }
+
+        // `story` fills the gap between the top chrome and the relocated band.
+        let sbox = anchored.story.expect("Journey has a story box on this frame");
+        assert_eq!(
+            sbox.y + sbox.h,
+            story_bottom + extension,
+            "{file} (r{release}): the story box must reach exactly the relocated band's new top"
+        );
+
+        // The flank columns the extension opened carry the game's own panel
+        // colour, not the bare story page — sampled well clear of any band run's
+        // own glyph ink, so this cannot pass merely because a run happened to
+        // cover the sampled pixel.
+        let sx0 = story.x_px as u32;
+        let sx1 = (story.x_px as u32 + story.w_px as u32).min(native.0 as u32);
+        let flanks: [(u32, u32); 2] = [(0, sx0), (sx1, native.0 as u32)];
+        let mut sampled_any = false;
+        for (fx0, fx1) in flanks {
+            if fx1 <= fx0 {
+                continue;
+            }
+            // One native row above the relocated band's own top — inside the gap
+            // the extension opened, outside any run's glyph box.
+            let y = story_bottom + extension.saturating_sub(1);
+            for x in (fx0..fx1).step_by(4) {
+                let p = *anchored.canvas.get_pixel(x, y.min(anchored.canvas.height() - 1));
+                assert_ne!(
+                    p, HOST_PAGE,
+                    "{file} (r{release}): flank pixel ({x},{y}) is the bare story page, not the game's panel"
+                );
+                sampled_any = true;
+            }
+        }
+        assert!(sampled_any, "{file} (r{release}): premise — this frame must have a flank to sample");
     }
 }
