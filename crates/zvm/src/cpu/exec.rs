@@ -6542,9 +6542,13 @@ impl Machine {
     /// `restore_undo` keeps using `restore_quetzal` directly.
     pub fn restore_file(&mut self, data: &[u8]) -> Result<(), crate::error::ZError> {
         let dims = self.host_screen_dims();
+        // …and, on v6, the screen in PIXELS, captured before the restore overwrites
+        // header $22/$24 with the SAVED session's copy (SQ-1572, mirroring the
+        // `restart()` capture at SQ-1156 — see `post_restore_fixups`).
+        let v6_screen_px = self.v6_screen_px();
         self.restore_quetzal(data)?; // also clears any stale pending_input
         self.undo_stack.clear();
-        self.post_restore_fixups(dims);
+        self.post_restore_fixups(dims, v6_screen_px);
         // A host restore REPLACES the run, so any game `@save`/`@restore` that run
         // had suspended on is abandoned along with it — the host will never call
         // `complete_save`/`complete_restore_*` for a descriptor that belongs to a
@@ -6593,7 +6597,15 @@ impl Machine {
     /// to v3 only — the same scoping Frotz uses (`if (h_version == V3)
     /// split_window(0)`). From v4 on the game owns its upper window across a
     /// restore.
-    fn post_restore_fixups(&mut self, (rows, cols): (u8, u8)) {
+    ///
+    /// `v6_screen_px` is the host's PIXEL screen, captured by the caller before
+    /// the restore overwrote header $22/$24 with the saved session's copy —
+    /// mirroring [`Machine::restart`]'s `screen_px` (SQ-1156). Re-deriving a v6
+    /// screen from `rows`/`cols` instead (as this used to, and as every other
+    /// version still does below) multiplies the character grid back up, which is
+    /// exact only while the cell divides the screen: a Macintosh 640x400 on its
+    /// 7x15 cell came back 637x390, and the story window lost a row (SQ-1572).
+    fn post_restore_fixups(&mut self, (rows, cols): (u8, u8), v6_screen_px: Option<(u16, u16)>) {
         self.init_caps();
         // ZMSD §11.1.2: "the interpreter ensures that [the transcription bit's]
         // value survives a restart or restore." The saved dynamic memory brought
@@ -6605,7 +6617,19 @@ impl Machine {
         // preserves Flags 2's two game-writable bits across the reload, §6.1.3.)
         let on = self.streams.stream2;
         self.set_stream2(on);
-        if rows > 0 && cols > 0 {
+        if self.mem.version() == 6 {
+            // Re-declare the host's text metric (the `v6_metric` field itself
+            // survives the memory reload untouched, but restate it anyway so the
+            // window `font_size`s and header agree, exactly as `restart` does)
+            // and set the screen back in the exact pixels the host declared.
+            let metric = self.v6_metric.clone();
+            self.set_v6_text(metric);
+            if let Some((w, h)) = v6_screen_px {
+                if w > 0 && h > 0 {
+                    self.set_v6_screen_px(w, h);
+                }
+            }
+        } else if rows > 0 && cols > 0 {
             self.set_screen_dims(rows, cols);
         }
         if self.mem.version() <= 3 {
@@ -6649,8 +6673,11 @@ impl Machine {
     /// caller should then call `complete_restore_failure()`.
     pub fn complete_restore_success(&mut self, data: &[u8]) -> Result<(), crate::error::ZError> {
         let dims = self.host_screen_dims();
+        // See `restore_file`'s equivalent capture: v6's pixel screen (header
+        // $22/$24) must be read back before the restore replaces it (SQ-1572).
+        let v6_screen_px = self.v6_screen_px();
         self.restore_quetzal(data)?;
-        self.post_restore_fixups(dims);
+        self.post_restore_fixups(dims, v6_screen_px);
         if self.mem.version() <= 3 {
             // v3 @save is a branch instruction; resume as if it branched on success.
             let br = crate::cpu::decode::decode_branch_at(&self.mem, self.state.pc);
@@ -7076,6 +7103,63 @@ pub(crate) mod tests {
                 (640, 400),
                 "{cell:?}: the screen comes back in the pixels it was reported in, not \
                  reconstituted from the character grid",
+            );
+        }
+    }
+
+    /// SQ-1572: a host "Save State" restore (`Machine::restore_file`) got the
+    /// same fix `@restart` got at SQ-1156 — `post_restore_fixups` used to
+    /// reconstitute the v6 pixel screen from the character grid (header
+    /// `$20`/`$21` multiplied back up by the cell), which loses precision
+    /// wherever the cell doesn't divide the screen. The Mac's 7x15 cell is the
+    /// case that shows it: `640 / 7 = 91` (truncated) and `91 * 7 = 637`.
+    ///
+    /// A restore into the SAME session's own screen is enough to see this — the
+    /// reconstitution loses precision independent of whether the saved and
+    /// restored sizes match, because it never carries the pixels, only the grid.
+    ///
+    /// FALSIFY by reverting `post_restore_fixups` to call
+    /// `self.set_screen_dims(rows, cols)` unconditionally for v6: header
+    /// `$22`/`$24` come back `(637, 390)` on the Macintosh cell instead of
+    /// `(640, 400)`.
+    #[test]
+    fn v6_host_restore_redeclares_the_hosts_cell_and_keeps_the_screen_in_pixels() {
+        for (cell, want_font_size) in [
+            (V6Cell::new(8, 20), 0x1408u16),
+            // The Macintosh's 7x15 cell — divides neither axis of 640x400.
+            (V6Cell::new(7, 15), 0x0F07u16),
+        ] {
+            let mut m = Machine::new(Memory::new(v6_boot_story(&[0xB0])).unwrap());
+            m.set_v6_cell(cell);
+            m.set_v6_screen_px(640, 400);
+            assert_eq!(
+                m.screen.v6.as_ref().unwrap().windows[0].font_size,
+                want_font_size,
+                "{cell:?}: the launch declares the cell on every window",
+            );
+
+            // Host "Save State", as the archive round trip does (save_quetzal
+            // needs no pending @save — this is the host path, not the in-game one).
+            let blob = m.save_quetzal();
+
+            m.restore_file(&blob).expect("host restore must succeed");
+
+            assert_eq!(m.v6_cell(), cell, "{cell:?}: the metric is the machine's and survives");
+            assert_eq!(
+                (m.mem.read_byte(0x27), m.mem.read_byte(0x26)),
+                (cell.w() as u8, cell.h() as u8),
+                "{cell:?}: …and the header still states it",
+            );
+            assert_eq!(
+                m.screen.v6.as_ref().unwrap().windows[0].font_size,
+                want_font_size,
+                "{cell:?}: …and so does property 13, which is what a story lays itself out on",
+            );
+            assert_eq!(
+                (m.mem.read_word(0x22), m.mem.read_word(0x24)),
+                (640, 400),
+                "{cell:?}: the screen comes back in the pixels it was declared in after a host \
+                 restore, not reconstituted from the character grid",
             );
         }
     }

@@ -40,6 +40,8 @@ mod v6_restore_paint_ground;
 mod v6_restore_palette_replay;
 #[path = "suites/v6_restore_screen_layers.rs"]
 mod v6_restore_screen_layers;
+#[path = "suites/v6_restore_screen_pixels.rs"]
+mod v6_restore_screen_pixels;
 #[path = "suites/v6_restore_streamed_prose.rs"]
 mod v6_restore_streamed_prose;
 #[path = "suites/v6_resume_colours.rs"]
