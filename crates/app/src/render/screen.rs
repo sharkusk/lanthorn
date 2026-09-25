@@ -1641,15 +1641,7 @@ fn render_node(
                     // whenever colours are declined or the profile publishes no pair, so
                     // every other frame keeps the bare theme exactly as before.
                     let status_style = v6_machine_page(state, state.colors.theme.get("upper_window").style);
-                    let runs: Vec<&crate::engine::PxText> = layout
-                        .chrome
-                        .iter()
-                        .filter_map(|it| match &it.node {
-                            WinNode::Grid(g) => Some(g.px_texts.iter()),
-                            _ => None,
-                        })
-                        .flatten()
-                        .collect();
+                    let runs: Vec<&crate::engine::PxText> = paint_runs(&layout.chrome).collect();
                     // SQ-0711: this path draws the RUNS and nothing else — every
                     // pixel on the screen is discarded. That is right for a screen
                     // that is only text (Zork Zero's InvisiClues, Shogun's boot
@@ -1662,8 +1654,17 @@ fn render_node(
                     // A painted ground means there are pixels that only the raster
                     // composite can show, and it draws the runs over them anyway,
                     // so fall through to it.
+                    //
+                    // SQ-1584: routed through `hybrid_raster_fallback_reason`, the
+                    // same predicate `hybrid_bottom_plan_for` asks for a host's
+                    // benefit — this is the one place that decides it, so the two
+                    // cannot disagree. `story_present && takeover.is_none()` is
+                    // always false here (that frame already returned above), so
+                    // this call is exactly the `!painted_ground && runs_have_text`
+                    // check it replaces.
                     let painted_ground = state.v6_paint.borrow().is_some();
-                    if !painted_ground && runs.iter().any(|t| !t.text.trim().is_empty()) {
+                    let runs_have_text = runs.iter().any(|t| !t.text.trim().is_empty());
+                    if hybrid_raster_fallback_reason(layout.story.is_some(), takeover, runs_have_text, painted_ground).is_none() {
                         {
                             // Stamp this path like every other exit (SQ-0637): the
                             // painted menu drops the ring, so the next ring frame is a
@@ -3864,7 +3865,7 @@ fn build_hybrid_frame(
     // this render cannot disagree — converted straight back to the private enum
     // this function's own body still matches on below, so nothing past this line
     // changes.
-    let plan = match hybrid_bottom_plan_for(layout, native, state.v6_text.cell(), slack).kind {
+    let plan = match hybrid_bottom_plan_for(layout, native, state.v6_text.cell(), slack, state.v6_paint.borrow().is_some()).kind {
         V6BottomPlan::Letterbox => BottomPlan::Letterbox,
         V6BottomPlan::Extend => BottomPlan::Extend,
         V6BottomPlan::Frame => BottomPlan::Frame,
@@ -5812,6 +5813,20 @@ pub struct V6HybridPlan {
     /// [`menu_band_rows`]'s answer, and what Hybrid draws chrome text at one
     /// row per terminal row with (SQ-0543). `0` for every other plan.
     pub band_rows: u16,
+    /// `Some(reason)` when Hybrid does not draw this frame as a chrome ring
+    /// or a coherent all-text painted screen at all, and instead falls all
+    /// the way through to the full RASTER composite (SQ-1584) — a picture
+    /// takeover with no ring to draw (`reason` is
+    /// [`picture_takeover_reason`]'s own string, e.g. `"art_paints_anything"`
+    /// for a full-screen canvas story window like FMV Poker's table), or no
+    /// story window at all over a painted ground (`"no_story_window"`, SQ-0711
+    /// — Scopa's card table, drawn entirely with `erase_window` fills). `None`
+    /// means Hybrid draws its own ring or all-text screen for this frame, and
+    /// `kind`/`stretch_flanks`/`band_top_native`/`band_rows` describe it as
+    /// before — this field only ADDS a signal, it never changes what those
+    /// report. See [`hybrid_raster_fallback_reason`], the one place both this
+    /// function and the TUI's own Hybrid render ask the question.
+    pub raster_fallback: Option<&'static str>,
 }
 
 /// [`hybrid_bottom_plan`], published for an embedding host (SQ-1574).
@@ -5826,14 +5841,25 @@ pub struct V6HybridPlan {
 /// `Letterbox` when it is zero, every other plan otherwise — so a host with no
 /// pane to letterbox against may pass any nonzero placeholder to ask "if there
 /// were room to grow, which plan would this title take?".
+///
+/// `painted_ground` is the host's equivalent of `state.v6_paint` — whether the
+/// engine's own paint-mode fills (as opposed to picture placements) have laid
+/// down pixels only a raster composite can show. It only ever matters when
+/// `raster_fallback` on the result is what the caller is asking about
+/// (SQ-1584); a host that only reads `kind`/`stretch_flanks`/`band_top_native`/
+/// `band_rows` may pass any placeholder, because those never depended on it.
 pub fn hybrid_bottom_plan_for(
     layout: &crate::render::v6_layout::V6Layout<'_>,
     native: (u16, u16),
     cell: zvm::screen::V6Cell,
     slack_native_rows: u32,
+    painted_ground: bool,
 ) -> V6HybridPlan {
     use crate::render::v6_layout as v6;
-    let none = V6HybridPlan { kind: V6BottomPlan::Letterbox, stretch_flanks: false, band_top_native: None, band_rows: 0 };
+    let takeover = layout.story.and_then(|s| picture_takeover_reason(s, &layout.chrome, layout.story_gfx, native));
+    let runs_have_text = paint_runs(&layout.chrome).any(|t| !t.text.trim().is_empty());
+    let raster_fallback = hybrid_raster_fallback_reason(layout.story.is_some(), takeover, runs_have_text, painted_ground);
+    let none = V6HybridPlan { kind: V6BottomPlan::Letterbox, stretch_flanks: false, band_top_native: None, band_rows: 0, raster_fallback };
     let Some(story) = layout.story else { return none };
     let gfx = v6::build_graphics_canvas(&layout.chrome, native);
     let plan = hybrid_bottom_plan(story, &gfx, &layout.chrome, native, slack_native_rows, cell);
@@ -5851,7 +5877,44 @@ pub fn hybrid_bottom_plan_for(
     } else {
         (None, 0)
     };
-    V6HybridPlan { kind, stretch_flanks, band_top_native, band_rows }
+    V6HybridPlan { kind, stretch_flanks, band_top_native, band_rows, raster_fallback }
+}
+
+/// Does Hybrid draw a chrome ring or its coherent all-text painted-screen path
+/// (SQ-0478) for this frame at all, or does it fall all the way through to the
+/// full RASTER composite? `render_story_pane_frame`'s own Hybrid arm is the ONE
+/// place this is decided, in two steps — no ring to draw at all (no story
+/// window, or [`picture_takeover_reason`] names one) is the first fall-through,
+/// and SQ-0711's painted-ground check decides whether the second stop (the
+/// chrome's own text runs, drawn as a coherent all-text screen) is even
+/// available — and this function is that same decision, shared rather than
+/// restated (SQ-1584), so [`hybrid_bottom_plan_for`] and that render cannot
+/// disagree.
+///
+/// `takeover` is [`picture_takeover_reason`]'s own answer for this frame
+/// (`None` when there is no story window at all too, mirroring
+/// `layout.story.and_then(...)`). `runs_have_text` is whether the CHROME's own
+/// text runs ([`paint_runs`]) have anything to paint — the SQ-0711 check looks
+/// at chrome only, never the story window's own content. `painted_ground` is
+/// whether the engine's paint-mode fills have laid down pixels only the raster
+/// composite can show.
+///
+/// `Some(reason)` names the arm that decided it — `takeover`'s own string, or
+/// `"no_story_window"` when there was none to take over. `None` means a ring or
+/// an all-text screen draws this frame, not the composite.
+fn hybrid_raster_fallback_reason(
+    story_present: bool,
+    takeover: Option<&'static str>,
+    runs_have_text: bool,
+    painted_ground: bool,
+) -> Option<&'static str> {
+    if story_present && takeover.is_none() {
+        return None; // the chrome ring draws this frame
+    }
+    if !painted_ground && runs_have_text {
+        return None; // the coherent all-text painted-screen path draws it
+    }
+    Some(takeover.unwrap_or("no_story_window"))
 }
 
 /// SQ-0570: is this frame a full-screen PICTURE takeover — a picture painted

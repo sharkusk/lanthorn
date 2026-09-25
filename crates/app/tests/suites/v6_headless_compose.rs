@@ -1177,7 +1177,9 @@ fn plan_oracle_and_answer(b: &Booted, honor: bool, pane: (u16, u16)) -> (&'stati
     let native = v6::native_extent(items, &state.v6_text);
     let layout = v6::classify_windows(items, state.v6_text.cell());
     let slack = if pane == PLAN_SNUG { 0 } else { 1 };
-    let answer = app::render::screen::hybrid_bottom_plan_for(&layout, native, state.v6_text.cell(), slack).kind;
+    let painted_ground = state.v6_paint.borrow().is_some();
+    let answer =
+        app::render::screen::hybrid_bottom_plan_for(&layout, native, state.v6_text.cell(), slack, painted_ground).kind;
     (oracle, answer)
 }
 
@@ -1269,5 +1271,154 @@ fn hybrid_bottom_plan_for_is_letterbox_with_no_slack() {
             let (oracle, answer) = plan_oracle_and_answer(&b, honor, PLAN_SNUG);
             assert_plan(file, honor, PLAN_SNUG, oracle, answer, V6BottomPlan::Letterbox);
         }
+    }
+}
+
+// ---------------------------------------------------------------------------
+// SQ-1584: `hybrid_bottom_plan_for`'s new `raster_fallback` field — whether
+// Hybrid draws this frame's own chrome ring or its all-text painted-screen
+// path at all, or falls all the way through to the full RASTER composite.
+// Neither corpus above ever reaches that fall-through (Zork Zero, Journey,
+// Arthur and Shogun always keep a ring or a `Menu`/`Frame`/`Extend`/`Letterbox`
+// band to draw), so it needs its own specimens: Scopa, whose card table
+// publishes no story `Buffer` at all over a painted ground (SQ-0711), and FMV
+// Poker, whose table is a full-screen canvas story window a picture takeover
+// claims (`picture_takeover_reason` → `art_paints_anything`, SQ-0729/SQ-0725).
+//
+// Same oracle pattern as the plan tests above: render through the TUI's real
+// Hybrid path, read the path it actually took off `state.v6_path_log`, and
+// compare `hybrid_bottom_plan_for`'s own `raster_fallback` answer for the
+// identical frame — `Some(_)` reading exactly the frames whose oracle path
+// is `"raster"`, `None` everywhere else (a ring or the painted-screen text
+// path).
+// ---------------------------------------------------------------------------
+
+fn scopa_session() -> Option<GameSession> {
+    let path = stories_dir().join("scopa.z6");
+    let Ok(bytes) = std::fs::read(&path) else {
+        eprintln!("SKIP: gitignored story missing at {}", path.display());
+        return None;
+    };
+    let mut picts = PictSource::new(blorb::resolve_resource_blorb(&path).map(|(b, _)| b));
+    let dims = picts.all_pict_dims();
+    let mut s = GameSession::new_with_trace(bytes, true, false, None, false, dims, picts.std_window(), None, None)
+        .expect("scopa is a valid v6 story");
+    s.set_pict_source(Some(picts));
+    s.flush_boot_pictures();
+    let _ = s.take_transcript();
+    Some(s)
+}
+
+fn fmvpoker_session() -> Option<GameSession> {
+    let path = stories_dir().join("fmvpoker.z6");
+    let Ok(bytes) = std::fs::read(&path) else {
+        eprintln!("SKIP: gitignored story missing at {}", path.display());
+        return None;
+    };
+    let mut picts = PictSource::new(blorb::resolve_resource_blorb(&path).map(|(b, _)| b));
+    let dims = picts.all_pict_dims();
+    let mut s = GameSession::new_with_trace(bytes, true, false, None, false, dims, picts.std_window(), None, None)
+        .expect("fmvpoker is a valid v6 story");
+    s.set_pict_source(Some(picts));
+    s.flush_boot_pictures();
+    let _ = s.take_transcript();
+    Some(s)
+}
+
+/// One "press Enter" step, for fmvpoker's title → table transition
+/// (`v6_fmvpoker_hybrid.rs`'s own `boot`/loop shape).
+fn advance(session: &mut GameSession) {
+    match session.pending_input() {
+        InputKind::Char => {
+            let _ = session.submit_char(13);
+        }
+        InputKind::Line | InputKind::Event => {
+            let _ = session.submit("");
+        }
+    }
+    let _ = session.take_transcript();
+}
+
+/// Render `session`'s current frame through the TUI's real Hybrid path (a fixed
+/// 100x34 pane, halfblocks so no real terminal is needed), with the painted
+/// ground published the way `main.rs` publishes it every frame — then read back
+/// the path the render actually took (`state.v6_path_log`) alongside
+/// `hybrid_bottom_plan_for`'s own `raster_fallback` answer for the identical
+/// layout/native/cell/painted-ground.
+fn raster_fallback_oracle_and_answer(session: &GameSession) -> (String, bool) {
+    let model = session.screen();
+    let WinNode::Layered(items) = &model.root else { panic!("a v6 frame has a Layered root") };
+
+    let mut state = app::state::AppState::default();
+    state.colors = app::colors::ColorScheme::terminal_default();
+    state.game_picker = Some(ratatui_image::picker::Picker::halfblocks());
+    state.config.v6_render = app::config::V6RenderMode::Hybrid;
+    *state.v6_paint.borrow_mut() = Engine::paint_surface(session);
+
+    let area = ratatui::layout::Rect::new(0, 0, 100, 34);
+    let mut buf = ratatui::buffer::Buffer::empty(area);
+    let _ = app::render::screen::render_story_pane(&model, false, None, &state, area, &mut buf);
+    let oracle = state.v6_path_log.borrow().last().map(|(l, _)| l.clone()).unwrap_or_default();
+
+    let native = v6::native_extent(items, &state.v6_text);
+    let layout = v6::classify_windows(items, state.v6_text.cell());
+    let painted_ground = state.v6_paint.borrow().is_some();
+    let answer = app::render::screen::hybrid_bottom_plan_for(&layout, native, state.v6_text.cell(), 1, painted_ground)
+        .raster_fallback
+        .is_some();
+    (oracle, answer)
+}
+
+/// Scopa's table (no story window, a painted ground, SQ-0711) and FMV Poker's
+/// table (a picture takeover, SQ-0729/SQ-0725) both report the raster
+/// fall-through; Scopa's screen after the title's "Help" affordance (which
+/// opens a real story window — no picture takeover, no painted ground behind
+/// it, so the ordinary ring draws it) and FMV Poker's opening screen (no art
+/// at all yet, so the ring draws it too) do not.
+///
+/// Falsified by reverting `hybrid_raster_fallback_reason` to always return
+/// `None`: every "report the fall-through" assertion below fails with
+/// "…must report the raster fall-through", exactly the SQ-1584 symptom (a host
+/// with no way to tell these frames need the full composite).
+#[test]
+fn hybrid_bottom_plan_for_raster_fallback_matches_the_tuis_own_decision() {
+    // Scopa's table: no story window, a painted ground (SQ-0711).
+    if let Some(session) = scopa_session() {
+        let (oracle, answer) = raster_fallback_oracle_and_answer(&session);
+        assert_eq!(oracle, "raster", "premise: scopa's title table renders through the composite (got {oracle:?})");
+        assert!(answer, "scopa's table: hybrid_bottom_plan_for must report the raster fall-through");
+    }
+
+    // Scopa after clicking the title's "Help" label: a real story window opens
+    // (no picture takeover, no SQ-0711 ground), so the ordinary ring draws it —
+    // native (x, y) beside the run `hybrid_bottom_plan_for_raster_fallback_
+    // matches_the_tuis_own_decision`'s own probe read off "Help"'s run (x=302,
+    // y=91; the click lands mid-label, matching `v6_scopa_button_labels.rs`'s
+    // own convention of clicking a label's own box).
+    if let Some(mut session) = scopa_session() {
+        Engine::set_mouse(&mut session, 99, 317);
+        let _ = session.submit_char(254);
+        let _ = session.take_transcript();
+        let (oracle, answer) = raster_fallback_oracle_and_answer(&session);
+        assert_ne!(
+            oracle, "raster",
+            "premise: clicking scopa's \"Help\" label opens a real story window, not the felt table"
+        );
+        assert!(!answer, "scopa after \"Help\": hybrid_bottom_plan_for must NOT report a raster fall-through");
+    }
+
+    // FMV Poker's opening screen: no art painted yet, so the ring draws it.
+    if let Some(session) = fmvpoker_session() {
+        let (oracle, answer) = raster_fallback_oracle_and_answer(&session);
+        assert_eq!(oracle, "hybrid-ring", "premise: fmvpoker's opening screen has no art yet (got {oracle:?})");
+        assert!(!answer, "fmvpoker's opening screen: hybrid_bottom_plan_for must NOT report a raster fall-through");
+    }
+
+    // FMV Poker's table, one keypress in: a picture takeover (SQ-0729/SQ-0725).
+    if let Some(mut session) = fmvpoker_session() {
+        advance(&mut session);
+        let (oracle, answer) = raster_fallback_oracle_and_answer(&session);
+        assert_eq!(oracle, "raster", "premise: fmvpoker's table renders through the composite (got {oracle:?})");
+        assert!(answer, "fmvpoker's table: hybrid_bottom_plan_for must report the raster fall-through");
     }
 }
