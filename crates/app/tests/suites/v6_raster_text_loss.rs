@@ -542,3 +542,113 @@ fn a_ground_over_the_story_window_is_not_artwork_honoring_game_colours() {
 fn a_ground_over_the_story_window_is_not_artwork_theme_only() {
     a_ground_over_the_story_window_is_not_artwork(false);
 }
+
+// ── SQ-1582: a stale title-screen label must not survive to block the transcript ──
+
+/// scopa draws its title-screen buttons ("New Game"/"Help"/"Credits"/"Quit") one
+/// at a time into a single reused scratch window, moved and resized per label —
+/// "Quit" drawn last, so by the time the title finishes painting, that window's
+/// box sits exactly on "Quit"'s own screen-absolute position (its Inform source
+/// is quoted in `v6_scopa_button_labels.rs`: `@window_size`/`@move_window` before
+/// each `print`). This is that box, 1-based-native minus one, matching how the
+/// composite reads a `PositionedWindow`'s `(x_px, y_px, w_px, h_px)`.
+const SCOPA_TITLE_QUIT_BOX: (u32, u32, u32, u32) = (301, 190, 38, 16);
+
+/// Deal a hand off the title screen, then abort it — ESCape twice in succession,
+/// the game's own documented shortcut ("pressing the ESCape key twice in
+/// succession will return you to the starting screen") — which repaints the
+/// same four title-screen buttons, "Quit" last. Click Help from there: it
+/// prints the real help text into window 0 as an ordinary transcript page (no
+/// enclosing frame art, so `story_window_is_a_canvas` is false) — the SAME
+/// `chrome_text_rects`-gated glyph path SQ-0729 added for fmvpoker above.
+fn click(s: &mut GameSession, x: u16, y: u16) -> app::session::TurnResult {
+    Engine::set_mouse(s, y, x);
+    s.submit_char(254)
+}
+
+/// Fold one turn's output into `state.transcript` the way the real host does
+/// (`host/turn.rs`): `transcript_elems` only when the turn carried an inline
+/// image or a screen-clear boundary, else the flat `transcript`/`transcript_runs`
+/// pair — scopa's Help print has neither, so it rides the flat path.
+fn apply_turn_text(state: &mut app::state::AppState, r: &app::session::TurnResult) {
+    if r.transcript_elems.is_empty() {
+        state.push_transcript_runs(&r.transcript, app::state::TranscriptKind::Story, &r.transcript_runs);
+    } else {
+        app::state::apply_transcript_elems(state, &r.transcript_elems);
+    }
+}
+
+fn scopa_help_after_aborting_a_deal(honor: bool) -> Option<(GameSession, app::state::AppState)> {
+    let mut s = boot("scopa.z6", honor)?;
+    let mut state = raster_state(honor);
+    app::state::apply_transcript_elems(&mut state, &Engine::take_transcript_elems(&mut s));
+
+    let r = click(&mut s, 250, 350); // a deck card on the title screen -> deal
+    assert!(r.fault.is_none(), "honor={honor}: scopa faulted dealing: {:?}", r.fault);
+    apply_turn_text(&mut state, &r);
+
+    let r = s.submit_char(27); // ESCape
+    assert!(r.fault.is_none(), "honor={honor}: scopa faulted on the first ESCape: {:?}", r.fault);
+    apply_turn_text(&mut state, &r);
+    let r = s.submit_char(27); // ESCape again -> aborts back to the title
+    assert!(r.fault.is_none(), "honor={honor}: scopa faulted on the second ESCape: {:?}", r.fault);
+    apply_turn_text(&mut state, &r);
+
+    let r = click(&mut s, 320, 100); // Help
+    assert!(r.fault.is_none(), "honor={honor}: scopa faulted opening help: {:?}", r.fault);
+    apply_turn_text(&mut state, &r);
+
+    Some((s, state))
+}
+
+fn scopa_help_shows_every_word_after_an_aborted_deal(honor: bool) {
+    let Some((session, state)) = scopa_help_after_aborting_a_deal(honor) else { return };
+    assert!(
+        state.transcript.iter().any(|l| l.contains("confirm")),
+        "harness sanity (honor={honor}): scopa's help text reached the transcript: {:?}",
+        state.transcript
+    );
+
+    // Premise: the title screen really does leave a "Quit" label at this exact
+    // box — a fresh session, since the one above has moved on to Help.
+    let Some(mut probe) = boot("scopa.z6", honor) else { return };
+    let _ = Engine::take_transcript_elems(&mut probe);
+    let model = probe.screen();
+    let WinNode::Layered(items) = &model.root else { panic!("v6 Layered root") };
+    let quit = items.iter().find_map(|it| match &it.node {
+        WinNode::Grid(g) if g.px_texts.iter().any(|t| t.text == "Quit") => {
+            Some((it.x_px as u32, it.y_px as u32, it.w_px as u32, it.h_px as u32))
+        }
+        _ => None,
+    });
+    assert_eq!(
+        quit,
+        Some(SCOPA_TITLE_QUIT_BOX),
+        "premise (honor={honor}): scopa's title screen draws \"Quit\" into a Grid window at {SCOPA_TITLE_QUIT_BOX:?}"
+    );
+
+    // The real bug: the SAME box, on the HELP frame, must carry the transcript's
+    // own ink — not a stale spare rect blocking it. Compared against the same
+    // frame with an EMPTY host transcript, which is what a blocked cell reads as
+    // either way (SQ-1582).
+    let (img, _) = composite(&session, &state);
+    let (blank, _) = composite(&session, &without_transcript(&state));
+    let changed = differing(&img, &blank, SCOPA_TITLE_QUIT_BOX);
+    assert!(
+        changed > 20,
+        "honor={honor}: the box at {SCOPA_TITLE_QUIT_BOX:?} scopa's title screen last drew \"Quit\" \
+         into is byte-identical to a blank-transcript render ({changed} px differ) — the stale \
+         label's grid cells are still spared from the transcript's own glyphs there, blanking \
+         whatever word of the help text happens to land on them (SQ-1582)"
+    );
+}
+
+#[test]
+fn scopa_help_shows_every_word_after_an_aborted_deal_honoring_game_colours() {
+    scopa_help_shows_every_word_after_an_aborted_deal(true);
+}
+
+#[test]
+fn scopa_help_shows_every_word_after_an_aborted_deal_theme_only() {
+    scopa_help_shows_every_word_after_an_aborted_deal(false);
+}

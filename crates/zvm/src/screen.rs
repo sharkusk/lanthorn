@@ -1272,7 +1272,7 @@ impl V6Windows {
             let (top, left) = (run.y as i32, run.x as i32 + edges[i]);
             let (h, w) = (cell.h() as i32, edges[j] - edges[i]);
             if e {
-                self.erase_screen_rect(top, left, h, w, metric);
+                self.erase_screen_rect(top, left, h, w, metric, Some(win));
             } else {
                 self.erase_blank_cells_in_rect(top, left, h, w, metric, ground_of(&run));
             }
@@ -1363,7 +1363,18 @@ impl V6Windows {
     /// (which erases the target window's CURRENT screen rect — Shogun erases
     /// its 1-px caret window without disturbing the menu items painted around
     /// it earlier).
-    pub fn erase_screen_rect(&mut self, top: i32, left: i32, h: i32, w: i32, metric: &V6Metric) {
+    ///
+    /// `skip_grid` excludes one window's CHARACTER GRID from the SQ-1582 pass
+    /// below (never `texts`/`retired`/`streamed`, which stay window-blind).
+    /// `paint_run` calls this to erase whatever sits under the glyphs it is
+    /// ABOUT to lay down — but the print loop (`cpu/exec.rs`) has already
+    /// written those same glyphs into `win.grid` before `paint_run` ever
+    /// runs (`w.grid.put(...)` happens per character; `paint_run` is called
+    /// afterward, once, on the finished run), so an unqualified grid pass
+    /// here would immediately blank the very characters just printed. Every
+    /// OTHER caller — an explicit `erase_window`/`erase_line`, nothing
+    /// written yet — passes `None`.
+    pub fn erase_screen_rect(&mut self, top: i32, left: i32, h: i32, w: i32, metric: &V6Metric, skip_grid: Option<usize>) {
         if h <= 0 || w <= 0 {
             return;
         }
@@ -1391,6 +1402,50 @@ impl V6Windows {
                         .into_iter()
                         .flat_map(|t| trim_run_against_rect(t, top, left, h, w, metric))
                         .collect();
+                }
+            }
+        }
+        // …and the CHARACTER GRID (SQ-1582), the hybrid backend's own copy of
+        // the same glyphs. Unlike `texts` above, a grid cell carries no
+        // captured paint position of its own — it is addressed by its
+        // window's CURRENT origin, exactly how every reader (the app's
+        // `chrome_text_rects` cell-fallback, `build_chrome_canvas_into`'s Pass
+        // 2) places it — so the pixel rect a cell occupies has to be derived
+        // the same way here.
+        //
+        // The gap this closes: `erase_window(n)` only calls `grid.clear()` on
+        // the TARGET window `n` (cpu/exec.rs); an erase covering the same
+        // PIXELS from a DIFFERENT window's rect trimmed that other window's
+        // `texts` above (this loop already walks "any window") but left its
+        // grid cells untouched, so a scratch window reused across screens
+        // (scopa draws every title-screen button into one window, moved and
+        // resized per label, "Quit" drawn last) kept reading as live chrome
+        // forever after the game moved on. Its glyph vanished from `texts`
+        // (trimmed above, since that scan is pixel-based and window-blind)
+        // but survived in `grid.cells`, which only the explicit target's own
+        // `.clear()` reaches — so it stayed there under whatever screen
+        // printed next, sparing the cells its old label happened to
+        // overlap from the composite's own SQ-0729 "a live label wins over
+        // the transcript" rule and silently eating words of it.
+        for (i, win) in self.windows.iter_mut().enumerate() {
+            if Some(i) == skip_grid {
+                continue;
+            }
+            let (cols, rows) = (win.grid.cols as i32, win.grid.rows as i32);
+            if cols == 0 || rows == 0 {
+                continue;
+            }
+            let (ox, oy) = (win.x_coord.max(1) as i32, win.y_coord.max(1) as i32);
+            let (cw, ch) = (cell.w() as i32, cell.h() as i32);
+            // The grid ROWS/COLS the erase rect can reach at all, clamped to
+            // the grid's own extent — never a bare scan of every cell.
+            let row_lo = ((top - oy).max(0) / ch).min(rows);
+            let row_hi = (((top + h - oy).max(0) + ch - 1) / ch).min(rows);
+            let col_lo = ((left - ox).max(0) / cw).min(cols);
+            let col_hi = (((left + w - ox).max(0) + cw - 1) / cw).min(cols);
+            for row in row_lo..row_hi {
+                for col in col_lo..col_hi {
+                    win.grid.put((row + 1) as u16, (col + 1) as u16, ' ', 0, ZColour::Default, ZColour::Default);
                 }
             }
         }
@@ -5057,7 +5112,7 @@ mod tests {
         moved(&s, "paint_run", &mut last);
 
         // Erase: a screen rect wiped across the shared raster.
-        s.v6_mut().unwrap().erase_screen_rect(1, 1, 32, 64, &metric);
+        s.v6_mut().unwrap().erase_screen_rect(1, 1, 32, 64, &metric, None);
         moved(&s, "erase_screen_rect", &mut last);
 
         // Move/resize: window props written the way the opcodes write them.

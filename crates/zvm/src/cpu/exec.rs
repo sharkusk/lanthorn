@@ -3583,7 +3583,7 @@ impl Machine {
                                     w.x_size as i32,
                                 )
                             };
-                            v6.erase_screen_rect(top, left, h, wd, &self.v6_metric);
+                            v6.erase_screen_rect(top, left, h, wd, &self.v6_metric, None);
                             let w = &mut v6.windows[n as usize];
                             // ZMSD §8.8.5.3: erase "to background colour (even
                             // if the current text style is Reverse Video)" — the
@@ -4111,7 +4111,7 @@ impl Machine {
                         let width = if value == 1 { to_edge } else { (value as i32 - 1).min(to_edge) };
                         (y_abs, x_abs, width)
                     };
-                    v6.erase_screen_rect(top, left, cell.h() as i32, width, &self.v6_metric);
+                    v6.erase_screen_rect(top, left, cell.h() as i32, width, &self.v6_metric, None);
                     // Cell-grid mirror: blank from the cursor cell rightward.
                     // The CELL the cursor is in is the grid's own pen, not the
                     // pixel cursor divided by the cell (SQ-1009): on a machine
