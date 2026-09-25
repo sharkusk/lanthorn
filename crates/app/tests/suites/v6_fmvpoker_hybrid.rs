@@ -1705,3 +1705,105 @@ fn fmvpoker_the_draw_message_survives_a_narrow_pane_honoring_game_colours() {
 fn fmvpoker_the_draw_message_survives_a_narrow_pane_theme_only() {
     fmvpoker_the_draw_message_survives_a_narrow_pane(false);
 }
+
+/// SQ-1580: an in-game `@restore` must not widen the title-banner window
+/// (window 1) fmvpoker sized for itself back to the full screen.
+///
+/// `post_restore_fixups` re-applies the host's pixel screen after every
+/// restore (SQ-1572) by re-declaring header `$22`/`$24` — but reaching for
+/// `set_v6_screen_px` to do it ALSO resets windows 0 and 1 to full-screen
+/// width, which is `@restart`'s semantics (frotz `restart_screen`: nothing
+/// has been sized yet), not a restore's. Quetzal carries no screen state at
+/// all — the window table a restore comes back to is whatever the LIVE
+/// session already had — so the reset was pure damage: fmvpoker parks window
+/// 1 at native (173,7), 289px wide, over the "Double Fanucci" banner it
+/// erases blue and never touches again
+/// (`fmvpoker_erased_banner_keeps_the_colour_the_game_named`, above). A
+/// restore that widens it to 640px repaints that banner's blue fill across
+/// pixels — (600,20) among them — that should still show the poker table's
+/// own frame art.
+///
+/// Per CLAUDE.md, this drives the game's OWN `@save`/`@restore` — typing the
+/// menu's first-letter shortcuts, exactly as a player would — through the
+/// real `resume_save`/`resume_restore` host callbacks (mirroring
+/// `zork0_quetzal_save_restore_smoke`), and compares two sessions dealt a
+/// hand to the SAME point, one that restored along the way and one that
+/// didn't — a same-session round trip alone would not show the difference
+/// this test needs, since the frame right after a restore still looks
+/// correct (CLAUDE.md's restore-testing convention) and the bug is a
+/// geometry fact rather than something a single "look" would perturb.
+fn fmvpoker_restore_does_not_widen_the_banner_window(honor: bool) {
+    let pixel_600_20 = |session: &GameSession, state: &app::state::AppState| -> image::Rgba<u8> {
+        let model = session.screen();
+        let WinNode::Layered(items) = &model.root else { panic!("v6 Layered root") };
+        let native = app::render::v6_layout::native_extent(
+            items,
+            &app::native_font::TextFace::cell_only(zvm::screen::V6Cell::DEFAULT),
+        );
+        let layout = app::render::v6_layout::classify_windows(items, zvm::screen::V6Cell::DEFAULT);
+        let (img, _) = app::render::screen::build_v6_raster_canvas(&layout, native, state);
+        *img.get_pixel(600, 20)
+    };
+    let deal = |session: &mut GameSession, state: &mut app::state::AppState| {
+        let r = session.submit_char(b'p');
+        assert!(r.fault.is_none(), "honor={honor}: fmvpoker faulted dealing: {:?}", r.fault);
+        app::state::apply_transcript_elems(state, &r.transcript_elems);
+        *state.v6_paint.borrow_mut() = Engine::paint_surface(session);
+    };
+
+    // Branch A: no restore at all — deal a hand and read the pixel.
+    let Some((mut plain, mut plain_state)) = fmvpoker_title(honor) else { return };
+    deal(&mut plain, &mut plain_state);
+    let no_restore = pixel_600_20(&plain, &plain_state);
+    // Premise: (600,20) — outside window 1's 289px banner box (172,6)-(461,40)
+    // — is the poker table's own frame art, not the banner's blue.
+    assert_ne!(
+        no_restore.0,
+        [0, 107, 181, 255],
+        "premise (honor={honor}): (600,20) must not already read as the banner's blue"
+    );
+
+    // Branch B: SAVE, then RESTORE, then deal the same hand.
+    let Some((mut session, mut state)) = fmvpoker_title(honor) else { return };
+    let r = session.submit_char(b's');
+    assert!(r.fault.is_none(), "honor={honor}: fmvpoker faulted choosing SAVE: {:?}", r.fault);
+    let Some(app::session::PendingIo::Save) = r.pending_io else {
+        eprintln!("SKIP: honor={honor}: 's' did not reach @save (pending_io={:?})", r.pending_io);
+        return;
+    };
+    let blob = session.machine.save_quetzal();
+    let rs = session.resume_save(true);
+    assert!(rs.fault.is_none(), "honor={honor}: resume_save must not fault: {:?}", rs.fault);
+    app::state::apply_transcript_elems(&mut state, &rs.transcript_elems);
+
+    let r = session.submit_char(b'r');
+    assert!(r.fault.is_none(), "honor={honor}: fmvpoker faulted choosing RESTORE: {:?}", r.fault);
+    let Some(app::session::PendingIo::Restore) = r.pending_io else {
+        eprintln!("SKIP: honor={honor}: 'r' did not reach @restore (pending_io={:?})", r.pending_io);
+        return;
+    };
+    let rr = session.resume_restore(Some(&blob));
+    assert!(rr.fault.is_none(), "honor={honor}: resume_restore must not fault: {:?}", rr.fault);
+    app::state::apply_transcript_elems(&mut state, &rr.transcript_elems);
+    *state.v6_paint.borrow_mut() = Engine::paint_surface(&session);
+
+    deal(&mut session, &mut state);
+    let restored = pixel_600_20(&session, &state);
+
+    assert_eq!(
+        restored, no_restore,
+        "honor={honor}: pixel (600,20) differs after fmvpoker's own SAVE/RESTORE — window 1's \
+         banner box was widened back to the full screen (SQ-1580), so its blue erase-fill now \
+         paints over pixels that should still show the poker table's own frame art"
+    );
+}
+
+#[test]
+fn fmvpoker_restore_does_not_widen_the_banner_window_honoring_game_colours() {
+    fmvpoker_restore_does_not_widen_the_banner_window(true);
+}
+
+#[test]
+fn fmvpoker_restore_does_not_widen_the_banner_window_theme_only() {
+    fmvpoker_restore_does_not_widen_the_banner_window(false);
+}

@@ -1310,6 +1310,30 @@ impl Machine {
         }
     }
 
+    /// Re-declare the Version 6 screen size in header `$22`/`$24` (and the
+    /// derived grid `$20`/`$21`, cell `$26`/`$27`) WITHOUT [`Machine::set_v6_screen_px`]'s
+    /// window-table side effect.
+    ///
+    /// A host RESTORE reloads dynamic memory from the save but — unlike
+    /// `@restart` — never touches the live window table: Quetzal saves no
+    /// screen state by design (the standard assumes the story repaints), so
+    /// `self.screen.v6` is whatever the CURRENT session already had it at, up
+    /// to the moment of the restore. `post_restore_fixups` still has to
+    /// re-stamp the header with the host's actual pixel screen (SQ-1572), but
+    /// reaching for `set_v6_screen_px` to do it also resets windows 0 and 1 to
+    /// full-screen — correct for `@restart`'s frotz `restart_screen` semantics
+    /// (nothing has been sized yet), wrong for a restore, where a game that
+    /// sized its own window before the save — fmvpoker's title-banner window 1
+    /// — must come back exactly as it was, not stretched back to full width
+    /// (SQ-1580).
+    fn redeclare_v6_screen_px(&mut self, width_px: u16, height_px: u16) {
+        if self.mem.version() != 6 {
+            return;
+        }
+        let cell = self.v6_cell();
+        crate::screen::write_screen_dims_px(&mut self.mem, width_px, height_px, cell);
+    }
+
     /// Tell the story the screen is `rows` lines by `cols` characters, writing
     /// header bytes $20/$21 (ZMSD §8.4) and, on v6, resizing windows 0 and 1 to
     /// match (in native pixels, via the current [`Machine::v6_cell`]).
@@ -6626,7 +6650,10 @@ impl Machine {
             self.set_v6_text(metric);
             if let Some((w, h)) = v6_screen_px {
                 if w > 0 && h > 0 {
-                    self.set_v6_screen_px(w, h);
+                    // NOT `set_v6_screen_px` (SQ-1580): that also resets windows 0/1
+                    // to full-screen, which is `@restart` semantics, not a restore's
+                    // — see `redeclare_v6_screen_px`'s doc.
+                    self.redeclare_v6_screen_px(w, h);
                 }
             }
         } else if rows > 0 && cols > 0 {
@@ -7162,6 +7189,50 @@ pub(crate) mod tests {
                  restore, not reconstituted from the character grid",
             );
         }
+    }
+
+    /// SQ-1580: `post_restore_fixups` re-applying the pixel screen after a
+    /// restore must NOT reset window 1 back to full-screen width — that is
+    /// `@restart`'s `set_v6_screen_px` semantics (frotz `restart_screen`:
+    /// nothing has been sized yet), and a restore's window table is not
+    /// touched by Quetzal at all (it holds no screen state by design). A game
+    /// that sized its own window 1 before the save — fmvpoker's title-banner
+    /// window, 289px inside a 640px screen — must find it exactly that width
+    /// afterwards, not stretched back out.
+    ///
+    /// FALSIFY by reverting `post_restore_fixups`'s v6 branch to call
+    /// `self.set_v6_screen_px(w, h)` again: window 1 comes back 640 wide
+    /// instead of the 289 the "game" set it to before the save.
+    #[test]
+    fn v6_host_restore_does_not_widen_a_game_sized_window_1() {
+        let mut m = Machine::new(Memory::new(v6_boot_story(&[0xB0])).unwrap());
+        m.set_v6_screen_px(640, 400);
+        assert_eq!(
+            m.screen.v6.as_ref().unwrap().windows[1].x_size,
+            640,
+            "premise: a freshly declared screen starts window 1 full-width"
+        );
+
+        // Simulate the game sizing its own window 1 — fmvpoker's banner —
+        // before the save is taken.
+        m.screen.v6_mut().unwrap().windows[1].x_size = 289;
+
+        let blob = m.save_quetzal();
+        m.restore_file(&blob).expect("host restore must succeed");
+
+        assert_eq!(
+            m.screen.v6.as_ref().unwrap().windows[1].x_size,
+            289,
+            "a host restore must leave window 1 exactly as the game had sized it, not reset it \
+             to full-screen (SQ-1580)"
+        );
+        // SQ-1572's guarantee must survive alongside this fix: the header still
+        // comes back in the exact pixels the host declared.
+        assert_eq!(
+            (m.mem.read_word(0x22), m.mem.read_word(0x24)),
+            (640, 400),
+            "the screen must still come back in the exact pixels the host declared"
+        );
     }
 
     /// SQ-1435: `v6_metric()` is the field `v6_cell()` already reads half of.
