@@ -173,7 +173,7 @@ fn save_restore_perturb(b: Booted, rebook: impl Fn() -> Option<Booted>) -> (Boot
 
     let mapper = mapper::mapper::Mapper::default();
     let es = Engine::save_state(&b.session);
-    let path = std::env::temp_dir().join(format!("sq1572-restore-{}.lanthorn", std::process::id()));
+    let path = app::scratch_dir("sq1572-restore").join("save.lanthorn");
     app::archive::save_archive_meta_pics(
         &path,
         &mapper,
