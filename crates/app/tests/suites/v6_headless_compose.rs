@@ -899,3 +899,225 @@ fn the_ordinary_presses_compose_unchanged_from_the_model() {
         }
     }
 }
+
+// ── V6Frame::ink — the story ink the composite paints with (SQ-1573) ────────
+//
+// A host drawing v6 prose itself under `RecordOnly` used to have to restate
+// `compose_v6_frame_into`'s own ink rule — `v6::story_fg_rgba` over the story
+// window, falling back to the host pair's ink — to match what `Rasterise` would
+// have painted. `V6Frame::ink` is now that one resolved value, read off the
+// frame instead of re-derived.
+
+/// Every story-prose glyph pixel `RasteriseAndRecord` painted and `RecordOnly`
+/// left unpainted is `frame.ink`, and nothing else — not "some colour", the
+/// EXACT one `Rasterise` uses.
+fn assert_ink_matches_every_prose_pixel(label: &str, full: &app::render::screen::V6Frame, bare: &app::render::screen::V6Frame) {
+    assert_eq!(full.ink, bare.ink, "{label}: ink must not depend on the text mode");
+    let mut painted = 0usize;
+    for (x, y, p) in full.canvas.enumerate_pixels() {
+        if bare.canvas.get_pixel(x, y) == p {
+            continue;
+        }
+        let inside_prose = full.text.iter().any(|r| {
+            r.source == v6::V6RunSource::StoryProse && (r.y..r.y + r.h).contains(&y) && r.boxes.iter().any(|&(bx, w)| (bx..bx + w).contains(&x))
+        });
+        if inside_prose {
+            painted += 1;
+            assert_eq!(*p, full.ink, "{label}: ({x},{y}) is a story-prose glyph pixel but not frame.ink");
+        }
+    }
+    assert!(painted > 0, "{label}: non-vacuity — no story-prose glyph pixel differed");
+}
+
+/// **The acceptance case, Zork Zero r393 and Journey r83.**
+#[test]
+fn frame_ink_is_the_colour_rasterise_paints_the_prose_in() {
+    for (file, b) in specimens() {
+        for honor in [true, false] {
+            let full = host_compose(&b, honor, V6TextMode::RasteriseAndRecord);
+            let bare = host_compose(&b, honor, V6TextMode::RecordOnly);
+            assert_ink_matches_every_prose_pixel(&format!("{file} honor={honor}"), &full, &bare);
+        }
+    }
+}
+
+/// [`for_model_compose`], with the text mode named by the caller — `for_model`
+/// always builds [`V6TextMode::Rasterise`] inputs, so this overrides the field
+/// afterward (public on [`V6FrameInputs`]) to reach `RasteriseAndRecord`/`RecordOnly`.
+fn for_model_compose_with_text(
+    model: &app::engine::ScreenModel,
+    state: &app::state::AppState,
+    text: V6TextMode,
+) -> app::render::screen::V6Frame {
+    let WinNode::Layered(items) = &model.root else { panic!("a v6 frame has a Layered root") };
+    let native = v6::native_extent(items, &state.v6_text);
+    let layout = v6::classify_windows(items, state.v6_text.cell());
+    let paint = state.v6_paint.borrow();
+    let prose = |cols: u16, rows: u16| app::render::screen::build_main_text(state, cols, rows);
+    let mut inputs = V6FrameInputs::for_model(state, model, paint.as_deref(), &prose, Some(state.input.value.as_str()));
+    inputs.text = text;
+    compose_v6_frame(&layout, RasterFrame::native(native), &inputs)
+}
+
+/// **The acceptance case, the Amiga Journey floppy** — its own machine page pair,
+/// composed from the model alone (SQ-1566's own path). `frame.ink` still matches
+/// `Rasterise`'s paint exactly under this press's pair, in both honour modes.
+#[test]
+fn frame_ink_matches_rasterise_on_the_amiga_journey_floppy() {
+    let Some(b) = amiga_journey_after_restore() else { return };
+    let model = b.session.screen();
+    for honor in [true, false] {
+        let state = tui_state(&b, honor);
+        let full = for_model_compose_with_text(&model, &state, V6TextMode::RasteriseAndRecord);
+        let bare = for_model_compose_with_text(&model, &state, V6TextMode::RecordOnly);
+        assert_ink_matches_every_prose_pixel(&format!("{AMIGA_JOURNEY} honor={honor}"), &full, &bare);
+    }
+}
+
+// ── InlineImage::margin_px — the gutter beside a v6 picture (SQ-1573) ────────
+//
+// `InlineImage::margin_px` was already `pub`, all the way from where a window-0
+// float is constructed (`session.rs`) through `TranscriptElem::Image` to
+// `AppState::transcript_images` — this is the test that was missing, proving the
+// raw value a host reads there is the SAME one the raster layout actually used
+// to place text beside the picture, not merely present.
+//
+// The raster wrap's own rule (`render/wrap_cache.rs::raster_wrap_extend`, private
+// to the crate) is simple once the picture is already in the v6 unit-pixel space
+// the text cell is stated in (SQ-0479): `margin_px` (or, absent one, the
+// picture's own width plus one cell) divided up by the cell width, rounded up.
+// This mirrors that formula — a host outside the crate cannot call the private
+// fn, so this is the same computation a host would have to make from the public
+// field.
+fn expected_float_text_col(margin_px: Option<u32>, native_w: u32, cell_w: u16) -> u16 {
+    let cell_w = u32::from(cell_w.max(1));
+    margin_px.unwrap_or(native_w + cell_w).div_ceil(cell_w) as u16
+}
+
+/// Boot Zork Zero r393 fresh and accumulate the boot banner through the real
+/// elems pipeline (`Engine::take_transcript_elems`), so `state.transcript_images`
+/// carries the window-0 floats (the ornate drop-cap and the room icon) exactly as
+/// a live session would — the same boot `v6_float_machine_page::frame` uses. This
+/// is a second boot path (rather than reusing [`boot_at`]) because `boot_at`
+/// already drains the plain transcript with `session.take_transcript()`, which
+/// would starve `take_transcript_elems`'s own sink drain of the very prose the
+/// float sizes itself against.
+fn zork0_real_transcript(honor: bool) -> Option<(GameSession, app::state::AppState)> {
+    let path = stories_dir().join("zork0-r393-s890714.z6");
+    let (bytes, medium) = match app::hints::load_mounted_story(&path) {
+        Ok((loaded, medium)) => (loaded.bytes().to_vec(), medium),
+        Err(_) => {
+            eprintln!("SKIP: gitignored story missing at {}", path.display());
+            return None;
+        }
+    };
+    let profile = InterpreterProfile::resolve(&path, None, None, medium);
+    let mut picts = PictSource::resolve_with_override(&path, app::graphics::PictureOverride::Unset, None);
+    let dims = picts.all_pict_dims();
+    let honoured = honor && !picts.declines_game_colours(profile.default_colours());
+    let faces = app::native_font::resolve(&app::native_font::FaceRequest {
+        story_path: &path,
+        entry: None,
+        profile,
+        source: app::interpreter::ProfileSource::Medium,
+        art_scale: picts.art_scale(),
+        disks: None,
+    });
+    let boot = app::machine_boot::MachineBoot::resolve(
+        profile,
+        &picts,
+        None,
+        profile.interpreter_number(),
+        honoured.then(|| profile.default_colours()).flatten(),
+        true,
+        faces.clone(),
+        profile.palette(),
+        None,
+    );
+    let art_scale = boot.art_scale;
+    let face = app::native_font::TextFace::new(profile, faces, art_scale);
+    let mut session = GameSession::new_for_machine(bytes, honoured, false, false, dims, None, None, &boot)
+        .unwrap_or_else(|e| panic!("zork0-r393: should boot without a ZError: {e:?}"));
+    session.set_pict_source(Some(picts));
+    session.flush_boot_pictures();
+
+    let mut state = app::state::AppState::default();
+    state.colors = app::colors::ColorScheme::terminal_default_in(profile.palette());
+    state.config.v6_render = app::config::V6RenderMode::Raster;
+    state.config.honor_game_colours = honoured;
+    state.v6_art_scale = art_scale.unwrap_or((2, 2));
+    state.v6_text = face;
+    *state.v6_paint.borrow_mut() = Engine::paint_surface(&session);
+    let elems = Engine::take_transcript_elems(&mut session);
+    app::state::apply_transcript_elems(&mut state, &elems);
+    Some((session, state))
+}
+
+/// **The acceptance case.** `InlineImage::margin_px`, read straight off the
+/// drop-cap `AppState::transcript_images` carries, reconstructs the raster
+/// layout's own text column exactly — and the pixel `RecordOnly` reports for the
+/// first prose glyph beside the picture lands exactly there too, not merely at
+/// some nonzero offset.
+#[test]
+fn drop_cap_margin_px_matches_where_the_raster_path_places_the_text_pixel() {
+    for honor in [true, false] {
+        let Some((session, state)) = zork0_real_transcript(honor) else { return };
+        let img = state
+            .transcript_images
+            .iter()
+            .flatten()
+            .find(|i| i.margin_px.is_some())
+            .unwrap_or_else(|| panic!("honor={honor}: no margin-carrying float on Zork Zero's boot banner"));
+        let cell = state.v6_text.cell();
+        eprintln!(
+            "honor={honor}: drop-cap margin_px={:?} native_w={} cell_w={}",
+            img.margin_px,
+            img.pixels.width(),
+            cell.w()
+        );
+
+        let (main, _) = app::render::screen::build_main_text(&state, 70, 30);
+        let rf = main
+            .floats
+            .iter()
+            .find(|f| std::sync::Arc::ptr_eq(&f.img, &img.pixels))
+            .unwrap_or_else(|| panic!("honor={honor}: the margin-carrying picture has no float in the raster layout"));
+        let expected_col = expected_float_text_col(img.margin_px, img.pixels.width(), cell.w());
+        assert_eq!(
+            rf.text_col, expected_col,
+            "honor={honor}: margin_px does not reconstruct the raster layout's own text column"
+        );
+
+        let model = session.screen();
+        let WinNode::Layered(items) = &model.root else { panic!("a v6 frame has a Layered root") };
+        let native = v6::native_extent(items, &state.v6_text);
+        let layout = v6::classify_windows(items, state.v6_text.cell());
+        let paint = state.v6_paint.borrow();
+        let prose = |c: u16, r: u16| app::render::screen::build_main_text(&state, c, r);
+        let inputs = V6FrameInputs {
+            host_pair: (HOST_INK, HOST_PAGE),
+            honor_game_colours: honor,
+            colors: &state.colors,
+            face: &state.v6_text,
+            paint: paint.as_deref(),
+            panel_input: None,
+            input: None,
+            prose: &prose,
+            reveal: None,
+            pager_active: false,
+            more_prompt_pair: (HOST_INK, HOST_PAGE),
+            text: V6TextMode::RecordOnly,
+        };
+        let f = compose_v6_frame(&layout, RasterFrame::native(native), &inputs);
+        let s = f.story.unwrap_or_else(|| panic!("honor={honor}: no story box on Zork Zero's boot frame"));
+        let row_top = s.y + (rf.row.max(0) as u32) * u32::from(cell.h());
+        let painted = f
+            .text
+            .iter()
+            .find(|r| r.source == v6::V6RunSource::StoryProse && r.y == row_top)
+            .unwrap_or_else(|| panic!("honor={honor}: no story prose recorded on the float's own row {row_top}"));
+        let (px, _) = *painted.boxes.first().expect("a run has a box");
+        let expected_x = s.x + u32::from(rf.text_col) * u32::from(cell.w());
+        assert_eq!(px, expected_x, "honor={honor}: the prose beside the drop-cap is not at margin_px's own column");
+    }
+}

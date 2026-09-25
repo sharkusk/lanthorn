@@ -2943,6 +2943,14 @@ pub struct V6Frame {
     /// The page the composite was flattened onto: every pixel no layer painted is
     /// this colour, including the story box of a frame with no prose (SQ-1567).
     pub page: image::Rgba<u8>,
+    /// The story ink the composite drew (or would draw) its prose in — the same
+    /// resolved value [`compose_v6_frame_into`] paints with, game-set colour first,
+    /// [`V6FrameInputs::host_pair`]'s ink otherwise (SQ-1573). A host drawing its
+    /// own prose under [`V6TextMode::RecordOnly`](crate::render::v6_layout::V6TextMode::RecordOnly)
+    /// used to have to restate that fallback rule itself (`v6::story_fg_rgba` plus
+    /// the same default) to match; this is that one answer, so the two cannot
+    /// drift apart.
+    pub ink: image::Rgba<u8>,
     /// The input caret, where one was drawn. Painted into `canvas` in every mode
     /// but [`V6TextMode::RecordOnly`](crate::render::v6_layout::V6TextMode::RecordOnly),
     /// which leaves it to the host (SQ-1567).
@@ -3294,7 +3302,7 @@ fn compose_v6_frame_into(
         // screen. See `story_window_is_a_canvas`: fmvpoker alone.
         if story_window_is_a_canvas(layout, native) {
             v6::draw_story_canvas_runs_into(&mut canvas, layout.story, ink, page, honor, inputs.colors, inputs.face, glyphs);
-            return finish_v6_raster_canvas(canvas, page, raster_metrics, None, frame);
+            return finish_v6_raster_canvas(canvas, page, ink, raster_metrics, None, frame);
         }
         // **A `Grid` in the story slot contributes its RECT and nothing else**
         // (SQ-1026). With no primary `Buffer` on the frame, `classify_windows`
@@ -3315,7 +3323,7 @@ fn compose_v6_frame_into(
         // No prose box and no scroll metrics, exactly as when a plate owns the
         // screen — there is no transcript on this frame.
         if !matches!(layout.story.map(|s| &s.node), Some(WinNode::Buffer(_))) {
-            return finish_v6_raster_canvas(canvas, page, raster_metrics, None, frame);
+            return finish_v6_raster_canvas(canvas, page, ink, raster_metrics, None, frame);
         }
         // Whether any prose belongs on THIS frame, and where (SQ-0707). An
         // absolutely-placed plate is drawn INSTEAD of prose, not under it: the
@@ -3323,7 +3331,7 @@ fn compose_v6_frame_into(
         // screen. `None` = the plate owns the screen, and rasterizing scrollback
         // onto it would paint the PREVIOUS screen's text across the art.
         let Some((tx, ty, tw, th)) = v6::story_prose_box((sx, sy, sw, sh), layout.story_gfx, cell) else {
-            return finish_v6_raster_canvas(canvas, page, raster_metrics, None, frame);
+            return finish_v6_raster_canvas(canvas, page, ink, raster_metrics, None, frame);
         };
         // Window-0 inline pictures (drop-caps, room icons) arrive as
         // transcript-anchored floats (`transcript_images` sidecar):
@@ -3449,7 +3457,7 @@ fn compose_v6_frame_into(
     // identical on every protocol/terminal. Touches alpha==0 pixels
     // ONLY — art, status bands, glyphs and drop-caps are all opaque and
     // are left byte-for-byte alone. (SQ-0510)
-    finish_v6_raster_canvas(canvas, page, raster_metrics, story_box, frame)
+    finish_v6_raster_canvas(canvas, page, ink, raster_metrics, story_box, frame)
 }
 
 /// Seal a v6 raster composite: resolve every still-transparent pixel to the story
@@ -3458,12 +3466,13 @@ fn compose_v6_frame_into(
 fn finish_v6_raster_canvas(
     mut canvas: image::RgbaImage,
     page: image::Rgba<u8>,
+    ink: image::Rgba<u8>,
     raster_metrics: Option<RasterMetrics>,
     story: Option<V6StoryBox>,
     frame: crate::render::v6_layout::RasterFrame,
 ) -> V6Frame {
     crate::render::v6_layout::flatten_onto_page(&mut canvas, page);
-    V6Frame { canvas, metrics: raster_metrics, frame, text: Vec::new(), story, page, caret: None }
+    V6Frame { canvas, metrics: raster_metrics, frame, text: Vec::new(), story, page, ink, caret: None }
 }
 
 /// SQ-1032: the same composite with more transparent native rows below it.
