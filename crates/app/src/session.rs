@@ -1630,7 +1630,7 @@ impl GameSession {
         // Keep the win0 char-offset base in sync with the drained sink, so any
         // later inline-picture interleave measures against the right origin.
         self.v6_win0_chars_seen = self.machine.v6_win0_out_chars;
-        if self.strip_prompt { strip_read_prompt(&raw).to_owned() } else { raw }
+        if self.strip_prompt { strip_read_prompt_for(&raw, self.pending).to_owned() } else { raw }
     }
 
     /// Drain the game's pending screen clear: the per-turn `erase_window` flag
@@ -1960,7 +1960,7 @@ impl GameSession {
         let (erase_lower, cleared_at) = self.take_screen_clear();
         let (raw, raw_runs) = sink_mut(&mut self.machine).take_styled();
         self.v6_win0_chars_seen = self.machine.v6_win0_out_chars;
-        let transcript = if self.strip_prompt { strip_read_prompt(&raw).to_owned() } else { raw };
+        let transcript = if self.strip_prompt { strip_read_prompt_for(&raw, self.pending).to_owned() } else { raw };
         let transcript_runs = clamp_runs(raw_runs, transcript.chars().count());
         let detected = detect_location_with(&self.machine, self.player_candidates());
         let location = detected.as_ref().map(location_to_snapshot);
@@ -4721,41 +4721,68 @@ fn run_settled(machine: &mut Machine) -> (InputKind, bool, String) {
     }
 }
 
-/// Strip a trailing interactive read prompt from captured Z-machine output.
+/// Strip the game's trailing read prompt from output that ends at a LINE read,
+/// so the command bar's own `> ` (and the host's `> cmd` echo above it) is the
+/// only prompt the player sees. Only ever called with `strip_prompt` on, which
+/// the host ties to `command_bar` — inline-prompt mode keeps the game's `>`.
 ///
-/// Infocom-style games print a bare ">" (possibly preceded by whitespace or a
-/// newline, possibly followed by a space) as the last thing before issuing a
-/// read/sread opcode.  When that output is captured we want to remove it so the
-/// app's own fixed bottom input line is the only ">" the player sees.
+/// Trailing spaces/tabs are ignored, then the trailing run of `>` (one or more)
+/// is removed when either:
 ///
-/// The rule: trim trailing ASCII whitespace; if the result ends with ">" AND
-/// that ">" is preceded by a newline or is the only character, remove it and
-/// trim trailing whitespace again.  Any ">" that appears mid-sentence (e.g.
-/// inside a score display like "score > 10") is unaffected because it will not
-/// be the last non-whitespace character after a newline.
+/// - **it stands alone on its line** (preceded by a newline, or nothing): the
+///   Infocom `\n>` and *Bureaucracy*'s `\n>>` — and the blank lines before it go
+///   too; or
+/// - **it closes a sentence**: the character before it (allowing ONE space) is
+///   `? . ! : ] )`, and only that run and its space go — *Beyond Zork*'s
+///   `[Please type YES or NO.] >`, *Bronze*'s `…before? >`, *Counterfeit
+///   Monkey*'s `Can you hear me? >>`, *Fairest*'s `…the game?>` (SQ-1564).
+///
+/// Anything else is kept: a `>` with text after it is not trailing at all
+/// (Nameless's `G>amez` menu), and a `>` straight after a word (`go >`) is
+/// ambiguous, so it stays.
+///
+/// See [`strip_read_prompt_for`] for reads that are not line reads.
 pub(crate) fn strip_read_prompt(s: &str) -> &str {
+    strip_read_prompt_for(s, InputKind::Line)
+}
+
+/// [`strip_read_prompt`] for output ending at a read of kind `pending`.
+///
+/// A prompt run alone on its own line is stripped whatever the read (as it
+/// always was); a run that closes a line of text is stripped only before a LINE
+/// read. At a `read_char` the command bar draws no prompt and the host echoes
+/// nothing, so the game's own `>` — *Border Zone*'s `…(R)estore? >`,
+/// *Nameless*'s `Q>>` — is the only cue the player has, and nothing doubles it.
+pub(crate) fn strip_read_prompt_for(s: &str, pending: InputKind) -> &str {
     let trimmed = s.trim_end_matches([' ', '\t']);
-    // After stripping trailing spaces/tabs the string may still end with "\n>"
-    // or just ">".  Check for that and strip.
-    if let Some(without_gt) = trimmed.strip_suffix('>') {
-        // Only strip if the ">" is at the start of a line (preceded by '\n')
-        // or if it's the only character remaining.
-        let preceded_by_newline = without_gt.ends_with('\n') || without_gt.is_empty();
-        if preceded_by_newline {
-            return without_gt.trim_end_matches([' ', '\t', '\n', '\r']);
+    let before = trimmed.trim_end_matches('>');
+    if before.len() == trimmed.len() {
+        return trimmed;
+    }
+    if before.is_empty() || before.ends_with('\n') {
+        return before.trim_end_matches([' ', '\t', '\n', '\r']);
+    }
+    if pending == InputKind::Line {
+        let text = before.strip_suffix(' ').unwrap_or(before);
+        if text.ends_with(['?', '.', '!', ':', ']', ')']) {
+            return text;
         }
     }
     trimmed
 }
 
-/// Whether `s` ends with the read prompt [`strip_read_prompt`] would remove —
-/// i.e. whether the game just handed the player its command prompt.
+/// Whether `s` ends with the game's PARSER prompt — a single `>` alone on its
+/// line — i.e. whether the game just handed the player its command prompt.
 ///
-/// Defined in terms of `strip_read_prompt` rather than beside it so the two can
-/// never drift: lanthorn has exactly one notion of "the game's read prompt", and
-/// a game whose prompt this misses already shows the player a doubled prompt.
+/// Deliberately narrower than [`strip_read_prompt`]: that one also removes a
+/// prompt closing a question (`…the game?>`), which is exactly what this must
+/// NOT match. Glulx's silent `look` relies on this to tell a parser from a
+/// question (SQ-1293), and typing LOOK at a yes/no question would answer it.
 pub(crate) fn ends_with_read_prompt(s: &str) -> bool {
-    strip_read_prompt(s).len() < s.trim_end_matches([' ', '\t']).len()
+    let trimmed = s.trim_end_matches([' ', '\t']);
+    trimmed
+        .strip_suffix('>')
+        .is_some_and(|before| before.is_empty() || before.ends_with('\n'))
 }
 
 /// Downcast `machine.out` to `&mut CaptureSink`.
@@ -5403,7 +5430,7 @@ impl Engine for GameSession {
         let base = self.v6_win0_chars_seen;
         let (raw, raw_runs) = sink_mut(&mut self.machine).take_styled();
         self.v6_win0_chars_seen = self.machine.v6_win0_out_chars;
-        let transcript = if self.strip_prompt { strip_read_prompt(&raw).to_owned() } else { raw };
+        let transcript = if self.strip_prompt { strip_read_prompt_for(&raw, self.pending).to_owned() } else { raw };
         let runs = clamp_runs(raw_runs, transcript.chars().count());
         let marks = std::mem::take(&mut self.story_pics)
             .into_iter()
@@ -9431,6 +9458,91 @@ mod tests {
     fn strip_prompt_no_trailing_prompt_unchanged() {
         let s = "You are in a maze of twisty passages, all alike.";
         assert_eq!(strip_read_prompt(s), s);
+    }
+
+    // SQ-1564: the prompt shapes command-bar mode left behind, each quoted from
+    // the story's own output at a line read.
+
+    #[test]
+    fn strip_prompt_removes_a_run_of_gt_alone_on_its_line() {
+        // Bureaucracy r116's boot: `>>` alone on its line.
+        assert_eq!(
+            strip_read_prompt("…to start the game anew.\n>>"),
+            "…to start the game anew."
+        );
+        assert_eq!(strip_read_prompt("Text.\n\n>>> "), "Text.");
+        assert_eq!(strip_read_prompt(">>"), "");
+    }
+
+    #[test]
+    fn strip_prompt_removes_a_gt_closing_a_sentence_after_a_space() {
+        // Beyond Zork r57, Bronze, Border Zone r9 (the last only at a line read).
+        assert_eq!(
+            strip_read_prompt("Is this a VT220?\n\n[Please type YES or NO.] >"),
+            "Is this a VT220?\n\n[Please type YES or NO.]"
+        );
+        assert_eq!(
+            strip_read_prompt("Have you played interactive fiction before? >"),
+            "Have you played interactive fiction before?"
+        );
+        assert_eq!(
+            strip_read_prompt("Which chapter would you like to play: 1, 2, 3, or (R)estore? >"),
+            "Which chapter would you like to play: 1, 2, 3, or (R)estore?"
+        );
+    }
+
+    #[test]
+    fn strip_prompt_removes_a_gt_run_closing_a_sentence() {
+        // Counterfeit Monkey r11: a run, a space, and a trailing space after it.
+        assert_eq!(strip_read_prompt("\n\nCan you hear me? >> "), "\n\nCan you hear me?");
+    }
+
+    #[test]
+    fn strip_prompt_removes_a_gt_touching_the_sentence() {
+        // Fairest / What Heart Heard of Ghost Guessed: no space before the `>`.
+        assert_eq!(
+            strip_read_prompt("Would you like to read some helpful information before starting the game?>"),
+            "Would you like to read some helpful information before starting the game?"
+        );
+    }
+
+    #[test]
+    fn strip_prompt_keeps_a_gt_run_after_a_word() {
+        // `go >` / Nameless's `Q>>`: a `>` straight after a word is ambiguous, so
+        // it stays — the rule needs a closing punctuation mark or a line of its own.
+        assert_eq!(strip_read_prompt("Go east, then go >>"), "Go east, then go >>");
+        assert_eq!(strip_read_prompt("(10 Std) A N M>> "), "(10 Std) A N M>>");
+        // …and a `>` with text after it is not trailing at all.
+        let menu = "   G>amez    M>ailz\n   W>arez    Q>uitz";
+        assert_eq!(strip_read_prompt(menu), menu);
+    }
+
+    #[test]
+    fn strip_prompt_after_text_is_kept_at_a_char_read() {
+        // At a `read_char` the command bar draws no prompt and the host echoes
+        // nothing, so the game's own `>` is the player's only cue: Border Zone r9
+        // asks for its chapter this way, and Nameless's BBS menus too.
+        let bz = "Which chapter would you like to play: 1, 2, 3, or (R)estore? >";
+        assert_eq!(strip_read_prompt_for(bz, InputKind::Char), bz);
+        let fairest = "…before starting the game?>";
+        assert_eq!(strip_read_prompt_for(fairest, InputKind::Char), fairest);
+        assert_eq!(strip_read_prompt_for(fairest, InputKind::Event), fairest);
+        // A prompt alone on its line is still stripped whatever the read, as it
+        // always was.
+        assert_eq!(strip_read_prompt_for("Text.\n>", InputKind::Char), "Text.");
+        assert_eq!(strip_read_prompt_for("Text.\n>>", InputKind::Char), "Text.");
+    }
+
+    #[test]
+    fn ends_with_read_prompt_is_the_parser_prompt_only() {
+        // The SQ-1293 silent LOOK must not fire at a question, so the widened
+        // strip (a `>` closing a question) is not a parser prompt here.
+        assert!(ends_with_read_prompt("You are in a room.\n\n> "));
+        assert!(ends_with_read_prompt(">"));
+        assert!(!ends_with_read_prompt("…before starting the game?>"));
+        assert!(!ends_with_read_prompt("Can you hear me? >> "));
+        assert!(!ends_with_read_prompt("Text.\n>>"));
+        assert!(!ends_with_read_prompt("Go east, then go >"));
     }
 
     // ── key_input_to_zscii: arrow and function keys (Bug B) ──────────────────

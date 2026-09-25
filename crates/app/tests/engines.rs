@@ -23,6 +23,8 @@ mod host_boot;
 mod host_probe;
 #[path = "suites/host_session.rs"]
 mod host_session;
+#[path = "suites/sq1564_command_bar_prompt.rs"]
+mod sq1564_command_bar_prompt;
 #[path = "suites/host_turn.rs"]
 mod host_turn;
 
