@@ -7537,6 +7537,30 @@ fn menu_flank_art(gfx: &image::RgbaImage, nx0: u32, nx1: u32) -> Option<(u32, u3
     Some((ax0, ay0, ax1 - ax0 + 1, ay1 - ay0 + 1, panel))
 }
 
+/// The native x-columns, within one text cell, a chrome run's own character
+/// actually paints — [`crate::native_font::TextFace::glyph_image`], the same
+/// table [`crate::render::bitfont::blit_glyph_styled`] draws the composite's
+/// real glyph pixels from, so a box-drawing character's one-pixel stroke
+/// answers as one pixel here too, never the cell's whole width (SQ-1578,
+/// [`fill_menu_flank_extension`]'s divider-fallback branch, ported from this
+/// same table rather than probed off the canvas — the canvas carries no
+/// glyph ink at all under [`V6TextMode::RecordOnly`], so a canvas probe could
+/// never agree between modes the way this table-based answer does).
+/// `None` when the glyph paints nothing (a bare space).
+fn glyph_ink_columns(face: &crate::native_font::TextFace, ch: char, style: u8) -> Option<(u32, u32)> {
+    let g = face.glyph_image(ch, style)?;
+    let (mut x0, mut x1) = (u32::MAX, 0u32);
+    for y in 0..g.height {
+        for x in 0..g.width {
+            if g.ink(x, y) {
+                x0 = x0.min(x);
+                x1 = x1.max(x);
+            }
+        }
+    }
+    (x1 >= x0).then_some((x0, x1 + 1))
+}
+
 /// The Menu plan's side flanks, extended into the rows the bottom-anchored
 /// band opened (SQ-1574) — for a host composing its own [`V6TextMode`] rather
 /// than drawing the TUI's own Hybrid cells and kitty image.
@@ -7702,7 +7726,12 @@ fn fill_menu_flank_extension(
                     tx0 < bx1 && tx0 + tw > bx0 && ty0 + u32::from(cell.h()) >= story_bottom
                 })
                 .max_by_key(|t| t.y);
-            let block = if let Some(t) = nearest_run {
+            // `(x0, x1, colour, last_row)`: the columns to paint, the colour
+            // to paint them, and the last row ABOVE the gap that this
+            // column's own real content already reaches — the fill starts
+            // one row below that, not unconditionally at `story_bottom`
+            // (SQ-1578).
+            let block: Option<(u32, u32, image::Rgba<u8>, u32)> = if let Some(t) = nearest_run {
                 let px0 = t.x.max(1) as u32 - 1;
                 let py = t.y.max(1) as u32 - 1;
                 let tw = face.run_px_styled(&t.text, t.style);
@@ -7710,20 +7739,70 @@ fn fill_menu_flank_extension(
                     v6::region_has_opaque(gfx, px0, py, tw, u32::from(cell.h()))
                 });
                 // A real block (reverse-video, SQ-1576's original report)
-                // wins; a plain glyph with none — Journey's Amiga press
-                // draws its dividers as `│`/`┐`/`└` line-drawing characters,
-                // not reverse blocks — carries its own INK down instead,
-                // matching what `Rasterise`'s bare "nearest opaque pixel"
-                // scan actually finds there: the glyph's own stroke is the
-                // only thing painted in a cell with no block, so that ink is
-                // what a naive scan starting right at the gap always landed
-                // on, and RecordOnly has to agree without ever painting it.
-                Some(bg.unwrap_or(fg))
+                // wins and keeps the whole cell's width — a reverse fill
+                // genuinely paints all of it. A plain glyph with none —
+                // Journey's Amiga press draws its dividers as `│`/`┐`/`└`
+                // line-drawing characters, not reverse blocks — carries only
+                // its own STROKE down instead (SQ-1578): `glyph_ink_columns`
+                // reads the same table `blit_glyph_styled` paints the
+                // composite's real glyph from, so a `│`'s one native pixel
+                // answers as one pixel here too, never the whole 8px cell
+                // the old fallback thickened it to. Either way this run
+                // reaches within one cell of `story_bottom` by construction
+                // (SQ-1576), so the fill keeps starting exactly there.
+                match bg {
+                    Some(block) => Some((bx0, bx1, block, story_bottom.saturating_sub(1))),
+                    None => {
+                        let idx = ((bx0.max(px0) - px0) / cw.max(1)) as usize;
+                        let glyph = t.text.chars().nth(idx).unwrap_or(' ');
+                        let gnx0 = px0 + idx as u32 * cw;
+                        let ink = glyph_ink_columns(face, glyph, t.style);
+                        // …and the CELL'S OWN GROUND under that stroke also
+                        // carries down, same as the stroke does — the window
+                        // page fill `grounds` painted for this run's cell
+                        // (SQ-0704) reaches every pixel of it in the
+                        // original rows, not merely the glyph's own ink, so
+                        // stopping short of it here would strand a page
+                        // colour at the gap's edge (visible wherever the
+                        // page is not the bare story page). Sampled from a
+                        // neighbour OUTSIDE the glyph's own span so it
+                        // agrees between `RecordOnly` and `Rasterise` — the
+                        // page fill is never gated on [`V6TextMode`], only
+                        // the glyph blit is, so a pixel the glyph cannot
+                        // reach reads the same in both.
+                        if let Some((ix0, ix1)) = ink {
+                            let (ax0, ax1) = (gnx0 + ix0, gnx0 + ix1);
+                            let probe_y = story_bottom.saturating_sub(1).min(canvas.height().saturating_sub(1));
+                            let page = if bx0 < ax0 {
+                                Some(*canvas.get_pixel(bx0, probe_y))
+                            } else if bx1 > ax1 {
+                                Some(*canvas.get_pixel(bx1 - 1, probe_y))
+                            } else {
+                                None
+                            };
+                            if let Some(page) = page {
+                                for y in story_bottom..avail_h.min(canvas.height()) {
+                                    for x in bx0..bx1.min(canvas.width()) {
+                                        canvas.put_pixel(x, y, page);
+                                    }
+                                }
+                            }
+                        }
+                        ink.map(|(ix0, ix1)| (gnx0 + ix0, gnx0 + ix1, fg, story_bottom.saturating_sub(1)))
+                    }
+                }
             } else {
+                // SQ-1578: capture the row the uniform fill was actually
+                // found at, not merely its colour — a border whose real
+                // content stops short of `story_bottom` (Journey's PC press
+                // draws its right bar as a window page fill that ends
+                // several rows above the story's own foot) used to leave a
+                // NOTCH between there and the gap this loop started filling
+                // from unconditionally.
                 (0..above).rev().find_map(|y| {
                     let mut px = (bx0..bx1).map(|x| *canvas.get_pixel(x, y));
                     let first = px.next()?;
-                    (first[3] > 0 && px.all(|p| p == first)).then_some(first)
+                    (first[3] > 0 && px.all(|p| p == first)).then_some((bx0, bx1, first, y))
                 })
             };
             // Unconditional, not gated on transparency: `avail_h` is exactly
@@ -7731,9 +7810,12 @@ fn fill_menu_flank_extension(
             // below this bound is ever real content to protect — the
             // divider's own resolved colour is authoritative over whatever
             // the panel flood above put there as this flank's baseline.
-            if let Some(block) = block {
-                for y in story_bottom..avail_h.min(canvas.height()) {
-                    for x in bx0..bx1 {
+            // Filling from `last_row + 1` rather than `story_bottom`
+            // unconditionally closes that same notch instead of stepping
+            // over it (SQ-1578).
+            if let Some((fx0, fx1, block, last_row)) = block {
+                for y in (last_row + 1)..avail_h.min(canvas.height()) {
+                    for x in fx0..fx1.min(canvas.width()) {
                         canvas.put_pixel(x, y, block);
                     }
                 }

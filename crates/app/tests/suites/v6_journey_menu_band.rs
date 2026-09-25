@@ -518,8 +518,21 @@ fn menu_anchor_compose_bottom_anchors_the_band_and_fills_the_flanks() {
         // colour, not the bare story page — sampled well clear of any band run's
         // own glyph ink, so this cannot pass merely because a run happened to
         // cover the sampled pixel.
+        //
+        // A flank no wider than one text cell carries no ART at all
+        // (`menu_flank_art`'s own doc: Journey's right-hand column here is
+        // "eight native pixels of border and nothing else") — only a
+        // divider's own narrow stroke, on the SAME page colour the story
+        // itself sits on above the gap (SQ-1578 narrowed this flank's fill
+        // from a thickened whole-cell block down to that real stroke, so a
+        // column beside it legitimately reads as the bare page here too,
+        // exactly as it does in the eight rows above the gap). The strict
+        // "never the bare page" check is for a flank that actually carries a
+        // picture, which still gets fully reflooded with its own panel
+        // colour (SQ-1577), unaffected by that narrowing.
         let sx0 = story.x_px as u32;
         let sx1 = (story.x_px as u32 + story.w_px as u32).min(native.0 as u32);
+        let cw = u32::from(cell.w().max(1));
         let flanks: [(u32, u32); 2] = [(0, sx0), (sx1, native.0 as u32)];
         let mut sampled_any = false;
         for (fx0, fx1) in flanks {
@@ -529,6 +542,17 @@ fn menu_anchor_compose_bottom_anchors_the_band_and_fills_the_flanks() {
             // One native row above the relocated band's own top — inside the gap
             // the extension opened, outside any run's glyph box.
             let y = story_bottom + extension.saturating_sub(1);
+            if fx1 - fx0 <= cw {
+                let any_ink = (fx0..fx1)
+                    .any(|x| *anchored.canvas.get_pixel(x, y.min(anchored.canvas.height() - 1)) != HOST_PAGE);
+                assert!(
+                    any_ink,
+                    "{file} (r{release}): border-only flank ({fx0}..{fx1}) at row {y} carries no ink at all — \
+                     the border never reached the gap"
+                );
+                sampled_any = true;
+                continue;
+            }
             for x in (fx0..fx1).step_by(4) {
                 let p = *anchored.canvas.get_pixel(x, y.min(anchored.canvas.height() - 1));
                 assert_ne!(
@@ -747,4 +771,169 @@ fn the_tuis_own_hybrid_centres_the_flank_picture_in_the_panel() {
             );
         }
     }
+}
+
+// ── (e) SQ-1578: the divider/border extension carries real columns and colours, not a thickened block or a notch ──
+//
+// `fill_menu_flank_extension`'s divider-fallback branch used to resolve ONE
+// ink colour for a run with no reverse block and paint it across the run's
+// WHOLE 8px text cell (`bx0..bx1`) for every extension row — thickening a
+// line-drawing character's one-pixel stroke into a solid bar (Journey's
+// Amiga press, r30) — and, separately, always started that fill at
+// `story_bottom` even when the border's own real content (a window page
+// fill with no text run near the gap) stopped short of it, leaving a NOTCH
+// between there and the gap (Journey's IBM PC press, r83). Both are one fix:
+// `glyph_ink_columns` narrows the stroke to the columns the font itself
+// paints there, and the canvas-scan fallback now starts its fill one row
+// below wherever it actually found the border's last content, not
+// unconditionally at `story_bottom`.
+
+/// SQ-1578's Amiga acceptance case: a line-drawn divider or border keeps the
+/// SAME stroke width in the extension that it has in the row directly above
+/// the gap — never thickened to the whole 8px cell.
+///
+/// FALSIFY by reverting `glyph_ink_columns`'s use in
+/// `fill_menu_flank_extension`'s divider-fallback branch back to painting
+/// `bx0..bx1` unconditionally: every narrow stroke below comes back as wide
+/// as its own cell in the extension while staying narrow in the row above
+/// it, and the width comparison fails.
+#[test]
+fn menu_anchor_compose_keeps_the_dividers_real_stroke_width_in_the_extension() {
+    let (file, release) = RELEASES[0];
+    let Some(session) = boot(file) else { return };
+    let model = session.screen();
+    let WinNode::Layered(items) = &model.root else { panic!("a v6 frame has a Layered root") };
+    let tf = app::native_font::TextFace::cell_only(zvm::screen::V6Cell::DEFAULT);
+    let native = v6::native_extent(items, &tf);
+    let cell = tf.cell();
+    let layout = v6::classify_windows(items, cell);
+    let story = layout.story.expect("Journey has a story window on this frame");
+    let story_bottom = story.y_px as u32 + story.h_px as u32;
+    let cw = u32::from(cell.w().max(1));
+
+    let want = RasterFrame::extended(native, TALL_PANE_DEV, cell, Some(2.0), true);
+    let extension = want.extension();
+    assert!(extension > 0, "{file} (r{release}): premise — this pane must actually extend");
+
+    let anchored = menu_anchor_compose(&session, want, V6TextMode::Rasterise, true);
+
+    // How many of `[x0, x1)`'s pixels at row `y` differ from the block's own
+    // MAJORITY colour — the page/ground a real stroke sits on, whichever
+    // edge it happens to sit at. A block with no stroke at all reads 0; a
+    // one-pixel-wide `│` reads 1; the pre-fix bug (one flat colour painted
+    // across the whole cell) also reads 0 here, which is exactly why this
+    // is compared against the SAME measurement taken one row up rather than
+    // asserted as a bare non-zero count.
+    let stroke_width = |x0: u32, x1: u32, y: u32| -> u32 {
+        let y = y.min(anchored.canvas.height() - 1);
+        let mut counts: std::collections::HashMap<image::Rgba<u8>, u32> = Default::default();
+        for x in x0..x1 {
+            *counts.entry(*anchored.canvas.get_pixel(x, y)).or_insert(0) += 1;
+        }
+        let total = x1 - x0;
+        total - counts.values().copied().max().unwrap_or(0)
+    };
+
+    let sx0 = story.x_px as u32;
+    let sx1 = (story.x_px as u32 + story.w_px as u32).min(native.0 as u32);
+    // Only the genuine divider/border cells — the outer edge, the inner
+    // divider abutting the story box, and the right-hand flank (border-only
+    // by construction, per `menu_flank_art`'s own doc) — never the broad
+    // picture area between them: the recentred art (SQ-1577) legitimately
+    // moves its own content to a different row, so comparing "the same row
+    // above vs. in the extension" inside the picture itself is not this
+    // quest's question and produces a width mismatch that has nothing to do
+    // with a thickened stroke.
+    let flanks: [(u32, u32); 3] = [(0, cw.min(sx0)), (sx0.saturating_sub(cw), sx0), (sx1, native.0 as u32)];
+    let above_y = story_bottom.saturating_sub(1);
+    let ext_y = story_bottom + extension / 2;
+    let mut checked_any = false;
+    for (fx0, fx1) in flanks {
+        let mut bx0 = fx0;
+        while bx0 < fx1 {
+            let bx1 = (bx0 + cw).min(fx1);
+            let above = stroke_width(bx0, bx1, above_y);
+            // A real, narrow stroke in this cell (not a blank block, and not
+            // a reverse-video block filling the whole cell either).
+            if above > 0 && above < bx1 - bx0 {
+                let ext = stroke_width(bx0, bx1, ext_y);
+                assert_eq!(
+                    ext, above,
+                    "{file} (r{release}): column {bx0}..{bx1} is {above}px wide at row {above_y} (just above \
+                     the gap) but {ext}px at row {ext_y} (inside the extension) — thickened instead of \
+                     carried down verbatim"
+                );
+                checked_any = true;
+            }
+            bx0 = bx1;
+        }
+    }
+    assert!(checked_any, "{file} (r{release}): premise — at least one narrow divider/border stroke must exist");
+}
+
+/// SQ-1578's IBM PC acceptance case: the right-hand border bar is continuous
+/// from well above the story window all the way down to the relocated
+/// band, with no notch between where its own real content used to stop and
+/// where the gap used to start filling from.
+///
+/// FALSIFY by reverting the canvas-scan fallback's `last_row` capture in
+/// `fill_menu_flank_extension` back to always filling from `story_bottom`:
+/// the notch this quest reports reappears as one or more gap rows between
+/// the bar's own last real row and the gap.
+#[test]
+fn menu_anchor_compose_pc_right_bar_has_no_notch_before_the_gap() {
+    let (file, release) = RELEASES[1];
+    let Some(session) = boot(file) else { return };
+    let model = session.screen();
+    let WinNode::Layered(items) = &model.root else { panic!("a v6 frame has a Layered root") };
+    let tf = app::native_font::TextFace::cell_only(zvm::screen::V6Cell::DEFAULT);
+    let native = v6::native_extent(items, &tf);
+    let cell = tf.cell();
+    let layout = v6::classify_windows(items, cell);
+    let story = layout.story.expect("Journey has a story window on this frame");
+    let story_bottom = story.y_px as u32 + story.h_px as u32;
+
+    let want = RasterFrame::extended(native, TALL_PANE_DEV, cell, Some(2.0), true);
+    let extension = want.extension();
+    assert!(extension > 0, "{file} (r{release}): premise — this pane must actually extend");
+    let avail_h = story_bottom + extension;
+
+    let anchored = menu_anchor_compose(&session, want, V6TextMode::Rasterise, true);
+
+    let sx1 = (story.x_px as u32 + story.w_px as u32).min(native.0 as u32);
+    let (fx0, fx1) = (sx1, native.0 as u32);
+    assert!(fx1 > fx0, "{file} (r{release}): premise — a right-hand flank must exist");
+
+    // A row carries "the bar" when the whole flank width is one uniform
+    // opaque colour there — the same test `fill_menu_flank_extension`'s own
+    // canvas-scan fallback uses to find a window's page/reverse fill.
+    let bar_at = |y: u32| -> Option<image::Rgba<u8>> {
+        let y = y.min(anchored.canvas.height() - 1);
+        let mut px = (fx0..fx1).map(|x| *anchored.canvas.get_pixel(x, y));
+        let first = px.next()?;
+        (first[3] > 0 && px.all(|p| p == first)).then_some(first)
+    };
+    // The bar's own colour, read off the row directly above the gap (the
+    // same row the quest's own measurement table is built from) — never
+    // "whichever uniform colour comes first scanning from row 0", which
+    // lands on the window's own PAGE fill instead (also opaque, also
+    // uniform, just a different colour) wherever the bar does not reach
+    // all the way to the story's own top edge.
+    let probe_y = story_bottom.saturating_sub(1);
+    let bar_colour = bar_at(probe_y)
+        .unwrap_or_else(|| panic!("{file} (r{release}): premise — the row above the gap must carry a bar"));
+    // Where that SAME colour first begins, walking upward from there.
+    let top = (0..=probe_y).rev().take_while(|&y| bar_at(y) == Some(bar_colour)).last().unwrap_or(probe_y);
+
+    // Continuous means the SAME bar colour the whole way down — not merely
+    // "some uniform colour or other" at every row, which the window's own
+    // page fill (opaque, but a different colour) would also satisfy and so
+    // could not tell a real notch apart from the bar itself.
+    let gap_rows: Vec<u32> = (top..avail_h).filter(|&y| bar_at(y) != Some(bar_colour)).collect();
+    assert!(
+        gap_rows.is_empty(),
+        "{file} (r{release}): the right bar has {} notch row(s) between its own top ({top}) and the band \
+         ({avail_h}) — {gap_rows:?}",
+        gap_rows.len()
+    );
 }
