@@ -58,7 +58,7 @@ fn collapsed_gutter_split_records_the_flush_drawn_rect() {
     let model = ScreenModel {
         root: WinNode::Pair {
             vertical: true,
-            split: Split { fixed: 3 },
+            split: Split { fixed: 3, fixed_px: None },
             // The game's own border request — gvm reserves a gutter cell for
             // this in its layout regardless of what the theme does with it.
             border: true,

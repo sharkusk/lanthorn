@@ -482,7 +482,13 @@ impl AppGlk {
     }
 
     /// The pixel size of a graphics window `win` as laid out, from `layout` ×
-    /// `char_px`. Does not borrow `self.graphics`, so it can be called while
+    /// `char_px` — except on the axis `layout_tree` reports a pixel-exact
+    /// split for (`WinTree::Pair::split_px`, SQ-1565), which is used in
+    /// place of the cell-rounded figure on that axis: a fixed-pixel or
+    /// proportional graphics split (Kerkerkruip's 2-3px title rules) then
+    /// gets a canvas sized to the pixels the game actually asked for, not
+    /// rounded up to the whole cell row/column `layout` reserved for it.
+    /// Does not borrow `self.graphics`, so it can be called while
     /// `self.graphics.entry(..)` is held.
     fn canvas_size(&self, win: u32) -> (u32, u32) {
         let cells = self
@@ -491,7 +497,38 @@ impl AppGlk {
             .find(|&&(id, _, _, _)| id == win)
             .map(|&(_, _, r, _)| (r.width, r.height))
             .unwrap_or((1, 1));
-        (cells.0 * self.char_px.0, cells.1 * self.char_px.1)
+        let (mut cw, mut ch) = (cells.0 * self.char_px.0, cells.1 * self.char_px.1);
+        if let Some((vertical, px)) = self.graphics_split_px(win) {
+            if vertical {
+                ch = px;
+            } else {
+                cw = px;
+            }
+        }
+        (cw, ch)
+    }
+
+    /// `win`'s enclosing split's pixel-exact footprint on the split axis, when
+    /// `win` is a graphics window occupying the FIRST (top/left) side of that
+    /// split — the fact `WinTree::Pair::split_px` carries and `canvas_size`
+    /// uses in place of the cell-rounded number (SQ-1565). Returns
+    /// `(vertical, pixels)`; `None` when `win` isn't a first-positioned
+    /// graphics child of a resolved split, or no tree has been built yet.
+    fn graphics_split_px(&self, win: u32) -> Option<(bool, u32)> {
+        fn walk(t: &WinTree, win: u32) -> Option<(bool, u32)> {
+            match t {
+                WinTree::Pair { vertical, split_px, first, second, .. } => {
+                    if let WinTree::Leaf { id, wintype: WinType::Graphics, .. } = first.as_ref() {
+                        if *id == win {
+                            return split_px.map(|px| (*vertical, px));
+                        }
+                    }
+                    walk(first, win).or_else(|| walk(second, win))
+                }
+                WinTree::Leaf { .. } => None,
+            }
+        }
+        self.layout_tree.as_ref().and_then(|t| walk(t, win))
     }
 
     /// Update the reported display size (the host story-pane size each frame).
@@ -1166,9 +1203,9 @@ impl AppGlk {
                     WinNode::Buffer(b)
                 }
             },
-            WinTree::Pair { vertical, border, split, key_bg, key_fg, first, second, .. } => WinNode::Pair {
+            WinTree::Pair { vertical, border, split, split_px, key_bg, key_fg, first, second, .. } => WinNode::Pair {
                 vertical: *vertical,
-                split: Split { fixed: *split as u16 },
+                split: Split { fixed: *split as u16, fixed_px: *split_px },
                 border: *border,
                 key_bg: *key_bg,
                 key_fg: *key_fg,
@@ -1355,18 +1392,29 @@ impl GlkBackend for AppGlk {
                 g.height = rect.height;
             }
         }
-        for &(id, ty, rect, _border) in wins {
-            if ty == WinType::Graphics {
-                let (cw, ch) = (rect.width * self.char_px.0, rect.height * self.char_px.1);
-                if let Some(c) = self.graphics.get_mut(&id) {
-                    c.resize(cw, ch);
-                }
-            }
-        }
+        // Graphics-canvas resizing moved to `window_tree` below (SQ-1565): it
+        // needs `layout_tree` (for `canvas_size`'s pixel-exact split), which
+        // isn't set until `window_tree` runs — always right after this, in
+        // `relayout_glk` — so resizing here would still read the PREVIOUS
+        // tree's split_px.
     }
 
     fn window_tree(&mut self, tree: Option<WinTree>) {
         self.layout_tree = tree;
+        // Resize any already-open graphics canvas to its freshly resolved
+        // footprint — pixel-exact on the split axis when gvm reports one
+        // (SQ-1565), cell-rounded otherwise (see `canvas_size`). Must run
+        // AFTER `layout_tree` is set just above, since `canvas_size` reads it.
+        // `Canvas::resize` is a cheap no-op when the size is unchanged, so
+        // this costs little on the frequent colour-only `sync_window_tree`
+        // re-push (no structural change → no size change).
+        let ids: Vec<u32> = self.graphics.keys().copied().collect();
+        for id in ids {
+            let (cw, ch) = self.canvas_size(id);
+            if let Some(c) = self.graphics.get_mut(&id) {
+                c.resize(cw, ch);
+            }
+        }
     }
 
     fn put_text(&mut self, win: u32, style: GlkStyle, s: &str) {
@@ -1667,14 +1715,32 @@ mod tests {
     /// child's row count.
     fn vpair(split: u32, first: WinTree, second: WinTree) -> WinTree {
         let rect = union(first.rect(), second.rect());
-        WinTree::Pair { vertical: true, border: false, split, rect, key_bg: None, key_fg: None, first: Box::new(first), second: Box::new(second) }
+        WinTree::Pair {
+            vertical: true, border: false, split, split_px: None, rect,
+            key_bg: None, key_fg: None, first: Box::new(first), second: Box::new(second),
+        }
     }
 
     /// Test helper: a Left/Right (horizontal) pair; `split` = the first (left)
     /// child's column count.
     fn hpair(split: u32, first: WinTree, second: WinTree) -> WinTree {
         let rect = union(first.rect(), second.rect());
-        WinTree::Pair { vertical: false, border: false, split, rect, key_bg: None, key_fg: None, first: Box::new(first), second: Box::new(second) }
+        WinTree::Pair {
+            vertical: false, border: false, split, split_px: None, rect,
+            key_bg: None, key_fg: None, first: Box::new(first), second: Box::new(second),
+        }
+    }
+
+    /// Test helper: an Above/Below pair carrying gvm's pixel-exact split
+    /// footprint alongside the cell one (SQ-1565) — for the graphics-canvas
+    /// pixel-sizing tests, where `vpair` above (always `split_px: None`)
+    /// can't express the fact under test.
+    fn vpair_px(split: u32, split_px: Option<u32>, first: WinTree, second: WinTree) -> WinTree {
+        let rect = union(first.rect(), second.rect());
+        WinTree::Pair {
+            vertical: true, border: false, split, split_px, rect,
+            key_bg: None, key_fg: None, first: Box::new(first), second: Box::new(second),
+        }
     }
 
     /// SQ-1515: `gvm::Machine::restore_state` tells `AppGlk` every OLD window
@@ -2237,6 +2303,67 @@ mod tests {
         let canvas = g.graphics.get(&1).unwrap();
         assert_eq!(canvas.img.dimensions(), (8, 8));
         assert_eq!(canvas.img.get_pixel(0, 0).0, [0xFF, 0, 0, 0xFF]);
+    }
+
+    // SQ-1565: a fixed-pixel graphics split (Kerkerkruip's 2-3px coloured
+    // title rules, drawn ABOVE the panel text) reserves a whole 16px cell row
+    // for LAYOUT, but the canvas the game actually draws into must be sized
+    // to the exact pixels it asked for — otherwise the rule's own paint runs
+    // (2px tall) land in a 16px-tall buffer whose other 14 rows are whatever
+    // the canvas's initial fill happens to be, reading as a solid block.
+    #[test]
+    fn appglk_graphics_canvas_uses_pixel_exact_split_height() {
+        let mut g = AppGlk::with_graphics(30, 24, (8, 16), crate::graphics::PictSource::new(None));
+        g.window_open(1, gvm::glk::WinType::Graphics);
+        g.window_open(2, gvm::glk::WinType::TextBuffer);
+        // Cell-rounded footprint: a 2px rule still reserves one whole 16px row.
+        g.window_layout(&[
+            (1, gvm::glk::WinType::Graphics, gvm::glk::Rect { left: 0, top: 0, width: 30, height: 1 }, Some(true)),
+            (2, gvm::glk::WinType::TextBuffer, gvm::glk::Rect { left: 0, top: 1, width: 30, height: 23 }, Some(true)),
+        ]);
+        // gvm's tree carries the pixel-exact 2px fact alongside it.
+        g.window_tree(Some(vpair_px(
+            1,
+            Some(2),
+            leaf(1, WinType::Graphics, rect(0, 0, 30, 1)),
+            leaf(2, WinType::TextBuffer, rect(0, 1, 30, 23)),
+        )));
+        g.graphics_fill_rect(1, 0x00FF_0000, 0, 0, 240, 2);
+        let canvas = g.graphics.get(&1).unwrap();
+        assert_eq!(
+            canvas.img.dimensions(),
+            (240, 2),
+            "canvas height must be the exact 2px the game asked for, not the cell-rounded 16px row"
+        );
+    }
+
+    /// The same fact reaches the render-neutral `WinNode` tree too
+    /// (`Split::fixed_px`, SQ-1565) — a pixel-aware host reading `screen_model`
+    /// sees it without needing gvm's own `WinTree`. The cell-rounded `fixed`
+    /// stays exactly as before: the TUI's own layout is unaffected.
+    #[test]
+    fn screen_model_split_carries_pixel_exact_footprint() {
+        let mut g = AppGlk::with_graphics(30, 24, (8, 16), crate::graphics::PictSource::new(None));
+        g.window_open(1, gvm::glk::WinType::Graphics);
+        g.window_open(2, gvm::glk::WinType::TextBuffer);
+        g.window_layout(&[
+            (1, gvm::glk::WinType::Graphics, gvm::glk::Rect { left: 0, top: 0, width: 30, height: 1 }, Some(true)),
+            (2, gvm::glk::WinType::TextBuffer, gvm::glk::Rect { left: 0, top: 1, width: 30, height: 23 }, Some(true)),
+        ]);
+        g.window_tree(Some(vpair_px(
+            1,
+            Some(2),
+            leaf(1, WinType::Graphics, rect(0, 0, 30, 1)),
+            leaf(2, WinType::TextBuffer, rect(0, 1, 30, 23)),
+        )));
+        let model = g.screen_model();
+        match model.root {
+            crate::engine::WinNode::Pair { split, .. } => {
+                assert_eq!(split.fixed, 1, "the cell-based layout figure is unchanged");
+                assert_eq!(split.fixed_px, Some(2), "Split also carries the pixel-exact figure");
+            }
+            other => panic!("expected a pair root, got {other:?}"),
+        }
     }
 
     #[test]

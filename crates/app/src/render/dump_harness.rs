@@ -128,7 +128,7 @@ fn build(nodes: &[(usize, PNode)], idx: &mut usize, n: usize) -> WinNode {
             let second = build(nodes, idx, n);
             WinNode::Pair {
                 vertical,
-                split: Split { fixed: split },
+                split: Split { fixed: split , fixed_px: None },
                 border,
                 key_bg,
                 key_fg: None,

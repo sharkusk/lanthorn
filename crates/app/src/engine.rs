@@ -357,6 +357,17 @@ pub enum WinKind {
 pub struct Split {
     /// Size (rows or cols, per `vertical`) given to the first child.
     pub fixed: u16,
+    /// The first child's pixel-exact split size on the split axis, when it is
+    /// a graphics window that requested a specific pixel footprint through
+    /// Glk's window arrangement (fixed or proportional — gvm's
+    /// `window_pixel_size` resolves both) — the same number the game reads
+    /// back via `glk_window_get_size`, which `fixed` above necessarily
+    /// discards by rounding up to a whole cell. `None` when the first child
+    /// is a text window (cell-granular by nature, no sub-cell fact to carry)
+    /// or gvm reports none. The TUI's own cell-based layout still uses
+    /// `fixed` unchanged; this is an additional fact a pixel-aware host (or a
+    /// window's own canvas allocation) can use instead (SQ-1565).
+    pub fixed_px: Option<u32>,
 }
 
 /// A graphics-window leaf: a snapshot of the window's canvas for rendering.
@@ -1402,7 +1413,7 @@ mod tests {
         let model = ScreenModel {
             root: WinNode::Pair {
                 vertical: true,
-                split: Split { fixed: 1 },
+                split: Split { fixed: 1, fixed_px: None },
                 border: false,
                 key_bg: None,
                 key_fg: None,

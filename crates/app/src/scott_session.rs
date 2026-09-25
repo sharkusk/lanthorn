@@ -801,7 +801,7 @@ impl Engine for ScottSession {
         let rows = panel.lines.len() as u16;
         let text = WinNode::Pair {
             vertical: true,
-            split: Split { fixed: rows },
+            split: Split { fixed: rows , fixed_px: None },
             border: true,
             key_bg: None,
             key_fg: None,
@@ -813,7 +813,7 @@ impl Engine for ScottSession {
         let root = match &self.current_canvas {
             Some(canvas) => WinNode::Pair {
                 vertical: true,
-                split: Split { fixed: PICTURE_ROWS },
+                split: Split { fixed: PICTURE_ROWS , fixed_px: None },
                 border: true,
                 key_bg: None,
                 key_fg: None,

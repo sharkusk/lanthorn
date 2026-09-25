@@ -721,6 +721,15 @@ pub enum WinTree {
         /// (rows if vertical, cols if not) — the host gives `first` this many
         /// cells, then the border cell (if `border`), then `second` the rest.
         split: u32,
+        /// The FIRST child's pixel-exact extent along the split axis, when it
+        /// is a graphics window that requested a specific pixel footprint
+        /// (fixed or proportional — see [`Model::window_pixel_size`], which
+        /// resolves both). `split` above is this same footprint rounded UP to
+        /// a whole cell for layout purposes; a host that wants the pixel it
+        /// was actually asked for (rather than the cell it was rounded into)
+        /// reads this instead. `None` when the first child is a text window
+        /// (cell-granular by nature — nothing to round) (SQ-1565).
+        split_px: Option<u32>,
         /// This pair window's own resolved rectangle (the union of its two
         /// children plus any border).
         rect: Rect,
@@ -2721,6 +2730,16 @@ impl Model {
         let (first, second) = if pos(&c1) <= pos(&c2) { (c1, c2) } else { (c2, c1) };
         let fr = first.rect();
         let split = if vertical { fr.height } else { fr.width };
+        // The FIRST child's pixel-exact split size, when it is itself a
+        // graphics window — the same fact the game reads back via
+        // `glk_window_get_size`, which `split` above discards by rounding up
+        // to a whole cell (SQ-1565). Nothing to carry for a text first child.
+        let split_px = match &first {
+            WinTree::Leaf { id, wintype: WinType::Graphics, .. } => {
+                self.window_pixel_size(*id, self.char_px).map(|(pw, ph)| if vertical { ph } else { pw })
+            }
+            _ => None,
+        };
         // The between-siblings border adopts the KEY window's Normal colour
         // (the new window that created this split). key 0 / pair / missing → None.
         let key_sc = self.window_style_colour(w.key, GlkStyle::Normal);
@@ -2728,6 +2747,7 @@ impl Model {
             vertical,
             border,
             split,
+            split_px,
             rect: w.rect,
             key_bg: key_sc.bg,
             key_fg: key_sc.fg,
@@ -4405,6 +4425,73 @@ mod layout_snap_tests {
         // floor of the remaining share — equal to the key child's, at 39 each.
         assert_eq!(m.window_size(buf).unwrap().0, 356 / 9, "the sibling floors its own share");
         assert_eq!(m.window_size(gfx).unwrap().0, m.window_size(buf).unwrap().0, "still equal halves");
+    }
+
+    // SQ-1565: a fixed-pixel graphics split (Kerkerkruip's 2-3px coloured
+    // title rules, drawn ABOVE the panel text) rounds up to a whole cell for
+    // LAYOUT — `split` stays 1 — but `window_tree`'s `WinTree::Pair::split_px`
+    // must still carry the exact pixel figure the game asked for, so a host
+    // reading the tree (not just `window_size`) can size that window's own
+    // canvas in pixels instead of `cells × char_px`.
+    #[test]
+    fn fixed_graphics_split_reports_exact_pixel_footprint_in_the_tree() {
+        let mut m = Model::new();
+        let buf = m.window_open(0, 0, 0, 3, 0).unwrap();
+        // WINMETHOD_ABOVE puts the KEY (new, graphics) window on top, so it is
+        // the tree's FIRST child — Kerkerkruip's actual shape.
+        let gfx = m.window_open(buf, WINMETHOD_ABOVE | WINMETHOD_FIXED, 2, 5, 0).unwrap();
+        m.relayout(80, 41, (9, 19), false);
+        match m.window_tree().expect("root window exists") {
+            WinTree::Pair { vertical, split, split_px, first, .. } => {
+                assert!(vertical, "ABOVE/BELOW is a vertical split");
+                assert_eq!(split, 1, "2px still rounds up to a whole cell for layout");
+                assert_eq!(split_px, Some(2), "the tree also carries the exact 2px request");
+                match first.as_ref() {
+                    WinTree::Leaf { id, wintype, .. } => {
+                        assert_eq!(*id, gfx, "the graphics window is positioned first (top)");
+                        assert_eq!(*wintype, WinType::Graphics);
+                    }
+                    other => panic!("expected the graphics leaf first, got {other:?}"),
+                }
+            }
+            other => panic!("expected a pair root, got {other:?}"),
+        }
+    }
+
+    // The same fact, on a PROPORTIONAL split — `window_pixel_size` resolves
+    // both shapes, and `split_px` must carry either.
+    #[test]
+    fn proportional_graphics_split_reports_exact_pixel_footprint_in_the_tree() {
+        let mut m = Model::new();
+        let buf = m.window_open(0, 0, 0, 3, 0).unwrap();
+        let gfx = m.window_open(buf, WINMETHOD_ABOVE | WINMETHOD_PROPORTIONAL, 50, 5, 0).unwrap();
+        m.relayout(80, 41, (9, 19), false);
+        let expect_px = m.window_pixel_size(gfx, (9, 19)).unwrap().1;
+        match m.window_tree().expect("root window exists") {
+            WinTree::Pair { split_px, .. } => {
+                assert_eq!(split_px, Some(expect_px), "matches window_pixel_size's own share");
+            }
+            other => panic!("expected a pair root, got {other:?}"),
+        }
+    }
+
+    // A TEXT first child has no sub-cell footprint to preserve — `split_px`
+    // must stay `None` rather than invent one.
+    #[test]
+    fn text_first_child_split_carries_no_pixel_fact() {
+        let mut m = Model::new();
+        let buf = m.window_open(0, 0, 0, 3, 0).unwrap();
+        // WINMETHOD_BELOW puts the new (graphics) window on the bottom, so the
+        // OLD text buffer is positioned first this time.
+        let _gfx = m.window_open(buf, WINMETHOD_BELOW | WINMETHOD_FIXED, 2, 5, 0).unwrap();
+        m.relayout(80, 41, (9, 19), false);
+        match m.window_tree().expect("root window exists") {
+            WinTree::Pair { split_px, first, .. } => {
+                assert!(matches!(first.as_ref(), WinTree::Leaf { wintype: WinType::TextBuffer, .. }));
+                assert_eq!(split_px, None, "a text first child has no pixel fact to carry");
+            }
+            other => panic!("expected a pair root, got {other:?}"),
+        }
     }
 
     // An awkward split percentage divides like any other: each child takes the

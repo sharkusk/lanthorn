@@ -10464,7 +10464,7 @@ mod tests {
         let model = ScreenModel {
             root: WinNode::Pair {
                 vertical: true,
-                split: Split { fixed: 1 },
+                split: Split { fixed: 1 , fixed_px: None },
                 border: false,
                 key_bg: None,
                 key_fg: None,
@@ -10636,7 +10636,7 @@ mod tests {
             WinNode::Grid(g)
         }
         fn pair(vertical: bool, split: u16, first: WinNode, second: WinNode) -> WinNode {
-            WinNode::Pair { vertical, split: Split { fixed: split }, border: true, key_bg: None, key_fg: None, first: Box::new(first), second: Box::new(second) }
+            WinNode::Pair { vertical, split: Split { fixed: split , fixed_px: None }, border: true, key_bg: None, key_fg: None, first: Box::new(first), second: Box::new(second) }
         }
         let root =
             pair(false, 123,
@@ -10733,7 +10733,7 @@ mod tests {
         panel.panel = true;
         let root = WinNode::Pair {
             vertical: true,
-            split: Split { fixed: 1 },
+            split: Split { fixed: 1 , fixed_px: None },
             border: false,
             key_bg: None,
             key_fg: None,
@@ -10766,7 +10766,7 @@ mod tests {
         let zm = ScreenModel {
             root: WinNode::Pair {
                 vertical: true,
-                split: Split { fixed: 1 },
+                split: Split { fixed: 1 , fixed_px: None },
                 border: false,
                 key_bg: None,
                 key_fg: None,
@@ -10792,7 +10792,7 @@ mod tests {
         let two = ScreenModel {
             root: WinNode::Pair {
                 vertical: false,
-                split: Split { fixed: 10 },
+                split: Split { fixed: 10 , fixed_px: None },
                 border: false,
                 key_bg: None,
                 key_fg: None,
@@ -10818,7 +10818,7 @@ mod tests {
         let side = ScreenModel {
             root: WinNode::Pair {
                 vertical: false, // horizontal pair = Left/Right split
-                split: Split { fixed: 20 },
+                split: Split { fixed: 20 , fixed_px: None },
                 border: false,
                 key_bg: None,
                 key_fg: None,
@@ -10841,7 +10841,7 @@ mod tests {
         let below = ScreenModel {
             root: WinNode::Pair {
                 vertical: true,
-                split: Split { fixed: 22 },
+                split: Split { fixed: 22 , fixed_px: None },
                 border: false,
                 key_bg: None,
                 key_fg: None,
@@ -10872,7 +10872,7 @@ mod tests {
         let model = ScreenModel {
             root: WinNode::Pair {
                 vertical: false,
-                split: Split { fixed: 6 },
+                split: Split { fixed: 6 , fixed_px: None },
                 border: false,
                 key_bg: None,
                 key_fg: None,
@@ -10935,7 +10935,7 @@ mod tests {
         let model = ScreenModel {
             root: WinNode::Pair {
                 vertical: true,
-                split: Split { fixed: 1 },
+                split: Split { fixed: 1 , fixed_px: None },
                 border: false,
                 key_bg: None,
                 key_fg: None,
@@ -10944,7 +10944,7 @@ mod tests {
                 first: Box::new(WinNode::Grid(grid_with("STATUS"))),
                 second: Box::new(WinNode::Pair {
                     vertical: false,
-                    split: Split { fixed: 10 },
+                    split: Split { fixed: 10 , fixed_px: None },
                     border: false,
                     key_bg: None,
                     key_fg: None,
@@ -10997,13 +10997,13 @@ mod tests {
         let model = ScreenModel {
             root: WinNode::Pair {
                 vertical: false,
-                split: Split { fixed: 8 },
+                split: Split { fixed: 8 , fixed_px: None },
                 border: false,
                 key_bg: None,
                 key_fg: None,
                 first: Box::new(WinNode::Pair {
                     vertical: true,
-                    split: Split { fixed: 1 },
+                    split: Split { fixed: 1 , fixed_px: None },
                     border: false,
                     key_bg: None,
                     key_fg: None,
@@ -11012,7 +11012,7 @@ mod tests {
                 }),
                 second: Box::new(WinNode::Pair {
                     vertical: false,
-                    split: Split { fixed: 1 },
+                    split: Split { fixed: 1 , fixed_px: None },
                     border: false,
                     key_bg: None,
                     key_fg: None,
@@ -11078,7 +11078,7 @@ mod tests {
         let model = ScreenModel {
             root: WinNode::Pair {
                 vertical: true,
-                split: Split { fixed: 1 },
+                split: Split { fixed: 1 , fixed_px: None },
                 border: false,
                 key_bg: None,
                 key_fg: None,
@@ -11120,14 +11120,14 @@ mod tests {
         let model = ScreenModel {
             root: WinNode::Pair {
                 vertical: true,
-                split: Split { fixed: 1 },
+                split: Split { fixed: 1 , fixed_px: None },
                 border: false,
                 key_bg: None,
                 key_fg: None,
                 first: Box::new(WinNode::Grid(grid_with("ST"))),
                 second: Box::new(WinNode::Pair {
                     vertical: false,
-                    split: Split { fixed: 4 },
+                    split: Split { fixed: 4 , fixed_px: None },
                     border: false,
                     key_bg: None,
                     key_fg: None,
@@ -11410,7 +11410,7 @@ mod tests {
         // region must be everything right of the graphics — text + map.
         let model = model_with(WinNode::Pair {
             vertical: false,
-            split: Split { fixed: 10 },
+            split: Split { fixed: 10 , fixed_px: None },
             border: false,
             key_bg: None,
             key_fg: None,
@@ -11427,7 +11427,7 @@ mod tests {
         // Graphics banner (rows 0..3) over the text buffer; no map (TranscriptFull).
         let model = model_with(WinNode::Pair {
             vertical: true,
-            split: Split { fixed: 3 },
+            split: Split { fixed: 3 , fixed_px: None },
             border: false,
             key_bg: None,
             key_fg: None,
@@ -11444,7 +11444,7 @@ mod tests {
         // and the dialog centers over the whole frame.
         let model = model_with(WinNode::Pair {
             vertical: false,
-            split: Split { fixed: 10 },
+            split: Split { fixed: 10 , fixed_px: None },
             border: false,
             key_bg: None,
             key_fg: None,
@@ -11649,7 +11649,7 @@ mod tests {
         let model = ScreenModel {
             root: WinNode::Pair {
                 vertical: true,
-                split: Split { fixed: 1 },
+                split: Split { fixed: 1 , fixed_px: None },
                 border: true,
                 key_bg: None,
                 key_fg: None,
@@ -11689,7 +11689,7 @@ mod tests {
         let model = ScreenModel {
             root: WinNode::Pair {
                 vertical: false,
-                split: Split { fixed: 6 },
+                split: Split { fixed: 6 , fixed_px: None },
                 border: true,
                 key_bg: None,
                 key_fg: None,
@@ -11729,7 +11729,7 @@ mod tests {
             let model = ScreenModel {
                 root: WinNode::Pair {
                     vertical,
-                    split: Split { fixed: if vertical { 1 } else { 6 } },
+                    split: Split { fixed: if vertical { 1 } else { 6 } , fixed_px: None },
                     border: false,
                     key_bg: None,
                     key_fg: None,
@@ -11773,7 +11773,7 @@ mod tests {
             let model = ScreenModel {
                 root: WinNode::Pair {
                     vertical,
-                    split: Split { fixed: if vertical { 1 } else { 6 } },
+                    split: Split { fixed: if vertical { 1 } else { 6 } , fixed_px: None },
                     // The game asks for a border, the way almost every Glk game does
                     // simply by not asking for `winmethod_NoBorder`.
                     border: true,
@@ -11824,7 +11824,7 @@ mod tests {
         let model = |vertical: bool| ScreenModel {
             root: WinNode::Pair {
                 vertical,
-                split: Split { fixed: if vertical { 1 } else { 6 } },
+                split: Split { fixed: if vertical { 1 } else { 6 } , fixed_px: None },
                 border: true,
                 key_bg: None,
                 key_fg: None,
@@ -11876,7 +11876,7 @@ mod tests {
         let model = ScreenModel {
             root: WinNode::Pair {
                 vertical: true,
-                split: Split { fixed: 1 },
+                split: Split { fixed: 1 , fixed_px: None },
                 border: true,
                 key_bg: Some(0x0000_00FF),
                 key_fg: Some(0x00FF_0000),
@@ -11917,7 +11917,7 @@ mod tests {
         let make = |second: WinNode| ScreenModel {
             root: WinNode::Pair {
                 vertical: false, // left/right split → a │ separator
-                split: Split { fixed: 10 },
+                split: Split { fixed: 10 , fixed_px: None },
                 border: true,
                 key_bg: None,
                 key_fg: None,
@@ -11951,7 +11951,7 @@ mod tests {
         });
         let tree = WinNode::Pair {
             vertical: false,
-            split: Split { fixed: 10 },
+            split: Split { fixed: 10 , fixed_px: None },
             border: false,
             key_bg: None,
             key_fg: None,
