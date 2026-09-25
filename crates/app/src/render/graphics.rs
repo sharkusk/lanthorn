@@ -848,15 +848,13 @@ impl V6ClickMap {
                 (u32::from(native_x0) + u32::from(col - left) * 8 + 4).min(u32::from(self.screen.0))
             }
             None => {
-                let gx = (fx * self.canvas.0 as f32).floor() as u32 + 1;
                 // Outside the game's own screen → not the game's click (SQ-1032).
                 // Inert until a frame extends sideways, which none does; stated
                 // anyway because `screen` and `canvas` are one subject and an
-                // asymmetric bound is how the next axis gets forgotten.
-                if gx > u32::from(self.screen.0) {
-                    return None;
-                }
-                gx
+                // asymmetric bound is how the next axis gets forgotten. The bound
+                // is `RasterFrame::game_px`'s, shared with every host (SQ-1568).
+                let cx = (fx * self.canvas.0 as f32).floor() as u32;
+                u32::from(crate::render::v6_layout::canvas_to_game_axis(cx, self.screen.0)?)
             }
         };
         let gy = match row_packed {
@@ -873,15 +871,12 @@ impl V6ClickMap {
                 if !(0.0..1.0).contains(&fy) {
                     return None;
                 }
-                let gy = (fy * self.canvas.1 as f32).floor() as u32 + 1;
                 // The rejection this quest is actually about: a click in the rows an
                 // EXTENDED frame added below the game's screen. Those rows carry
                 // lanthorn's scrollback, drawn in the game's face; the game never had
                 // them and must not be told it was clicked on its last one.
-                if gy > u32::from(self.screen.1) {
-                    return None;
-                }
-                gy
+                let cy = (fy * self.canvas.1 as f32).floor() as u32;
+                u32::from(crate::render::v6_layout::canvas_to_game_axis(cy, self.screen.1)?)
             }
         };
         Some((gx as u16, gy as u16))

@@ -3765,61 +3765,32 @@ fn run_event_loop(boot: startup::BootResult, launched_from_library: bool) -> Run
                         }
                         app::input::V6MouseOutcome::Deliver(click) => {
                             state.pending_v6_click = None;
-                            let (gx, gy) = click.game_px;
                             // The press anchored a zero-length selection; it is not
                             // a copy, so it must reach neither the clipboard nor a
                             // "Copied 0 chars" line.
                             app::input::discard_selection(&mut state);
-                            match click.read {
-                                app::state::V6ClickRead::Char => {
-                                    let z = zvm_session_opt_mut(&mut *session)
-                                        .expect("z-machine char read is pending");
-                                    z.set_mouse(gy, gx); // engine stores (y, x)
-                                    let result = z.submit_char(254); // ZSCII single-click (§3.8)
-                                    if turn::apply_game_driven_result(
-                                        &mut state, &mut mapper, &result, &game_dir, map_view(last_panes.map), &*session, app::pager::Driver::PlayerInput,
-                                    ).quit {
-                                        break 'event_loop state.exit_target.into();
-                                    }
-                                    continue 'event_loop;
-                                }
-                                // Line read: a real player turn, so it goes through
-                                // the same path as a typed command — history, turn
-                                // count, mapping, autosave — carrying whatever was
-                                // already typed (usually nothing) and the click as
-                                // the terminator.
-                                app::state::V6ClickRead::Line { terminator } => {
-                                    let cmd = state.take_input();
-                                    // Command history, turn count and unsaved-
-                                    // progress bookkeeping now live in
-                                    // `finish_command_turn` itself (SQ-1545).
-                                    let result = {
-                                        let z = zvm_session_opt_mut(&mut *session)
-                                            .expect("z-machine line read is pending");
-                                        z.set_mouse(gy, gx); // engine stores (y, x)
-                                        z.submit_line_with_terminator(&cmd, terminator)
-                                    };
-                                    // SQ-0576: a compass click types nothing, but the
-                                    // game echoes the command it synthesized ("north")
-                                    // at the head of its output — adopt it so the turn
-                                    // maps (directional edge, tried-exit) exactly like
-                                    // the typed command it stands for.
-                                    let cmd = if cmd.is_empty() {
-                                        app::session::echoed_direction_command(&result.transcript)
-                                            .unwrap_or_default()
-                                            .to_string()
-                                    } else {
-                                        cmd
-                                    };
-                                    if turn::finish_command_turn(
-                                        &cmd, true, result, &mut state, &mut mapper, &mut *session,
-                                        &game_dir, &ifid, &arc_file, map_view(last_panes.map), &mut bg_tidy_counter,
-                                    ).quit {
-                                        break 'event_loop state.exit_target.into();
-                                    }
-                                    continue 'event_loop;
-                                }
+                            // What the click DOES — ZSCII 254 for a char read, the
+                            // click as a line terminator (with the echoed compass
+                            // direction adopted as the command) for a line read — is
+                            // the library's rule, shared with every host (SQ-1568).
+                            // `v6_mouse_outcome` only answers `Deliver` when the
+                            // pending read still takes the click, so the `None` arm
+                            // is a click with nothing left to answer it.
+                            let mut ctx = app::host::TurnCtx {
+                                game_dir: &game_dir,
+                                ifid: &ifid,
+                                arc_file: &arc_file,
+                                map_view: map_view(last_panes.map),
+                                bg_tidy_counter: &mut bg_tidy_counter,
+                            };
+                            if app::host::input::deliver_v6_click(
+                                &mut state, &mut mapper, &mut *session, &mut ctx, click.game_px,
+                            )
+                            .is_some_and(|out| out.quit)
+                            {
+                                break 'event_loop state.exit_target.into();
                             }
+                            continue 'event_loop;
                         }
                     }
                 }

@@ -21,6 +21,8 @@
 //! - [`sound`] — the [`SoundSink`](sound::SoundSink) a host plays sound through,
 //!   and [`sound_finished`](sound::sound_finished) for reporting one back.
 //! - [`ingame_io`] — the game's own SAVE/RESTORE and filename requests.
+//! - [`input`] — player input that is not a typed line: a v6 mouse click
+//!   ([`deliver_v6_click`](input::deliver_v6_click), SQ-1568).
 //! - [`settings`] — apply a changed config to a running session, as the
 //!   settings screen's Save does (SQ-1559).
 //! - [`assist`] — the Guiding Light's per-game switch, and the command band's
@@ -32,6 +34,7 @@ pub mod assist;
 pub mod boot;
 pub mod clock;
 pub mod ingame_io;
+pub mod input;
 pub mod persist;
 pub mod probe;
 pub mod reset;
@@ -46,7 +49,8 @@ pub use boot::{
     BootRequest, BootedStory, LaunchFlags, QuietBoot, TerminalFacts,
 };
 pub use turn::{
-    apply_game_driven_result, finish_command_turn, finish_resumed_turn, Paging, TurnOutcome,
+    apply_game_driven_result, finish_command_turn, finish_resumed_turn, Paging, TurnCtx,
+    TurnOutcome,
 };
 
 use crate::engine::Engine;

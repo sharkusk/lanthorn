@@ -45,6 +45,21 @@ pub struct TurnOutcome {
     pub paging: Paging,
 }
 
+/// The host's per-session facts a player turn is applied against (SQ-1568): the
+/// trailing arguments [`finish_command_turn`] takes, as one value, so an entry
+/// point that may END in a command turn ([`crate::host::input::deliver_v6_click`])
+/// is handed all of them together rather than a subset.
+///
+/// `map_view` is the map pane's `(cols, rows)`, or `None` for a host with no map;
+/// `bg_tidy_counter` is the host's debounce counter for background map tidies.
+pub struct TurnCtx<'a> {
+    pub game_dir: &'a std::path::Path,
+    pub ifid: &'a str,
+    pub arc_file: &'a std::path::Path,
+    pub map_view: Option<(u16, u16)>,
+    pub bg_tidy_counter: &'a mut u32,
+}
+
 /// The `[more]` pager's verdict on one turn, for a host that paginates by its
 /// own viewport (SQ-1538). The TUI's pager ([`crate::pager`]) measures wrapped
 /// rows at the next frame; this is the same decision in transcript LINES, which

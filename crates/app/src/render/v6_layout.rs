@@ -2552,6 +2552,32 @@ impl RasterFrame {
     pub fn extension(self) -> u32 {
         self.canvas_h.saturating_sub(u32::from(self.native.1))
     }
+
+    /// The 1-based GAME pixel `(x, y)` under 0-based canvas pixel `canvas_px`, or
+    /// `None` when that pixel is not the game's (SQ-1568): the rows an extended
+    /// frame added below the game's screen carry lanthorn's own scrollback, and a
+    /// click there must be dropped, not clamped onto the game's last row (SQ-1032).
+    /// Past the native width is the same answer, on the other axis.
+    ///
+    /// 1-based because that is what a click reports to the game (`set_mouse`,
+    /// ZMSD §11) and what [`V6ClickMap::map_click`] answers, which inverts its
+    /// letterbox through the same per-axis rule ([`canvas_to_game_axis`]).
+    ///
+    /// [`V6ClickMap::map_click`]: crate::render::graphics::V6ClickMap::map_click
+    pub fn game_px(self, canvas_px: (u32, u32)) -> Option<(u16, u16)> {
+        Some((
+            canvas_to_game_axis(canvas_px.0, self.native.0)?,
+            canvas_to_game_axis(canvas_px.1, self.native.1)?,
+        ))
+    }
+}
+
+/// One axis of [`RasterFrame::game_px`]: 0-based canvas pixel `p` is 1-based game
+/// pixel `p + 1` when it lies inside the game's own `native` extent, `None`
+/// beyond it. The single statement of that bound, shared with
+/// `V6ClickMap::map_click`'s proportional inverse.
+pub(crate) fn canvas_to_game_axis(p: u32, native: u16) -> Option<u16> {
+    (p < u32::from(native)).then(|| (p + 1) as u16)
 }
 
 fn locked_scale_inner(geom: FrameGeometry, pane_dev: (u32, u32)) -> Option<Scale> {
@@ -5281,6 +5307,58 @@ mod tests {
         for (_, b) in &bands {
             assert!(b.x >= pane.x && b.right() <= pane.right() && b.y >= pane.y && b.bottom() <= pane.bottom(),
                 "band {b:?} stays inside the pane");
+        }
+    }
+
+    /// SQ-1568: `RasterFrame::game_px` answers a host's canvas pixel with the
+    /// game's own 1-based pixel, and refuses the rows an EXTENDED frame added below
+    /// the game's screen (lanthorn's scrollback, SQ-1032) and anything past the
+    /// native width.
+    #[test]
+    fn raster_frame_game_px_is_one_based_and_bounded_by_the_native_screen() {
+        use crate::render::v6_layout::RasterFrame;
+        // Zork Zero's 640x400 screen in a pane tall enough for extra rows at 1x.
+        let frame = RasterFrame::extended((640, 400), (640, 480), zvm::screen::V6Cell::DEFAULT, None, true);
+        assert!(frame.extension() > 0, "premise: the frame really is extended: {frame:?}");
+        assert_eq!(frame.game_px((0, 0)), Some((1, 1)), "canvas (0,0) is game pixel (1,1)");
+        assert_eq!(frame.game_px((639, 399)), Some((640, 400)), "the last native pixel is the game's");
+        assert_eq!(frame.game_px((10, 400)), None, "the first ADDED row is not the game's");
+        assert_eq!(
+            frame.game_px((10, frame.canvas_h - 1)),
+            None,
+            "nor is the last row of the extension"
+        );
+        assert_eq!(frame.game_px((640, 10)), None, "x at the native width is past the screen");
+        // An unextended frame has the same bounds — its canvas IS the screen.
+        let plain = RasterFrame::native((640, 400));
+        assert_eq!(plain.game_px((0, 0)), Some((1, 1)));
+        assert_eq!(plain.game_px((0, 400)), None);
+    }
+
+    /// SQ-1568: `V6ClickMap::map_click`'s proportional inverse and
+    /// `RasterFrame::game_px` are one rule — at 1:1 with 1x1 cells, a cell IS a
+    /// canvas pixel, so the two must agree on every row of an extended canvas,
+    /// including where the game's screen ends.
+    #[test]
+    fn click_map_and_raster_frame_agree_across_an_extended_canvas() {
+        use crate::render::graphics::V6ClickMap;
+        use crate::render::v6_layout::RasterFrame;
+        let frame = RasterFrame::extended((64, 40), (64, 80), zvm::screen::V6Cell::DEFAULT, None, true);
+        assert!(frame.extension() > 0, "premise: extended: {frame:?}");
+        let map = V6ClickMap {
+            pane_x: 0, pane_y: 0, cell_w: 1, cell_h: 1,
+            img_x: 0.0, img_y: 0.0, img_w: 64.0, img_h: frame.canvas_h as f32,
+            canvas: (64, frame.canvas_h as u16), screen: frame.native,
+            packed_text: Vec::new(),
+        };
+        for y in 0..frame.canvas_h as u16 {
+            for x in [0u16, 31, 63] {
+                assert_eq!(
+                    map.map_click(x, y),
+                    frame.game_px((u32::from(x), u32::from(y))),
+                    "canvas ({x},{y})"
+                );
+            }
         }
     }
 }
