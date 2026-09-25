@@ -33,6 +33,17 @@ pub struct Mapper {
     /// read) by whoever resolves it, so a suspicion nobody looked at cannot leak into the next
     /// move's decision.
     pub(crate) pending_random_exit_suspicion: Option<RandomExitSuspicion>,
+    /// Set by a caller that has decided this story should not be mapped at all
+    /// (SQ-1579) — a menu-driven game with no grammar (e.g. Journey), whose
+    /// v6 status band still occasionally paints room-shaped text a detector can
+    /// mistake for a location, with no verb-driven navigation to ever make a
+    /// map of in the first place. `false` by default — the ordinary case for
+    /// every parser game — so `Mapper::default()` and a loaded archive (whose
+    /// `PersistState` never carries this field; see `persist::from_json`) both
+    /// come back with mapping enabled unless a caller explicitly turns it off.
+    /// [`Self::observe`], [`Self::observe_moved`] and [`Self::observe_relocation`]
+    /// become no-ops once set, so the graph simply never gains a first room.
+    pub(crate) mapping_disabled: bool,
 }
 
 /// A move that CONTRADICTS what the map already believed about `(origin, dir)`, left for a caller
@@ -85,7 +96,22 @@ impl Mapper {
     /// CURRENT session — the passage just walked, and what the map made of it — and a restore has
     /// walked nothing yet, so both start empty.
     pub fn restored(graph: MapGraph) -> Self {
-        Mapper { graph, arrived_via: None, pending_suggestion: None, pending_random_exit_suspicion: None }
+        Mapper {
+            graph,
+            arrived_via: None,
+            pending_suggestion: None,
+            pending_random_exit_suspicion: None,
+            mapping_disabled: false,
+        }
+    }
+
+    /// Stop this mapper from ever recording a location (SQ-1579): a caller has
+    /// decided the story should not be mapped at all — see
+    /// [`Self::mapping_disabled`]'s doc comment. Idempotent; there is no
+    /// corresponding `enable`, because nothing here re-derives the decision —
+    /// a caller who wants mapping back constructs a fresh `Mapper` instead.
+    pub fn disable_mapping(&mut self) {
+        self.mapping_disabled = true;
     }
 
     /// The graph's structural generation counter (SQ-1540) — see [`MapGraph::struct_gen`]. A
@@ -194,6 +220,9 @@ impl Mapper {
     }
 
     fn observe_inner(&mut self, location: RoomId, name: &str, via: Option<Direction>, moved: bool) {
+        if self.mapping_disabled {
+            return;
+        }
         // Asked BEFORE the upsert, because after it every room is a room the map knows. Only this
         // moment can answer it, and the detector needs it: a region that grew by one room is worth
         // mentioning once, while walking back into a room already on the map is not (SQ-0853).
@@ -350,6 +379,9 @@ impl Mapper {
     /// cell (so it is visible but disconnected); an already-known room keeps its
     /// position. (SQ-0259)
     pub fn observe_relocation(&mut self, location: RoomId, name: &str) {
+        if self.mapping_disabled {
+            return;
+        }
         // A death/teleport is not a walked passage, so it leaves no arrival
         // direction for a bare peel to cut at — and nothing for the detector to
         // judge either: there is no crossing here to be on either side of.
@@ -485,6 +517,23 @@ mod tests {
         m.observe(1, "West of House", None);
         assert_eq!(m.graph.current(), Some(1));
         assert_eq!(m.graph.connections().len(), 0);
+    }
+
+    /// SQ-1579: once a caller has decided the story should not be mapped at
+    /// all — a menu-driven v6 story with no grammar, whatever a location
+    /// detector says — `observe`/`observe_moved`/`observe_relocation` must
+    /// stay no-ops for the rest of the session, even for an otherwise
+    /// perfectly ordinary-looking location.
+    #[test]
+    fn disable_mapping_makes_every_observation_a_no_op() {
+        let mut m = Mapper::default();
+        m.disable_mapping();
+        m.observe(1, "West of House", None);
+        m.observe(2, "Forest", Some(Direction::N));
+        m.observe_moved(3, "Up a Tree", Some(Direction::Up));
+        m.observe_relocation(4, "Resurrection Room");
+        assert!(m.graph.rooms().next().is_none(), "no room may ever be added once mapping is disabled");
+        assert_eq!(m.graph.current(), None);
     }
 
     #[test]

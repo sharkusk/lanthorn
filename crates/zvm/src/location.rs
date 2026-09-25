@@ -616,6 +616,14 @@ const V6_GLOBAL_ROOM_MIN_LEN: usize = 6;
 /// other, every turn, and no global INDEX is hard-coded. The returned snapshot
 /// takes its name from that property, because the object's short name is the
 /// useless `ScottRoom`.
+///
+/// Only LEFT-ANCHORED candidates are ever corroborated against a global
+/// (SQ-1579), mirroring rung 2's own restriction to `left_anchored` fields
+/// (see [`detect_location_v6`]). A centred or right-anchored run is a banner,
+/// score block or title — never a room-name-shaped status field — and the
+/// Amiga release of *Journey* paints exactly such a banner ("JOURNEY",
+/// centered) as its only v6 status candidate; letting it reach this rung at
+/// all was how a title screen ended up corroborating an unrelated global.
 fn global_room_by_shown_text(machine: &Machine, cands: &[V6Candidate]) -> Option<ObjectSnapshot> {
     let mem = &machine.mem;
     let max_obj = max_object_number(mem);
@@ -624,7 +632,7 @@ fn global_room_by_shown_text(machine: &Machine, cands: &[V6Candidate]) -> Option
     }
     let objs = objects_named_by_globals(mem, max_obj);
 
-    for cand in cands {
+    for cand in cands.iter().filter(|c| c.left_anchored) {
         if normalize_name(&cand.name).len() < V6_GLOBAL_ROOM_MIN_LEN {
             continue;
         }
@@ -658,16 +666,30 @@ fn objects_named_by_globals(mem: &crate::memory::Memory, max_obj: u16) -> Vec<u1
     objs
 }
 
-/// The text of `obj`'s first property that reads as a string the status band is
-/// showing as `name`, or None.
+/// The text of `obj`'s first property that reads as a string EQUAL to what the
+/// status band is showing as `name`, or None.
 ///
 /// A word-sized property holding a PACKED string address is how Inform stores a
 /// printable name it does not put in the short name. Every such property is
-/// unpacked and decoded, and the decoded text is accepted only if `name` matches
-/// it by the ordinary [`status_name_matches`] rule — with the *property* as the
-/// full text and the shown `name` as its leading part, because the band's text is
-/// what gets clipped: `clean_room_text` cuts it at the first comma, and a long
-/// description can be cut again by the window's width.
+/// unpacked and decoded, and the decoded text is accepted only if it matches
+/// `name` EXACTLY (normalized) — not merely as a leading prefix.
+///
+/// This used to accept [`status_name_matches`]'s ordinary prefix rule — the
+/// property as the full text, the shown `name` as its leading part — reasoning
+/// that the band's text is what gets clipped (`clean_room_text` cuts it at the
+/// first comma, and a long description can be cut again by the window's width).
+/// That let a short, generic status-band word prefix-match an unrelated object's
+/// property text that merely happened to start with the same word followed by a
+/// comma: the Amiga release of *Journey* paints a centered "JOURNEY" title
+/// banner, and Praxix's own property text begins "journey, the following was
+/// written in…" — a perfectly ordinary word-boundary prefix match, and enough to
+/// bless an unrelated global as a room (SQ-1579). No real title exercises the
+/// prefix leniency this traded away: every *Mysterious Adventures* port this rung
+/// exists for (SQ-0724) paints its property text as the band's exact text, with
+/// no truncation in play, and [`global_room_by_shown_text`]'s left-anchoring
+/// filter (added alongside this) already rejects a centered banner like
+/// "JOURNEY" on its own — this tightens the text match too, since a corroborating
+/// global is strong evidence only when the texts truly agree.
 ///
 /// Most of this is guessing, and the guesses are kept harmless two ways. A word
 /// that is not really a string address is rejected up front unless it reaches a
@@ -689,7 +711,7 @@ fn object_text_property(machine: &Machine, obj: u16, name: &str) -> Option<Strin
             if packed != 0 && is_zstring(mem, str_addr) {
                 let text =
                     mem.without_fault_latch(|| crate::text::decode::decode_string(mem, str_addr).0);
-                if status_name_matches(&text, name) {
+                if normalize_name(&text) == normalize_name(name) {
                     return Some(text);
                 }
             }
@@ -2712,6 +2734,48 @@ mod tests {
         let _ = m.mem.take_mem_fault();
         assert!(detect_location(&m).is_some());
         assert_eq!(m.mem.take_mem_fault(), None, "speculative probing must not fault the story");
+    }
+
+    // ── SQ-1579: rung 3 must not corroborate a global against a CENTERED
+    // candidate, or against a mere PREFIX of the property text ─────────────────
+    // The Amiga release of Journey paints a centered "JOURNEY" title banner as
+    // its only v6 status candidate; before this fix, "journey" prefix-matched
+    // Praxix's own property text ("journey, the following was written in…") and
+    // minted a false room, "journey, the following was written in", that never
+    // cleared once the global did.
+
+    #[test]
+    fn v6_global_room_ignores_a_centered_banner_candidate() {
+        // Same shape as `machine_scott_shaped`, but the band paints the SAME
+        // text the property carries far right of the window's left edge
+        // (dx > `V6_LEFT_ANCHOR_MAX_DX`) — a centered banner, not a
+        // room-name-shaped status field. Even an exact text match must not
+        // corroborate a global for a non-left-anchored candidate.
+        let mut m = machine_scott_shaped(3, 6, "deep caverns");
+        m.screen.v6 = Some(v6_band(&[(11, 300, "deep caverns"), (11, 489, "Score: 0")]));
+        assert_eq!(
+            detect_location(&m),
+            None,
+            "a centered candidate must never corroborate a global, even with a matching text"
+        );
+    }
+
+    #[test]
+    fn v6_global_room_requires_the_whole_property_text_not_a_prefix() {
+        // The property carries strictly more text than the band shows — a
+        // word-boundary PREFIX match, the exact shape `status_name_matches`
+        // ordinarily accepts elsewhere. Rung 3 must require the full
+        // (normalized) text to agree, not merely a leading prefix of it.
+        // (`zstring_bytes` only encodes A0 letters and spaces, so the extra
+        // text is another word rather than comma-punctuated.)
+        let mut m = machine_scott_shaped(3, 6, "deep caverns beyond");
+        // Left-anchored, but only the first two words of the property text.
+        m.screen.v6 = Some(v6_band(&[(11, 71, "deep caverns"), (11, 489, "Score: 0")]));
+        assert_eq!(
+            detect_location(&m),
+            None,
+            "a mere prefix of the property text must not corroborate a global"
+        );
     }
 
     // ── TDD Step 1: write the failing tests ───────────────────────────────────

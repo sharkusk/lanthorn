@@ -1177,6 +1177,17 @@ pub fn boot_story(req: BootRequest<'_>, hooks: &mut dyn BootHooks) -> Result<Boo
     } else {
         Mapper::default()
     };
+    // SQ-1579: a menu-driven story with no grammar has no verb-driven
+    // navigation to map at all, and its v6 status band can still paint
+    // room-shaped text a detector mistakes for a location (Journey's title
+    // banner corroborating an unrelated global was the concrete case). Applies
+    // whether the mapper above is fresh or just loaded from an archive — an
+    // archive predating this gate could carry a bogus room from exactly that
+    // false positive, and this stops it from ever growing further, though it
+    // does not retroactively clean one out.
+    if crate::engine_helpers::zmachine_story_has_no_grammar(&*session) {
+        mapper.disable_mapping();
+    }
 
     // Startup: pre-load the per-game aux table from the global file when in
     // global mode.  In archive mode the table was populated above from the

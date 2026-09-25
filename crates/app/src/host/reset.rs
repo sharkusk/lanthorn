@@ -391,6 +391,13 @@ pub fn reset_game(
             state.last_transcript_total_rows = 0;
             if clear_map {
                 *mapper = Mapper::default();
+                // SQ-1579: re-applied here too — a fresh `Mapper::default()`
+                // always comes back with mapping enabled, and a restart is the
+                // same story, so the same "no grammar → no map" decision boot
+                // made must be made again. See `host::boot`'s call for why.
+                if crate::engine_helpers::zmachine_story_has_no_grammar(&*session) {
+                    mapper.disable_mapping();
+                }
             }
             // Glulx returns ordered elements (text + any startup images); the
             // Z-machine returns empty and uses the flat string path.

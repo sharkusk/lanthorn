@@ -21,3 +21,5 @@ mod v6_journey_menu;
 mod v6_journey_menu_band;
 #[path = "suites/v6_journey_prose_containment.rs"]
 mod v6_journey_prose_containment;
+#[path = "suites/sq1579_journey_no_map.rs"]
+mod sq1579_journey_no_map;

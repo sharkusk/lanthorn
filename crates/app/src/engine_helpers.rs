@@ -290,6 +290,17 @@ pub fn is_v6_session(session: &dyn Engine) -> bool {
     zvm_session_opt(session).is_some_and(|z| z.machine.mem.version() == 6)
 }
 
+/// Whether `session` is a Z-machine story with NO grammar table at all —
+/// `zvm::grammar::Grammar::load` answers `Absent` for a menu-driven Version 6
+/// game (Journey) or a Dialog story, neither of which has any verb-driven
+/// navigation to build a map out of. `false` for Glulx/Scott and for a bare
+/// `dyn Engine` that doesn't downcast to a Z-machine session — this exists only
+/// to gate the automapper (SQ-1579), and every other engine's own detection
+/// heuristics are unrelated to the v6 status-band false-positive this suppresses.
+pub fn zmachine_story_has_no_grammar(session: &dyn Engine) -> bool {
+    zvm_session_opt(session).is_some_and(|z| zvm::grammar::Grammar::load(&z.machine.mem).is_err())
+}
+
 /// Push a restore-time notice into the transcript when the just-restored
 /// archive predates `screen.bin` (SQ-1401) or `display.bin` (SQ-1403) — see
 /// [`crate::archive::RestoreDegradation`]. A no-op for a current-format archive.
