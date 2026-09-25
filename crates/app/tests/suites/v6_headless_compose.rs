@@ -608,6 +608,146 @@ fn record_only_reports_the_caret_instead_of_painting_it() {
     }
 }
 
+// ── the caret's ink and width (SQ-1571) ──────────────────────────────────────
+
+/// Shared assertion for SQ-1571: `c`, as `RecordOnly` reported it, must account
+/// for exactly what `Rasterise` painted for the SAME frame — `drawn` is the live
+/// frame with the caret rasterised, `idle` the identical frame with no caret
+/// drawn at all, so every pixel the two disagree on is the caret's own paint and
+/// nothing else. `c.ink` must be every one of those pixels' colour, and
+/// `c.w * c.h` must equal their count — not merely contain them, as the looser
+/// `record_only_reports_the_caret_instead_of_painting_it` check above does.
+fn assert_caret_ink_and_footprint(label: &str, c: v6::V6Caret, drawn: &image::RgbaImage, idle: &image::RgbaImage) {
+    assert_eq!(drawn.dimensions(), idle.dimensions(), "{label}: canvas sizes differ between the two frames");
+    let mut painted = 0usize;
+    for (x, y, p) in drawn.enumerate_pixels() {
+        if idle.get_pixel(x, y) != p {
+            painted += 1;
+            assert!(
+                (c.x..c.x + c.w).contains(&x) && (c.y..c.y + c.h).contains(&y),
+                "{label}: ({x},{y}) changed outside the reported caret cell {c:?}"
+            );
+            assert_eq!(*p, c.ink, "{label}: ({x},{y}) inside the caret cell is not caret.ink");
+        }
+    }
+    assert_eq!(
+        painted,
+        (c.w * c.h) as usize,
+        "{label}: caret.w ({}) * caret.h ({}) does not equal the {painted} pixels Rasterise actually painted",
+        c.w,
+        c.h
+    );
+}
+
+/// The ordinary story-window caret (Zork Zero r393): `RecordOnly`'s reported
+/// `ink` and `w` match `Rasterise`'s actual paint exactly, for the same frame.
+#[test]
+fn record_only_story_caret_reports_the_rasterised_ink_and_width() {
+    for (file, b) in specimens() {
+        if file != "zork0-r393-s890714.z6" {
+            continue;
+        }
+        for honor in [true, false] {
+            let bare = host_compose_with(&b, honor, V6TextMode::RecordOnly, &prose_awaiting(true));
+            let c = bare.caret.unwrap_or_else(|| panic!("{file} honor={honor}: awaiting input, no caret"));
+            assert!(!c.panel, "{file} honor={honor}: the story caret reported as a panel's");
+            let drawn = host_compose_with(&b, honor, V6TextMode::Rasterise, &prose_awaiting(true)).canvas;
+            let idle = host_compose_with(&b, honor, V6TextMode::Rasterise, &prose_awaiting(false)).canvas;
+            assert_caret_ink_and_footprint(&format!("{file} honor={honor}"), c, &drawn, &idle);
+        }
+    }
+}
+
+/// fmvpoker booted to its bet prompt — the same reach as
+/// `v6_restore_input_window_echo.rs`'s `to_bet_prompt`: choosing "CHANGE CURRENT
+/// BET" (SQ-0739) hands the read to the bottom panel, window 2, not window 0 —
+/// the PANEL-caret half of SQ-1571's acceptance. `fmvpoker.z6` is one more
+/// gitignored fixture the fetch script deliberately does not carry (see
+/// `scripts/fixtures.manifest`'s "NOT FETCHED" note), so `fixture_path` falls
+/// back to it only when the local `stories/` copy is there; this skips
+/// vacuously like the specimens above without it.
+fn fmvpoker_at_bet_prompt() -> Option<GameSession> {
+    let path = crate::fixture_paths::fixture_path("fmvpoker.z6");
+    let Ok(bytes) = std::fs::read(&path) else {
+        eprintln!("SKIP: gitignored story missing at {}", path.display());
+        return None;
+    };
+    let mut picts = PictSource::new(blorb::resolve_resource_blorb(&path).map(|(b, _)| b));
+    let dims = picts.all_pict_dims();
+    let mut session =
+        GameSession::new_with_trace(bytes, false, false, None, false, dims, picts.std_window(), None, None)
+            .expect("fmvpoker (v6) boots");
+    session.set_pict_source(Some(picts));
+    session.flush_boot_pictures();
+    let r = match session.pending_input() {
+        InputKind::Char => session.submit_char(13),
+        _ => session.submit(""),
+    };
+    assert!(r.fault.is_none(), "fmvpoker faulted dismissing the title: {:?}", r.fault);
+    let r = session.submit_char(b'c');
+    assert!(r.fault.is_none(), "fmvpoker faulted choosing CHANGE CURRENT BET: {:?}", r.fault);
+    assert_ne!(
+        session.machine.screen.v6_input_window, 0,
+        "premise: fmvpoker must be reading the bet through its bottom panel, not window 0"
+    );
+    Some(session)
+}
+
+/// Compose `session`'s current frame with no `Booted` `MachineBoot` chain behind
+/// it — fmvpoker's own bare v6 default cell, matching `v6_fmvpoker_hybrid.rs`
+/// and `v6_restore_input_window_echo.rs`'s own harnesses. `input: Some("")`
+/// draws the panel's live caret with nothing typed yet (mirroring `host_prose`'s
+/// empty `MainText::input` above); `None` suppresses it (SQ-1567 addendum).
+///
+/// `paint` is the game's own real ground (`erase_window` fills, SQ-0706), read
+/// off `session` exactly as `v6_fmvpoker_hybrid.rs`'s `fmvpoker_title` does —
+/// NOT `None`, or `fill_story_page_under_chrome_text` paints its flat `page`
+/// straight over the panel's own felt background (and the caret drawn onto it),
+/// since window 0's poker-table plate encloses rather than fills the screen and
+/// the bet panel sits in its "clear" interior. That gap when the ground is
+/// truly absent (a restore before the next `erase_window`) is
+/// `v6_restore_input_window_echo.rs`'s own module doc, not this one.
+fn fmvpoker_compose(session: &GameSession, text: V6TextMode, input: Option<&str>) -> app::render::screen::V6Frame {
+    let tf = app::native_font::TextFace::cell_only(zvm::screen::V6Cell::DEFAULT);
+    let model = session.screen();
+    let WinNode::Layered(items) = &model.root else { panic!("a v6 frame has a Layered root") };
+    let native = v6::native_extent(items, &tf);
+    let layout = v6::classify_windows(items, tf.cell());
+    let colors = app::colors::ColorScheme::terminal_default();
+    let paint = Engine::paint_surface(session);
+    let inputs = V6FrameInputs {
+        host_pair: (HOST_INK, HOST_PAGE),
+        honor_game_colours: false,
+        colors: &colors,
+        face: &tf,
+        paint: paint.as_deref(),
+        panel_input: input,
+        input,
+        prose: &empty_prose,
+        reveal: None,
+        pager_active: false,
+        more_prompt_pair: (HOST_INK, HOST_PAGE),
+        text,
+    };
+    compose_v6_frame(&layout, RasterFrame::native(native), &inputs)
+}
+
+/// The PANEL caret (fmvpoker reading its bet prompt through window 2):
+/// `RecordOnly`'s reported `ink` and `w` match `Rasterise`'s actual paint
+/// exactly, for the same frame — the same acceptance as the story caret above,
+/// on the OTHER call site `GlyphSink::caret` has (`draw_secondary_prose_into`).
+#[test]
+fn record_only_panel_caret_reports_the_rasterised_ink_and_width() {
+    let Some(session) = fmvpoker_at_bet_prompt() else { return };
+    let bare = fmvpoker_compose(&session, V6TextMode::RecordOnly, Some(""));
+    let c = bare.caret.unwrap_or_else(|| panic!("fmvpoker: awaiting the bet, no caret"));
+    eprintln!("fmvpoker (panel): caret {c:?}");
+    assert!(c.panel, "fmvpoker: the panel caret reported as the story's");
+    let drawn = fmvpoker_compose(&session, V6TextMode::Rasterise, Some("")).canvas;
+    let idle = fmvpoker_compose(&session, V6TextMode::Rasterise, None).canvas;
+    assert_caret_ink_and_footprint("fmvpoker (panel)", c, &drawn, &idle);
+}
+
 // ── the input line override (SQ-1567 addendum) ───────────────────────────────
 
 /// **`input: None` suppresses the live input line entirely — text and caret

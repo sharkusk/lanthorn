@@ -1689,15 +1689,21 @@ pub enum V6RunSource {
 ///
 /// The caret is one text cell wide — [`TextFace::cell`](crate::native_font::TextFace::cell)
 /// — and `h` tall, in the ink of the text it follows. Reported in every
-/// [`V6TextMode`], and painted in every mode but [`V6TextMode::RecordOnly`].
+/// [`V6TextMode`], and painted in every mode but [`V6TextMode::RecordOnly`] —
+/// where `w` and `ink` are how a host painting it itself learns the block
+/// [`GlyphSink::caret`] would have drawn (SQ-1571).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct V6Caret {
     /// Left edge of the caret cell, native px.
     pub x: u32,
     /// Top of the caret cell, native px.
     pub y: u32,
+    /// Width of the caret cell, native px — the text cell's.
+    pub w: u32,
     /// Height of the caret cell, native px — the text cell's.
     pub h: u32,
+    /// The caret's fill colour — the ink of the text it follows.
+    pub ink: Rgba<u8>,
     /// `true` when the caret is in a SECONDARY prose window the game is reading
     /// through ([`V6RunSource::Panel`]), `false` when it ends the story prose.
     pub panel: bool,
@@ -1773,7 +1779,7 @@ impl GlyphSink {
             fill_cell(canvas, x, y, w, h, ink);
         }
         if !self.caret.is_some_and(|c| c.panel) {
-            self.caret = Some(V6Caret { x, y, h, panel });
+            self.caret = Some(V6Caret { x, y, w, h, ink, panel });
         }
     }
 
@@ -4093,7 +4099,7 @@ mod tests {
             draw_story_text_into(&mut canvas, &main, 4, 2, 10, 3, ink, &[], &tf, None, &mut sink);
             (canvas, sink.caret_at())
         };
-        let want = Some(V6Caret { x: 4 + 2 * FONT_W, y: 2 + FONT_H, h: FONT_H, panel: false });
+        let want = Some(V6Caret { x: 4 + 2 * FONT_W, y: 2 + FONT_H, w: FONT_W, h: FONT_H, ink, panel: false });
         for mode in [V6TextMode::Rasterise, V6TextMode::RasteriseAndRecord, V6TextMode::RecordOnly] {
             let (live, caret) = draw(mode, true);
             let (idle, none) = draw(mode, false);
