@@ -457,6 +457,31 @@ pub fn blit_glyph_styled(
     // `None` — and a `TextFace` with no face on it — draw exactly as before.
     tf: Option<&crate::native_font::TextFace>,
 ) {
+    blit_glyph_chain(canvas, glyph, px, py, cw, ch, fg, bg, style, tf);
+}
+
+/// [`blit_glyph_styled`]'s whole body, answering what it drew (SQ-1569).
+///
+/// `Some(w)` when some table in the chain carried `glyph` — `w` is the width in
+/// device pixels the blit paints, which is `cw` for the cell path and the glyph's
+/// own (smeared, scaled) advance for [`blit_metric_glyph`]'s. `None` when nothing
+/// did, and the cell was painted blank (plus any emphasis rule).
+///
+/// It exists so [`crate::native_font::TextFace::glyph_image`] can ask the REAL
+/// chain rather than a second copy of its decisions: the answer is computed from
+/// the very `Option`s that pick the pixels, so it cannot disagree with them.
+fn blit_glyph_chain(
+    canvas: &mut RgbaImage,
+    glyph: char,
+    px: u32,
+    py: u32,
+    cw: u32,
+    ch: u32,
+    fg: Rgba<u8>,
+    bg: Option<Rgba<u8>>,
+    style: u8,
+    tf: Option<&crate::native_font::TextFace>,
+) -> Option<u32> {
     // The 8x16 face first (SQ-0932): at the 8x16 cell every production call site
     // uses it samples 1:1, where an 8x8 master has to double every row. The 8x8
     // chain stays as the fallback for what it doesn't carry — the quadrant blocks,
@@ -546,8 +571,8 @@ pub fn blit_glyph_styled(
             u8::try_from(u32::from(glyph)).ok().and_then(|c| f.glyph(c)).map(|g| (f, g))
         }) {
             let row_bytes = g.row_bytes(f.height);
-            blit_metric_glyph(canvas, g, row_bytes, px, py, ch, t.scale(), fg, bg, style, t.bold_smear(style), rule);
-            return;
+            let w = blit_metric_glyph(canvas, g, row_bytes, px, py, ch, t.scale(), fg, bg, style, t.bold_smear(style), rule);
+            return Some(w);
         }
         // A code the typeface does not carry falls through to the masters below,
         // drawn in the cell exactly as it would be with no face at all.
@@ -661,6 +686,7 @@ pub fn blit_glyph_styled(
             }
         }
     }
+    (native_rows.is_some() || narrow.is_some() || tall.is_some() || short.is_some()).then_some(cw)
 }
 
 /// One glyph of a PROPORTIONAL disk face, at the face's own size (SQ-1009).
@@ -681,6 +707,8 @@ pub fn blit_glyph_styled(
 /// [`blorb::bitmap_font::Glyph::row_bytes`]'s result for `g` — 1 for a glyph up to
 /// 8px wide (bearing included), more for a wider one (SQ-1038) — computed once by
 /// the caller, which already has the font `g` came from and so its `height`.
+///
+/// Answers the width it paints — the advance below — for [`blit_glyph_chain`].
 fn blit_metric_glyph(
     canvas: &mut RgbaImage,
     g: &blorb::bitmap_font::Glyph,
@@ -695,7 +723,7 @@ fn blit_metric_glyph(
     smear: u8,
     // §8.7.1's Italic bit as a RULE rather than a slope (SQ-1028).
     rule: bool,
-) {
+) -> u32 {
     let (sx, sy) = (scale.0.max(1), scale.1.max(1));
     let rows = synthesize_rows(&g.rows, row_bytes, style, smear);
     // The pen's own advance, which is where the NEXT glyph starts — so a painted
@@ -732,6 +760,7 @@ fn blit_metric_glyph(
             }
         }
     }
+    adv
 }
 
 /// [`synthesize_face16`]'s two transforms for a face of any height and, since
@@ -796,6 +825,115 @@ fn shift_row_right(row: &[u8], n: u32) -> Vec<u8> {
         }
     }
     out
+}
+
+/// Every codepoint a table in this module's chain carries, whatever the cell:
+/// [`crate::render::misc7x14`], [`crate::render::vga16`] and [`glyph_bits`]'s 8×8
+/// masters — `font8x8`'s basic-Latin, Latin-1, box-drawing and block-element sets
+/// plus [`EXTRA_GLYPHS`]. Duplicates are the caller's to fold.
+fn master_codepoints() -> impl Iterator<Item = char> {
+    crate::render::misc7x14::codepoints()
+        .chain(crate::render::vga16::codepoints())
+        .chain(font8x8::BASIC_FONTS.iter().map(|f| f.char()))
+        .chain(font8x8::LATIN_FONTS.iter().map(|f| f.char()))
+        .chain(font8x8::BOX_FONTS.iter().map(|f| f.char()))
+        .chain(font8x8::BLOCK_FONTS.iter().map(|f| f.char()))
+        .chain(EXTRA_GLYPHS.iter().map(|&(c, _)| c))
+}
+
+/// One glyph exactly as the raster path draws it — see
+/// [`crate::native_font::TextFace::glyph_image`].
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct GlyphImage {
+    /// Native pixels the pen moves after this glyph —
+    /// [`crate::native_font::TextFace::advance_styled`], the same number the
+    /// composite steps by.
+    pub advance: u32,
+    /// Rows, in native pixels: the declared cell's height.
+    pub height: u32,
+    /// Columns the blit PAINTS, in native pixels. The cell width for a glyph drawn
+    /// into the cell; the face's own scaled advance, bold smear included, for one
+    /// drawn at a face's scale. It can exceed `advance` — a bold glyph on a fixed
+    /// face at a scale smears a column past the pen, and the next glyph's own
+    /// footprint paints over it where the composite has a background.
+    pub width: u32,
+    /// One bit per pixel, MSB = leftmost, row-major; each row padded to a whole
+    /// byte ([`Self::row_bytes`]). A set bit is ink, the emphasis rule included.
+    pub bits: Vec<u8>,
+}
+
+impl GlyphImage {
+    /// Bytes per row of [`Self::bits`].
+    pub fn row_bytes(&self) -> usize {
+        self.width.div_ceil(8) as usize
+    }
+
+    /// Whether pixel `(x, y)` is ink; `false` outside the image.
+    pub fn ink(&self, x: u32, y: u32) -> bool {
+        x < self.width
+            && y < self.height
+            && self.bits[y as usize * self.row_bytes() + x as usize / 8] & (0x80 >> (x % 8)) != 0
+    }
+}
+
+/// The glyph pixels themselves, for a host that renders v6 text with its own font
+/// machinery (SQ-1569). Both answers come from [`blit_glyph_chain`] — the chain
+/// the raster path draws with — rather than from a second reading of its tables,
+/// so they cannot drift from what the composite paints.
+impl crate::native_font::TextFace {
+    /// The pixels [`blit_glyph_styled`] paints for `ch` in ZMSD §8.7.1 `style`, in
+    /// this face's declared cell — the call every v6 composite makes — or `None`
+    /// when no table in the chain carries `ch` (the blit paints a blank cell).
+    ///
+    /// Stamping each image at the pen, stepping by its `advance`, reproduces the
+    /// composite pixel for pixel: ink as ink, and — where the composite paints a
+    /// background — the rest of each `width × height` footprint as background.
+    pub fn glyph_image(&self, ch: char, style: u8) -> Option<GlyphImage> {
+        let cell = self.cell();
+        let (cw, chh) = (u32::from(cell.w()), u32::from(cell.h()));
+        let ink = Rgba([255, 255, 255, 255]);
+        // Ask the chain for the footprint first: a 0x0 canvas clips every pixel,
+        // so this paints nothing and answers only what it WOULD paint.
+        let width = blit_glyph_chain(&mut RgbaImage::new(0, 0), ch, 0, 0, cw, chh, ink, None, style, Some(self))?;
+        let mut canvas = RgbaImage::new(width, chh);
+        blit_glyph_chain(&mut canvas, ch, 0, 0, cw, chh, ink, None, style, Some(self));
+        let row_bytes = width.div_ceil(8) as usize;
+        let mut bits = vec![0u8; row_bytes * chh as usize];
+        for (x, y, p) in canvas.enumerate_pixels() {
+            if *p == ink {
+                bits[y as usize * row_bytes + x as usize / 8] |= 0x80 >> (x % 8);
+            }
+        }
+        Some(GlyphImage { advance: self.advance_styled(ch, style), height: chh, width, bits })
+    }
+
+    /// Every character [`Self::glyph_image`] draws in at least one style, sorted.
+    ///
+    /// The candidates are this face's own codes — body and fixed-pitch alternate,
+    /// which the blit looks up by byte — and every table the chain falls back to
+    /// ([`master_codepoints`]); each is kept only if the chain actually finds it.
+    /// On a machine with a fixed-pitch alternate the two faces can cover different
+    /// codes, so a character here may draw in one of `style`'s bit-3 states only;
+    /// with no alternate the answer is the same for every style.
+    pub fn repertoire(&self) -> Vec<char> {
+        let face_codes = [self.faces().body(), self.faces().fixed()]
+            .into_iter()
+            .flatten()
+            .flat_map(|f| (0u8..=255).filter(|&b| f.glyph(b).is_some()).map(char::from));
+        let candidates: std::collections::BTreeSet<char> = face_codes.chain(master_codepoints()).collect();
+        let cell = self.cell();
+        let (cw, chh) = (u32::from(cell.w()), u32::from(cell.h()));
+        let ink = Rgba([255, 255, 255, 255]);
+        candidates
+            .into_iter()
+            .filter(|&c| {
+                (0u8..16).any(|style| {
+                    blit_glyph_chain(&mut RgbaImage::new(0, 0), c, 0, 0, cw, chh, ink, None, style, Some(self))
+                        .is_some()
+                })
+            })
+            .collect()
+    }
 }
 
 #[cfg(all(test, feature = "t-render"))]

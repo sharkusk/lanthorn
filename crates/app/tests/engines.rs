@@ -173,6 +173,8 @@ mod zip_story_entries;
 mod v6_dump_windows_face;
 #[path = "suites/system_face_cascade.rs"]
 mod system_face_cascade;
+#[path = "suites/v6_glyph_image.rs"]
+mod v6_glyph_image;
 #[path = "suites/native_disk_sound.rs"]
 mod native_disk_sound;
 #[path = "suites/dialog_story_degradation.rs"]

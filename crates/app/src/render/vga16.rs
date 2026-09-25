@@ -265,6 +265,12 @@ pub fn glyph(ch: char) -> Option<[u8; 16]> {
     GLYPHS.binary_search_by_key(&key, |&(c, _)| c).ok().map(|i| GLYPHS[i].1)
 }
 
+/// Every codepoint [`glyph`] answers for, in table order — for
+/// `TextFace::repertoire`, which has to enumerate what the chain can draw.
+pub(crate) fn codepoints() -> impl Iterator<Item = char> {
+    GLYPHS.iter().filter_map(|&(c, _)| char::from_u32(c))
+}
+
 #[cfg(all(test, feature = "t-render"))]
 mod tests {
     use super::*;
