@@ -2623,6 +2623,18 @@ pub struct AppState {
     /// one moment, stale the moment the next one starts. Session state, never
     /// persisted, for the same reason.
     pub assist_offer: Option<crate::assist::Offer>,
+    /// The transcript line [`push_assist`](Self::push_assist) printed the
+    /// once-per-session intro block onto THIS call, if any (SQ-1557) — the
+    /// host-visible signal that identifies the intro structurally instead of
+    /// matching a line's text against [`crate::assist::preamble`], which
+    /// silently breaks the moment the wording or gutter mark changes. `None`
+    /// on a call that didn't print the intro (already shown this session, or
+    /// guidance off) and on every call before the first. Reset at the head of
+    /// every turn ([`Self::begin_turn`]), the same way [`Self::assist_offer`]
+    /// is — an answer about one call, stale the moment the next turn starts.
+    /// See [`Self::assist_intro_offer`] for the structured
+    /// [`crate::assist::OfferKind::Intro`] this line carries.
+    pub assist_intro_line: Option<usize>,
     /// The story's own vocabulary, and which unknown words this session has
     /// already answered (SQ-1041). Read from the engine the first time an offer
     /// is considered and cached — the tables are static — and deliberately not
@@ -3722,6 +3734,7 @@ impl Default for AppState {
             transcript_kinds: Vec::new(),
             assist_preamble_shown: false,
             assist_offer: None,
+            assist_intro_line: None,
             vocab: crate::vocab::VocabState::default(),
             reveal: None,
             probe: crate::probe::ShadowProbe::default(),
@@ -5357,6 +5370,9 @@ impl AppState {
         // offer describes the assist line the PREVIOUS turn printed, and a new
         // turn starting is what makes it stale.
         self.assist_offer = None;
+        // Same again, for the intro line's own signal (SQ-1557): it describes a
+        // call the previous turn made, and is stale the moment this one starts.
+        self.assist_intro_line = None;
     }
 
     pub fn push_assist(&mut self, assist: &crate::assist::Assist) {
@@ -5366,21 +5382,41 @@ impl AppState {
         if !self.config.guidance {
             return;
         }
+        // Reset for THIS call, mirroring `assist_offer` below: a call that
+        // doesn't print the intro (already shown) must say so, not carry a
+        // stale line number from whichever earlier call last set it.
+        self.assist_intro_line = None;
         if !self.assist_preamble_shown {
             self.assist_preamble_shown = true;
             let intro = self.colors.theme.get(crate::assist::AssistTone::Help.selector()).style;
             let line = crate::assist::preamble(self.symbols.assist_gutter);
             self.push_transcript_internal_styled(&line, TranscriptKind::Assist, intro);
+            self.assist_intro_line = Some(self.transcript.len() - 1);
         }
         let style = self.colors.theme.get(assist.tone().selector()).style;
         for line in assist.lines() {
             self.push_transcript_internal_styled(&line, TranscriptKind::Assist, style);
         }
-        // The structured half of THIS line (SQ-1552), overwriting whatever the
-        // intro block above may have implied — the intro carries no offer of its
-        // own, and what a host wants after driving a turn is what the turn's own
-        // assist said, not the once-per-session chrome above it.
+        // The structured half of THIS line (SQ-1552) — what the turn's own
+        // assist said, not the once-per-session chrome above it. The intro's
+        // own structured half lives in `assist_intro_line` (SQ-1557), set
+        // above, and is not folded in here so this stays "the last real
+        // assist", exactly as before.
         self.assist_offer = Some(assist.offer());
+    }
+
+    /// The structured [`crate::assist::OfferKind::Intro`] offer for the
+    /// intro line THIS call to [`push_assist`](Self::push_assist) printed, if
+    /// any (SQ-1557) — the same shape as [`Self::assist_offer`], derived from
+    /// [`Self::assist_intro_line`] so a host reads one type either way rather
+    /// than a bare line number for this signal and a full [`crate::assist::Offer`]
+    /// for the other.
+    pub fn assist_intro_offer(&self) -> Option<crate::assist::Offer> {
+        self.assist_intro_line.map(|_| crate::assist::Offer {
+            kind: crate::assist::OfferKind::Intro,
+            word: None,
+            picks: Vec::new(),
+        })
     }
 
     /// Surface an app-internal `[…]` bracketed notice as a top-right toast

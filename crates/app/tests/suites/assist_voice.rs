@@ -30,7 +30,7 @@
 //! someone with no reason to know any of this, and a hand-built assist line would
 //! look perfectly fine in review.
 
-use app::assist::{Assist, AssistTone, EXPORT_PREFIX, preamble};
+use app::assist::{Assist, AssistTone, EXPORT_PREFIX, OfferKind, preamble};
 use app::state::{AppState, TranscriptFilter, TranscriptKind};
 
 fn kinds_of(s: &AppState) -> Vec<TranscriptKind> {
@@ -161,6 +161,66 @@ fn the_introduction_fires_once_and_shows_the_mark_in_force() {
         "the introduction is once a session"
     );
     assert!(kinds_of(&s).iter().all(|k| *k == TranscriptKind::Assist));
+}
+
+/// SQ-1557: a headless host needs to tell the once-per-session introduction
+/// apart from an ordinary assist line WITHOUT string-matching `preamble`'s
+/// wording — that match silently breaks the moment the text or the gutter
+/// mark changes. `assist_intro_line` names the transcript line structurally,
+/// and `assist_intro_offer()` is the actual `OfferKind::Intro` a host reads.
+/// The line right after it — the turn's own assist — must NOT carry that
+/// signal: it is a distinct, ordinary `Other` offer via `assist_offer`.
+#[test]
+fn the_first_push_assist_signals_the_intro_line_and_only_that_line() {
+    let mut s = AppState::default();
+    s.push_assist(&Assist::help("this story knows — light"));
+
+    assert_eq!(s.transcript[0], preamble('●'), "line 0 is the introduction");
+    assert_eq!(s.transcript[1], "this story knows — light", "line 1 is the turn's own assist");
+
+    assert_eq!(s.assist_intro_line, Some(0), "the signal names exactly the intro's line");
+    assert_eq!(
+        s.assist_intro_offer().map(|o| o.kind),
+        Some(OfferKind::Intro),
+        "and it actually produces OfferKind::Intro"
+    );
+
+    // The line that follows in the same call is a different, ordinary offer —
+    // not the intro's.
+    assert_eq!(
+        s.assist_offer.as_ref().map(|o| o.kind),
+        Some(OfferKind::Other),
+        "the turn's own assist line does not inherit the intro's kind"
+    );
+}
+
+/// The second `push_assist` of a session prints no introduction (SQ-1045's
+/// once-per-session rule) and so must raise no intro signal either — a host
+/// naively re-checking after every call must see nothing, not a stale line
+/// number from the first call.
+#[test]
+fn the_second_push_assist_in_a_session_signals_no_intro() {
+    let mut s = AppState::default();
+    s.push_assist(&Assist::help("first"));
+    assert_eq!(s.assist_intro_line, Some(0));
+
+    s.push_assist(&Assist::caution("second"));
+    assert_eq!(s.assist_intro_line, None, "no intro was printed on this call");
+    assert_eq!(s.assist_intro_offer(), None, "so there is no OfferKind::Intro to report");
+}
+
+/// The intro's signal is a fact about the call that just happened, stale the
+/// moment the next turn starts — the same rule `begin_turn` already applies to
+/// `assist_offer` (SQ-1552).
+#[test]
+fn the_intro_signal_is_cleared_at_the_head_of_the_next_turn() {
+    let mut s = AppState::default();
+    s.push_assist(&Assist::help("first"));
+    assert_eq!(s.assist_intro_line, Some(0));
+
+    s.begin_turn();
+    assert_eq!(s.assist_intro_line, None, "begin_turn clears it the same way it clears assist_offer");
+    assert_eq!(s.assist_offer, None, "sanity check: the sibling signal follows the same rule");
 }
 
 /// The switch is real, and it is checked at the one door rather than at five call
