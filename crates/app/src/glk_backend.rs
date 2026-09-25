@@ -467,6 +467,11 @@ impl AppGlk {
         self.borderless = on;
     }
 
+    /// The per-game borderless-windows preference currently in force.
+    pub fn borderless(&self) -> bool {
+        self.borderless
+    }
+
     /// Update the theme's rendered default colours reported through
     /// `glk_style_measure` (SQ-0315/SQ-0803): one `(fg, bg)` pair per Glk style
     /// class for text-buffer windows (row 0) and text-grid windows (row 1), as

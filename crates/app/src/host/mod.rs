@@ -21,6 +21,8 @@
 //! - [`sound`] — the [`SoundSink`](sound::SoundSink) a host plays sound through,
 //!   and [`sound_finished`](sound::sound_finished) for reporting one back.
 //! - [`ingame_io`] — the game's own SAVE/RESTORE and filename requests.
+//! - [`settings`] — apply a changed config to a running session, as the
+//!   settings screen's Save does (SQ-1559).
 //! - [`assist`] — the Guiding Light's per-game switch, and the command band's
 //!   data (SQ-1549). Completion and the reveal's text-in/words-out variant are
 //!   pure enough that they live beside what they're twins of instead —
@@ -34,6 +36,7 @@ pub mod persist;
 pub mod probe;
 pub mod reset;
 pub mod screen;
+pub mod settings;
 pub mod sound;
 pub mod turn;
 

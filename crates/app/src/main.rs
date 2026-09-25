@@ -3837,19 +3837,10 @@ fn run_event_loop(boot: startup::BootResult, launched_from_library: bool) -> Run
             continue;
         }
 
-        // Snapshot working config before apply_action clears it on ConfigSave.
-        let config_to_save = if matches!(action, Action::ConfigSave) {
-            state.overlays.config_screen.as_ref().map(|cs| cs.working.clone())
-        } else {
-            None
-        };
-        // Mouse capture is established once at startup; note its pre-save value so a
-        // settings-screen change can be applied to the live terminal below.
-        let mouse_before_save = state.config.mouse;
-        // Likewise note command_bar so a settings-screen toggle re-applies the
-        // session's prompt-stripping live (else render mode and strip_prompt desync
-        // until the next @restart).
-        let command_bar_before_save = state.config.command_bar;
+        // A settings-screen Save's `AppState` half (SQ-1559): `host::settings::
+        // apply`'s report, finished by `host::settings::commit` below — after
+        // the same run-loop drains every other action gets.
+        let mut settings_applied: Option<app::host::settings::Applied> = None;
 
         match action {
             // ── Caller-handled actions ─────────────────────────────────────────
@@ -4271,6 +4262,13 @@ fn run_event_loop(boot: startup::BootResult, launched_from_library: bool) -> Run
                 state.pager.active = false;
             }
 
+            // Same bookkeeping `apply_action`'s arm runs, but keeping the report
+            // so the terminal-only follow-up (mouse capture) and `commit` below
+            // know what changed.
+            Action::ConfigSave => {
+                settings_applied = app::input::config_save(&mut state);
+            }
+
             // ── apply_action handles everything else ───────────────────────────
             other => {
                 apply_action(other, &mut state, &mut mapper);
@@ -4305,39 +4303,27 @@ fn run_event_loop(boot: startup::BootResult, launched_from_library: bool) -> Run
         lifecycle::flush_pending_config_write(&mut state);
 
         // After apply_action: if config screen was just saved, persist config.toml
-        // (created if missing). The settings screen edits no colours/symbols, and the
-        // live look was already re-resolved FROM style.toml in apply_action, so we do
-        // NOT touch style.toml here — writing it would clobber the seeded template.
-        if let Some(cfg_to_write) = config_to_save {
+        // (created if missing), sync the engine and re-resolve the live look —
+        // `host::settings::commit`, which owns that order (SQ-1161, SQ-1559). The
+        // settings screen edits no colours/symbols, so style.toml is NOT written
+        // here — writing it would clobber the seeded template.
+        if let Some(applied) = settings_applied {
+            let committed = app::host::settings::commit(&mut state, &mut *session, &applied);
             // Hitting Save on the settings screen and getting nothing is the worst
             // place to swallow this — surface the reason (SQ-0580).
-            if let Err(e) = app::config::write_config_file(&state.config) {
+            if let Err(e) = &committed.config_write {
                 state.push_notice(&format!("[config not saved: {e}]"));
             }
             // Apply a mouse-capture change live so the setting takes effect without a
             // restart (matching how audio/colours apply live on save).
-            if cfg_to_write.mouse != mouse_before_save {
-                let _ = if cfg_to_write.mouse {
+            if let Some(on) = applied.mouse {
+                let _ = if on {
                     execute!(stdout(), EnableMouseCapture)
                 } else {
                     execute!(stdout(), DisableMouseCapture)
                 };
             }
-            // Re-apply prompt stripping live so toggling the command bar on/off in
-            // Settings takes effect on the next turn without a restart (inline mode
-            // keeps the game's `>`, command-bar mode strips it).
-            if cfg_to_write.command_bar != command_bar_before_save {
-                session.set_strip_prompt(cfg_to_write.command_bar);
-            }
-            // SQ-1161: and re-resolve the live look, AFTER the write above. This is
-            // the single funnel the style watcher and `/reload-style` go through, so
-            // it is what makes the `period_look` row (and the theme layers, and this
-            // story's own style.toml and garglk.ini overlays) land on Save instead of
-            // waiting for the next launch. It must run after `write_config_file`,
-            // because it recomputes `honor_game_colours` from this story's sidecar and
-            // re-pins the key — and a pinned key is skipped by the writer, so running
-            // it first would drop the honour row's own edit out of the file.
-            if let app::reload::ReloadOutcome::Failed { msg } = app::reload::reload_style(&mut state) {
+            if let app::reload::ReloadOutcome::Failed { msg } = committed.style {
                 state.push_notice(&format!("[style not reloaded: {msg}]"));
             }
         }

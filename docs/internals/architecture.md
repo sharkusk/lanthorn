@@ -213,6 +213,20 @@ caller of it: there is one copy of each rule.
   is a nonblocking channel read, so there is no deadline to fold into
   `host::clock::next_deadline`. `tests/suites/host_probe.rs` covers a vetted
   offer and a return-probe map edge through the host alone.
+- **Applying a changed config** (`host::settings`, SQ-1559) — what the settings
+  screen's Save does to a running session, in two halves. `apply(state, working,
+  per_game)` is the `AppState` half: the config, the `_base` values `/set-… auto`
+  falls back to, the one-run holds on `AppState` (ended only when the edit
+  released the key's pin), the sound sink, the `show_status_bar` /
+  `show_room_numbers` mirrors — and, for a host, this game's `PerGameConfig`
+  layered back over the top with boot's precedence and pins. `commit(state,
+  session, &applied)` must follow it: write `config.toml`, sync the engine
+  (Glulx sound gestalt, prompt stripping, borderless relayout), then
+  `reload_style` — after the write, because the reload re-pins the honour key and
+  a pinned key is skipped by the writer. `working` is the live config with the
+  edits applied and each edited key's pin released, never a bare file off disk,
+  or every one-run choice reads as an edit. The TUI's `Action::ConfigSave` runs
+  both; mouse capture and the style watcher stay its own.
 
 ## Three engines, one renderer — and Glk only for Glulx
 

@@ -3493,83 +3493,12 @@ fn apply_action_inner(action: Action, state: &mut AppState, mapper: &mut Mapper)
         }
 
         Action::ConfigSave => {
-            if let Some(cs) = state.overlays.config_screen.take() {
-                state.config = clone_config(&cs.working);
-                // The config screen edits the GLOBAL honor default; keep the
-                // SQ-0318 base in sync so a later reload_style doesn't revert it
-                // (a per-game override, if any, still wins on the next reload).
-                state.honor_game_colours_base = state.config.honor_game_colours;
-                // SQ-0860: the base alone is not enough when a one-run source is
-                // holding this key, because `reload_style` only falls back to the
-                // base when nothing per-story is speaking. Editing the row calls
-                // `one_run.release` (see `one_run_key_for_row`), so a missing pin
-                // on a key that had one IS the deliberate edit — end the holds that
-                // live on `AppState` too, or the next style reload recomputes the
-                // user's own choice straight back off. Untouched rows keep their
-                // pin, so saving some unrelated setting changes nothing here.
-                if !state.config.one_run.holds(crate::config::keys::HONOR_GAME_COLOURS) {
-                    state.game_colours_cli = None;
-                    state.artwork_declines_colours = false;
-                }
-                if let Some(b) = state.audio.as_mut() {
-                    b.set_volume(state.config.volume);
-                } else if state.config.enable_sound {
-                    state.audio = Some(crate::host::sound::default_sound_sink(state.config.volume));
-                }
-                if !state.config.enable_sound {
-                    state.reset_sound_sidecars();
-                }
-                // Sync the running Glulx VM's Sound gestalt (applied by the event loop).
-                state.pending_vm_sound = Some(state.config.enable_sound);
-                // Reconcile the style file-watcher live (the run loop owns it).
-                state.pending_watch_style = Some(state.config.watch_style);
-                // SQ-1161: two settings are mirrored onto `AppState` at boot and
-                // read from THERE by render — `startup.rs` seeds both and the
-                // toggle keys drive the mirror, not the config. Saving the row
-                // without lowering it wrote config.toml and changed nothing on
-                // screen until the next launch, which is exactly the silent
-                // half-application the screen's contract forbids.
-                state.show_status_bar = state.config.show_status_bar;
-                state.show_room_numbers = state.config.show_room_numbers;
-                // SQ-1161: and four more keys keep a `_base` on `AppState` — the
-                // GLOBAL default a per-story source overrides for one launch, and
-                // what `/set-guidance auto` (and its siblings) fall back to. The
-                // honour row's base is lowered above for the same reason; without
-                // these, saving the row moved the live value and left `auto`
-                // pointing at the value the session started with.
-                //
-                // Only when nothing per-story is pinning the key: a pin means the
-                // row was NOT edited (editing releases it, above), so `working`
-                // still holds someone else's value for this run and lowering it
-                // would turn one game's choice into everyone's (SQ-0807).
-                if !state.config.one_run.holds(crate::config::keys::GUIDANCE) {
-                    state.guidance_base = state.config.guidance;
-                }
-                if !state.config.one_run.holds(crate::config::keys::RETURN_PROBE) {
-                    state.return_probe_base = state.config.return_probe;
-                }
-                if !state.config.one_run.holds(crate::config::keys::V6_PIXEL_LOCK) {
-                    state.v6_pixel_lock_base = state.config.v6_pixel_lock;
-                }
-                if !state.config.one_run.holds(crate::config::keys::V6_RENDER) {
-                    state.v6_render_base = state.config.v6_render;
-                }
-                // Re-resolving the live look is caller-handled, and deliberately
-                // runs AFTER `write_config_file` (SQ-1161). It used to happen here
-                // as a bare global `load_style` + `resolve`, which dropped the
-                // per-game style overlay and the garglk overlay from the live look
-                // and never recomputed `state.period_look` — so saving the
-                // `period_look` row did nothing until something else happened to
-                // reload the style. `reload::reload_style` is the ONE place the
-                // theme is built and fixes all three, but it also recomputes
-                // `honor_game_colours` from this story's sidecar and re-PINS it,
-                // and `ConfigDoc::put` skips a pinned key: run here, it would
-                // silently drop the honour row's edit from the file it was just
-                // asked to write. Ordering is the whole fix — the file first, then
-                // the story's own overrides back over the top of the live look.
-                // The style-file write + config repoint is caller-handled
-                // (main.rs snapshots working before this runs).
-            }
+            // The whole of Save's `AppState` half lives in `host::settings::apply`
+            // (SQ-1559) so a non-terminal host runs the same bookkeeping. Writing
+            // config.toml and re-resolving the live look run AFTER it, in
+            // `host::settings::commit` — caller-handled (main.rs), so a test that
+            // drives this action writes nothing to disk.
+            config_save(state);
         }
 
         Action::ConfigCancel => {
@@ -4955,6 +4884,15 @@ fn nearest_room(
 
 /// Number of rows in the config screen — derived from the row list so it cannot drift.
 pub(crate) const CONFIG_ROW_COUNT: usize = crate::render::config_screen::CONFIG_ROWS.len();
+
+/// Save the open settings screen's working copy into the running session's
+/// state (`Action::ConfigSave`): close the screen and hand the working copy to
+/// [`crate::host::settings::apply`]. `None` when no settings screen was open.
+/// The caller runs [`crate::host::settings::commit`] with the result.
+pub fn config_save(state: &mut AppState) -> Option<crate::host::settings::Applied> {
+    let cs = state.overlays.config_screen.take()?;
+    Some(crate::host::settings::apply(state, cs.working, None))
+}
 
 /// Clone a Config (Config derives Clone, this is a convenience wrapper for tests).
 pub(crate) fn clone_config(cfg: &crate::config::Config) -> crate::config::Config {

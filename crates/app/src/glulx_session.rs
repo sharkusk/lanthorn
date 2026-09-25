@@ -853,6 +853,13 @@ impl GlulxSession {
         self.refresh_screen();
     }
 
+    /// The borderless-windows mode currently in force (SQ-1559), so a caller can
+    /// tell whether [`Self::set_borderless`] would change anything before paying
+    /// for its relayout.
+    pub fn borderless(&mut self) -> bool {
+        self.appglk().borderless()
+    }
+
     /// Drive one turn's worth of execution, updating `pending`/`quit`/`pending_io`.
     /// On an in-game `@save`/`@restore` the drive stops with `pending_io` set (and
     /// `pending`/`quit` left unchanged, since the game is mid-turn); the run loop
