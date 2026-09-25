@@ -2127,32 +2127,34 @@ pub(crate) fn draw_secondary_prose_into(
             None => ink,
         };
         let right = it.x_px as u32 + it.w_px as u32;
-        let rects = buffer_line_rects(it, tf);
-        for (line, &(x0, y0, _, _)) in b.lines.iter().zip(&rects) {
-            let mut pen = x0;
-            for ch in line.chars() {
+        let rows = buffer_wrapped_rows(it, tf);
+        for (text, x0, y0, ..) in &rows {
+            let mut pen = *x0;
+            for ch in text.chars() {
                 let adv = tf.advance(ch);
                 if pen + adv > right {
                     break;
                 }
-                glyphs.blit(canvas, ch, pen, y0, font_w, font_h, fg, None, 0, tf, V6RunSource::Panel);
+                glyphs.blit(canvas, ch, pen, *y0, font_w, font_h, fg, None, 0, tf, V6RunSource::Panel);
                 pen += adv;
             }
         }
         // The live input line, when the player is typing into THIS window
-        // (SQ-0746). It continues the window's last line — the prompt the game
-        // printed and then read after, "Enter the new bet: " — exactly as
+        // (SQ-0746). It continues the window's last PHYSICAL row — the prompt the
+        // game printed and then read after, "Enter the new bet: " — exactly as
         // `draw_story_text` continues the transcript's kept prompt row, with the
-        // caret one cell past what has been typed.
+        // caret one cell past what has been typed. That row is [`wrap_panel_line`]'s
+        // last output, not `b.lines`' last entry: a wrapped message ends on a row
+        // the word-wrap produced, and continuing from the unwrapped source line
+        // would place the caret past the end of an earlier physical row instead.
         let Some(input) = input.filter(|_| b.reads_input) else { continue };
         // With nothing in the window yet the read starts at its own top-left, the
-        // same place the window's first line would have gone.
-        let (x0, y0) = rects.last().map_or(
+        // same place the window's first row would have gone.
+        let (x0, y0) = rows.last().map_or(
             (it.x_px as u32 + it.left_margin as u32, it.y_px as u32),
-            |&(x0, y0, _, _)| (x0, y0),
+            |(_, x0, y0, ..)| (*x0, *y0),
         );
-        let start = x0
-            + rects.len().checked_sub(1).map_or(0, |i| tf.run_px(&b.lines[i]));
+        let start = x0 + rows.last().map_or(0, |(text, ..)| tf.run_px(text));
         let mut pen = start;
         for (i, ch) in input.chars().chain(std::iter::once(' ')).enumerate() {
             let adv = tf.advance(ch);
@@ -2253,19 +2255,87 @@ pub(crate) fn draw_story_canvas_runs_into(
     }
 }
 
-/// Where a SECONDARY prose window's lines land on the pixel composite (SQ-0729),
-/// one `(x0, y0, x1, y1)` per line it carries, in the order of `lines`.
+/// Word-wrap `line` to `avail` native pixels, one physical row per element
+/// (SQ-1581).
 ///
-/// A `Buffer` is flowing prose with no pixel runs to place, so its lines stack from
+/// The same decision [`crate::render::wrap_cache::raster_wrap_extend`] makes for
+/// the story window's own prose: split on `' '`, and a row takes the next word
+/// only while `tf.run_px` of the row plus the word (and the gap between them)
+/// still fits. `ZWindow::push_prose`'s own doc says why a v6 secondary prose
+/// window needs this at all — "wrapping is the host's job" — the same as the
+/// story window, which already wraps this way; a panel just never did.
+///
+/// One addition the story window's own callers never need: a single word wider
+/// than `avail` on its own is broken by character rather than left to overrun —
+/// the common path never reaches it, but a panel's width is a fraction of the
+/// story window's and has no guarantee a game's word is short.
+///
+/// An empty `line` yields one empty row, preserving the blank line's own vertical
+/// space rather than collapsing it away.
+fn wrap_panel_line(line: &str, avail: u32, tf: &crate::native_font::TextFace) -> Vec<String> {
+    if line.is_empty() {
+        return vec![String::new()];
+    }
+    let mut rows = Vec::new();
+    let mut cur = String::new();
+    let mut cur_px = 0u32;
+    for word in line.split(' ') {
+        let word_px = tf.run_px(word);
+        if word_px > avail {
+            // An unbreakable word wider than the whole window: flush whatever is
+            // pending onto its own row, then character-break the word itself.
+            if !cur.is_empty() {
+                rows.push(std::mem::take(&mut cur));
+                cur_px = 0;
+            }
+            for ch in word.chars() {
+                let adv = tf.advance(ch);
+                if !cur.is_empty() && cur_px + adv > avail {
+                    rows.push(std::mem::take(&mut cur));
+                    cur_px = 0;
+                }
+                cur.push(ch);
+                cur_px += adv;
+            }
+            continue;
+        }
+        let gap = if cur.is_empty() { 0 } else { tf.advance(' ') };
+        if !cur.is_empty() && cur_px + gap + word_px > avail {
+            rows.push(std::mem::take(&mut cur));
+            cur_px = 0;
+        }
+        if !cur.is_empty() {
+            cur.push(' ');
+            cur_px += tf.advance(' ');
+        }
+        cur.push_str(word);
+        cur_px += word_px;
+    }
+    rows.push(cur);
+    rows
+}
+
+/// Where a SECONDARY prose window's lines land on the pixel composite (SQ-0729),
+/// one `(text, x0, y0, x1, y1)` per PHYSICAL row [`wrap_panel_line`] produces from
+/// `lines`, in order.
+///
+/// A `Buffer` is flowing prose with no pixel runs to place, so its rows stack from
 /// the window's origin (plus the game's own left margin), one 16px text row each,
 /// and stop at the bottom of the box the game declared — which is where the cell
-/// paths put them too. Shared by the draw in [`build_chrome_canvas`] and by
-/// [`chrome_text_rects`], whose caller must spare exactly the pixels the draw
-/// claims; measuring them twice is how Shogun's menu got erased once already.
+/// paths put them too. A logical line that fits the window's width produces
+/// exactly one row (unchanged from before SQ-1581); one that doesn't wraps at a
+/// word boundary onto as many rows as it needs, the way the story window's own
+/// prose already does, instead of losing everything past the right edge. Shared
+/// by the draw in [`draw_secondary_prose_into`] and by [`chrome_text_rects`]
+/// (through [`buffer_line_rects`]), whose caller must spare exactly the pixels the
+/// draw claims; measuring them twice is how Shogun's menu got erased once already.
 ///
 /// A PRIMARY buffer is the transcript and is not drawn here at all — it yields
 /// nothing.
-fn buffer_line_rects(it: &PositionedWindow, tf: &crate::native_font::TextFace) -> Vec<(u32, u32, u32, u32)> {
+fn buffer_wrapped_rows(
+    it: &PositionedWindow,
+    tf: &crate::native_font::TextFace,
+) -> Vec<(String, u32, u32, u32, u32)> {
     let font_h = u32::from(tf.cell().h());
     let WinNode::Buffer(b) = &it.node else { return Vec::new() };
     if b.primary {
@@ -2274,20 +2344,31 @@ fn buffer_line_rects(it: &PositionedWindow, tf: &crate::native_font::TextFace) -
     let x0 = it.x_px as u32 + it.left_margin as u32;
     let bottom = it.y_px as u32 + it.h_px as u32;
     let right = it.x_px as u32 + it.w_px as u32;
+    let avail = right.saturating_sub(x0).max(1);
     let mut out = Vec::new();
-    for (row, line) in b.lines.iter().enumerate() {
-        let y0 = it.y_px as u32 + row as u32 * font_h;
-        if y0 + font_h > bottom {
-            break;
+    let mut row = 0u32;
+    'lines: for line in &b.lines {
+        for sub in wrap_panel_line(line, avail, tf) {
+            let y0 = it.y_px as u32 + row * font_h;
+            if y0 + font_h > bottom {
+                break 'lines;
+            }
+            // The PEN again (SQ-1054): the draw steps `tf.advance` down this very
+            // list, so the rect and the draw must agree. The doc above already
+            // said "spare exactly the pixels the draw claims" — they were
+            // measured twice, in two different units.
+            let x1 = (x0 + tf.run_px(&sub)).min(right);
+            out.push((sub, x0, y0, x1, y0 + font_h));
+            row += 1;
         }
-        // The PEN again (SQ-1054): `draw_secondary_prose` steps `tf.advance` down
-        // this very list, so the rect and the draw must agree. The doc above
-        // already said "spare exactly the pixels the draw claims" — they were
-        // measured twice, in two different units.
-        let x1 = (x0 + tf.run_px(line)).min(right);
-        out.push((x0, y0, x1, y0 + font_h));
     }
     out
+}
+
+/// [`buffer_wrapped_rows`], without the text — [`chrome_text_rects`]' sparing
+/// pass only needs the rects.
+fn buffer_line_rects(it: &PositionedWindow, tf: &crate::native_font::TextFace) -> Vec<(u32, u32, u32, u32)> {
+    buffer_wrapped_rows(it, tf).into_iter().map(|(_, x0, y0, x1, y1)| (x0, y0, x1, y1)).collect()
 }
 
 /// A uniform (aspect-preserving) letterbox scale from native game pixels to

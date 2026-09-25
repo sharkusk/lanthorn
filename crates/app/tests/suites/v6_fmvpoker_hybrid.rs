@@ -1539,3 +1539,169 @@ fn no_corpus_title_reads_through_a_panel() {
         }
     }
 }
+
+/// SQ-1581: `draw_secondary_prose_into` walked each PHYSICAL row's characters and
+/// `break`s the moment the pen crosses the window's right edge — dropping the
+/// rest of the LOGICAL line instead of wrapping it onto the next row, the way the
+/// story window's own prose already wraps (`ZWindow::push_prose`'s own doc:
+/// "wrapping is the host's job").
+///
+/// fmvpoker's own deterministic first hand (`Machine::DEFAULT_RNG_SEED` makes
+/// every headless boot draw the identical cards) reaches a 182-character message
+/// — "You draw (a) an Eight, (b) a Three, (c) an Ace, (d) a Deuce, and (e) a
+/// Six.  Use your mouse or press keys a-e to select which cards to hold.  Press
+/// return or click above to continue." — as ONE logical line in the bottom
+/// panel's `b.lines` (`ZWindow::push_prose` only starts a new logical line at a
+/// `\n` the game itself printed). At the panel's 594px width that needs three
+/// 8px-monospace rows; the pre-fix code drew 74 characters of the first row
+/// ("…and (e) a Six") and dropped the other 108 — the whole explanation of how to
+/// select cards to hold — silently.
+///
+/// Asserted through [`app::render::v6_layout::chrome_text_rects`] (the same rects
+/// [`app::render::v6_layout::fill_story_page_under_chrome_text`] spares, per its
+/// own doc: measuring the draw and the spared pixels two different ways is how
+/// Shogun's menu got erased once already) rather than by scanning raw ink, so the
+/// assertion is about how many PHYSICAL rows of text landed and how far each
+/// one's pen travelled — exactly what the bug dropped.
+fn fmvpoker_the_draw_message_wraps_instead_of_truncating(honor: bool) {
+    let Some((session, state)) = fmvpoker_dealt_hand(honor) else { return };
+    let model = session.screen();
+    let WinNode::Layered(items) = &model.root else { panic!("v6 Layered root") };
+    let layout = app::render::v6_layout::classify_windows(items, zvm::screen::V6Cell::DEFAULT);
+
+    let panel = layout
+        .chrome
+        .iter()
+        .find(|it| (it.x_px, it.y_px, it.w_px, it.h_px) == PANEL)
+        .expect("fmvpoker publishes its bottom panel as a window of its own");
+    let WinNode::Buffer(b) = &panel.node else { panic!("the panel is a prose Buffer") };
+    let (row, line) = b
+        .lines
+        .iter()
+        .enumerate()
+        .find(|(_, l)| l.starts_with("You draw"))
+        .unwrap_or_else(|| panic!("honor={honor}: the draw announcement never reached the model: {:?}", b.lines));
+
+    // Premise: this is the exact deterministic hand SQ-1581 was filed against,
+    // and it genuinely needs wrapping — a short hand would not exercise the fix.
+    let avail = u32::from(PANEL.2);
+    assert!(
+        line.contains("Use your mouse or press keys a-e to select which cards to hold"),
+        "premise (honor={honor}): the deterministic first hand's draw message changed shape: {line:?}"
+    );
+    assert!(
+        state.v6_text.run_px(line) > avail * 2,
+        "premise (honor={honor}): the draw message ({} px) must need more than two rows at the \
+         panel's {avail}px width, or this test cannot tell wrapping from truncation: {line:?}",
+        state.v6_text.run_px(line)
+    );
+
+    // The physical rows this one logical line produced, in native pixels — the
+    // same rects `fill_story_page_under_chrome_text` spares from the page fill.
+    let text_rects = app::render::v6_layout::chrome_text_rects(&layout.chrome, &state.v6_text);
+    let top = u32::from(PANEL.1) + row as u32 * 16;
+    let mut rows: Vec<(u32, u32, u32, u32)> = text_rects
+        .into_iter()
+        .filter(|&(x0, y0, x1, _)| {
+            x1 > x0 && x0 >= u32::from(PANEL.0) && y0 >= top && y0 < u32::from(PANEL.1) + u32::from(PANEL.3)
+        })
+        .collect();
+    rows.sort_by_key(|&(_, y0, ..)| y0);
+
+    assert!(
+        rows.len() >= 3,
+        "honor={honor}: the draw announcement drew on {} physical row(s), not the three word-wrap \
+         needs to say the whole thing (SQ-1581). Rows: {rows:?}",
+        rows.len()
+    );
+
+    // The row that used to be dropped entirely: "Press return or click above to
+    // continue." — 41 characters, 328px at this fixed-pitch 8px face.
+    let (lx0, ly0, lx1, _) = *rows.last().unwrap();
+    assert!(
+        ly0 > top,
+        "honor={honor}: the last recorded row ({ly0}) is the same row the message started on \
+         ({top}) — nothing wrapped past the first line at all"
+    );
+    assert!(
+        lx1 - lx0 >= 300,
+        "honor={honor}: the last physical row only drew {} px of ink — the closing sentence \
+         telling the player how to continue was dropped, not merely wrapped shorter (SQ-1581)",
+        lx1 - lx0
+    );
+}
+
+#[test]
+fn fmvpoker_the_draw_message_wraps_instead_of_truncating_honoring_game_colours() {
+    fmvpoker_the_draw_message_wraps_instead_of_truncating(true);
+}
+
+#[test]
+fn fmvpoker_the_draw_message_wraps_instead_of_truncating_theme_only() {
+    fmvpoker_the_draw_message_wraps_instead_of_truncating(false);
+}
+
+/// SQ-1581, at a narrow terminal pane. The wrap itself is computed in NATIVE v6
+/// pixels — the panel's width is the game's own declared window, not the
+/// terminal's — so a narrow pane cannot change where the wrap breaks; what it can
+/// do is crash or otherwise disturb `render_story_pane`'s letterboxing of that
+/// same composite down to a small buffer. Driven at 40x15, near the smallest
+/// realistic terminal, on the same deterministic dealt hand as the wide-pane case.
+fn fmvpoker_the_draw_message_survives_a_narrow_pane(honor: bool) {
+    let Some((session, state)) = fmvpoker_dealt_hand(honor) else { return };
+
+    let model = session.screen();
+    let WinNode::Layered(items) = &model.root else { panic!("v6 Layered root") };
+    let layout = app::render::v6_layout::classify_windows(items, zvm::screen::V6Cell::DEFAULT);
+    let panel = layout
+        .chrome
+        .iter()
+        .find(|it| (it.x_px, it.y_px, it.w_px, it.h_px) == PANEL)
+        .expect("fmvpoker publishes its bottom panel as a window of its own");
+    let WinNode::Buffer(b) = &panel.node else { panic!("the panel is a prose Buffer") };
+    let row = b
+        .lines
+        .iter()
+        .position(|l| l.starts_with("You draw"))
+        .expect("honor={honor}: the draw announcement reached the model");
+
+    // The same three-physical-row proof as the wide-pane test — the composite a
+    // narrow pane letterboxes down is the one this recomputes, and the wrap that
+    // produced it does not consult the terminal's size.
+    let text_rects = app::render::v6_layout::chrome_text_rects(&layout.chrome, &state.v6_text);
+    let top = u32::from(PANEL.1) + row as u32 * 16;
+    let rows = text_rects
+        .into_iter()
+        .filter(|&(x0, y0, x1, _)| {
+            x1 > x0 && x0 >= u32::from(PANEL.0) && y0 >= top && y0 < u32::from(PANEL.1) + u32::from(PANEL.3)
+        })
+        .count();
+    assert!(
+        rows >= 3,
+        "honor={honor}: the draw announcement's own composite drew {rows} physical row(s) before \
+         it ever reaches the narrow pane's letterbox (SQ-1581)"
+    );
+
+    // And the real render entry point survives a small pane without dropping the
+    // frame or panicking — the letterbox step, not the wrap, is what a narrow
+    // pane could still disturb.
+    let area = Rect::new(0, 0, 40, 15);
+    let mut buf = Buffer::empty(area);
+    let _ = app::render::screen::render_story_pane(&model, false, None, &state, area, &mut buf);
+    let path = state.v6_path_log.borrow().last().map(|(l, _)| l.clone()).unwrap_or_default();
+    assert_eq!(
+        path, "raster",
+        "honor={honor}: fmvpoker's own table art must still route this frame to the composite at \
+         a narrow pane, the same as at 640x400 (SQ-0729)"
+    );
+}
+
+#[test]
+fn fmvpoker_the_draw_message_survives_a_narrow_pane_honoring_game_colours() {
+    fmvpoker_the_draw_message_survives_a_narrow_pane(true);
+}
+
+#[test]
+fn fmvpoker_the_draw_message_survives_a_narrow_pane_theme_only() {
+    fmvpoker_the_draw_message_survives_a_narrow_pane(false);
+}
