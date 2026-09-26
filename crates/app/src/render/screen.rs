@@ -5283,6 +5283,22 @@ pub struct V6HybridChromeRun {
     /// menu, [`V6HybridChromeLayout::menu_band`]) rather than the main chrome
     /// ring.
     pub in_menu_band: bool,
+    /// SQ-1599: where `draw_chrome_text_strip` ACTUALLY draws this run, after
+    /// its own post-origin resolution — SQ-0747's rule stretch (a rule
+    /// fragment's span grows to close the seam to its neighbours), the
+    /// claimed-word collision guard (a lone divider/frame glyph is dropped
+    /// entirely where a multi-character WORD run already owns its column),
+    /// and the strip's own left-edge clip (SQ-0949). `(start, end)` terminal
+    /// columns on `row`, half-open, or `None` when the real render draws
+    /// nothing for this run at all.
+    ///
+    /// `col` above is this run's own ORIGIN and never moves; `resolved` is the
+    /// separate, later, neighbour-relative answer `col`'s own doc disclaims.
+    /// Always `Some((col, col + run.text.chars().count() as i32))` for an
+    /// over-art run (`over_art == true`) — `stamp_runs_over_art` applies none
+    /// of this strip-level resolution, so there is nothing to stretch, claim
+    /// or clip.
+    pub resolved: Option<(i32, i32)>,
 }
 
 /// The SAME cell layout the terminal Hybrid renderer uses for a v6 frame's
@@ -5298,13 +5314,12 @@ pub struct V6HybridChromeRun {
 /// [`build_hybrid_frame`] itself calls for the terminal render) — so a host's
 /// answer cannot drift from what actually gets drawn for the SAME frame.
 ///
-/// Deliberately scoped to a run's own ORIGIN, not `draw_chrome_text_strip`'s
-/// later neighbour-relative span adjustments (SQ-0747's rule-stretch, its
-/// claimed-word overwrite guard): both only ever move where a RULE fragment's
-/// edge sits relative to whatever else is on its row, which is a draw-time
-/// refinement of where a strip's own ground is painted, never of where a run's
-/// own first character lands — and it is that origin a host asks a `PxText`'s
-/// position for.
+/// `runs`' `col`/`row` are each run's own ORIGIN — unaffected by
+/// `draw_chrome_text_strip`'s later neighbour-relative span adjustments
+/// (SQ-0747's rule-stretch, its claimed-word overwrite guard, SQ-0949's strip
+/// clip) — while each run's separate `resolved` field (SQ-1599) publishes
+/// exactly that later resolution, so a host can draw either the run's own
+/// first-character position or what the real terminal actually paints for it.
 pub struct V6HybridChromeLayout {
     /// The story viewport — the region a host should leave to prose (its own or
     /// the game's) rather than chrome — in the HOST's terminal cells.
@@ -5327,6 +5342,134 @@ pub struct V6HybridChromeLayout {
     /// mapping [`GraphicsRender::record_hybrid_click_map`] itself calls for the
     /// TUI's own click handling, so the two cannot disagree.
     pub click_map: crate::render::graphics::V6ClickMap,
+    /// The main ring's own letterbox [`Scale`](crate::render::v6_layout::Scale)
+    /// (SQ-1599) — `frame.scale`, ALWAYS, regardless of plan. On every plan but
+    /// Menu this is recoverable (awkwardly) from `click_map`'s own
+    /// `img_x`/`img_y`/`img_w`/`img_h`; on the Menu plan (Journey)
+    /// `click_map`'s scale is the MENU BAND's, and there is no other way to
+    /// learn where the main picture itself belongs. A host places the ring's
+    /// own artwork with this, never with `click_map`'s scale.
+    pub scale: crate::render::v6_layout::Scale,
+    /// Ground fills `draw_chrome_text_strip` paints BEFORE it stamps any run
+    /// (SQ-0508(a)/SQ-0512/SQ-0946, published SQ-1599): one entry per strip
+    /// (main ring and menu band alike) flooding the strip's own width, then —
+    /// for any row whose own colour differs from the strip's or that is a
+    /// pure reverse-video bar — that row's own flood on top of it. Order
+    /// matters and matches the real draw: paint these in order, each one
+    /// overwriting whatever the previous entries left in its own cells,
+    /// BEFORE drawing `runs`. Arthur's status bar is the corpus's own report
+    /// for what is missing without this: one-cell gaps between its fields,
+    /// because nothing ever floods the ground between them.
+    pub ground: Vec<V6HybridGroundFill>,
+    /// A flank's inner divider and outer border columns, carried down the
+    /// letterbox gap reclaimed below a Menu-plan side flank (SQ-0742/SQ-0750,
+    /// published SQ-1599) — copied straight through from
+    /// [`HybridFrame::flank_borders`], the exact data the real draw itself
+    /// reads: one entry per flank strip, `(strip_rect, inner, outer)`, either
+    /// extension `None` where that flank carries none. A host draws each
+    /// `Some` extension exactly as the real render does — [`BorderInk::Band`]
+    /// stretched from the native crop, [`BorderInk::Glyph`] stamped in its own
+    /// column with the rest of the extension as blank padding in the same
+    /// style.
+    pub flank_borders: Vec<(Rect, Option<FlankBorderExt>, Option<FlankBorderExt>)>,
+    /// `flank_borders`' extensions flattened to one list (copied straight
+    /// through from [`HybridFrame::divider_exts`]) — the same data, in the
+    /// shape a host that does not care which flank an extension belongs to
+    /// can draw directly.
+    pub divider_exts: Vec<FlankBorderExt>,
+}
+
+/// SQ-1599: one ground-fill `draw_chrome_text_strip` paints before it stamps a
+/// strip's own runs — either the whole-strip flood (SQ-0508(a)/SQ-0512) or one
+/// row's own flood over it (SQ-0512/SQ-1035's reverse-bar case) — published so
+/// a host closes the same gaps the real render closes rather than leaving the
+/// cells between and around runs showing its own backdrop.
+///
+/// `fg`/`bg` are packed game colour codes, exactly like a [`V6HybridChromeRun`]'s
+/// own `run.fg`/`run.bg` — `0` (or [`crate::render::v6_layout::packed_explicit`]
+/// false) means "no explicit colour here; use the host's own themed default for
+/// this ring", never literal black. `reverse` swaps them, the same as a run's
+/// own style bit 0.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct V6HybridGroundFill {
+    /// The cells to flood, already clipped to the game screen's own columns
+    /// (SQ-0946) exactly as the real flood is.
+    pub rect: Rect,
+    pub fg: u32,
+    pub bg: u32,
+    pub reverse: bool,
+}
+
+/// A chrome run's terminal-cell origin within a hybrid TEXT strip, laid out the
+/// same way [`draw_chrome_text_strip`] positions it (SQ-1591): SQ-0543's
+/// consecutive-row packing (one game text row per terminal row, from the
+/// strip's own top), SQ-0509/SQ-0742's rule collapsing (reused via
+/// [`collapse_row_rules`] rather than restated — see that call's own doc for why
+/// a raw, uncollapsed run count would answer the SQ-0892 block-placement
+/// question wrong on exactly the screens that need it, Arthur's and Shogun's
+/// glyph-at-a-time status bars), SQ-0892's block placement
+/// ([`strip_native_origin`]), and SQ-1009/SQ-0783's lone box-glyph edge
+/// alignment ([`edge_glyph_col`]).
+/// SQ-1599: row-bucket + collapse a strip's runs exactly as the real Hybrid
+/// draw does (SQ-0543's consecutive-row packing, SQ-0509/SQ-0742's rule
+/// collapsing via [`collapse_row_rules`]) — the ONE row-bucketing computation
+/// every chrome-text pass in this module needs (`strip_run_positions`,
+/// `strip_ground_fills`, `strip_run_resolution`), factored out so the three
+/// cannot quietly diverge on how a strip's runs are grouped into terminal
+/// rows. `draw_chrome_text_strip` keeps its own copy (it additionally builds
+/// `divider_rows` from the same `raw` map, before collapsing) — see that
+/// function's own doc for the reasoning this mirrors.
+fn chrome_by_row(
+    runs: &[crate::engine::PxText],
+    rect: Rect,
+    scale: &crate::render::v6_layout::Scale,
+    cell_px: (u16, u16),
+    pane: Rect,
+    cell: zvm::screen::V6Cell,
+) -> std::collections::BTreeMap<i32, Vec<(crate::engine::PxText, bool)>> {
+    use std::collections::BTreeMap;
+    let font_h = i32::from(cell.h());
+    let game_row = |t: &crate::engine::PxText| (t.y.max(1) as i32 - 1) / font_h;
+    let first_row = runs.iter().map(game_row).min().unwrap_or(0);
+    let mut raw: BTreeMap<i32, Vec<&crate::engine::PxText>> = BTreeMap::new();
+    for t in runs {
+        raw.entry(rect.y as i32 + game_row(t) - first_row).or_default().push(t);
+    }
+    let mut by_row: BTreeMap<i32, Vec<(crate::engine::PxText, bool)>> = BTreeMap::new();
+    for (row, mut rr) in raw {
+        rr.sort_by_key(|t| t.x);
+        by_row.insert(row, collapse_row_rules(&rr, scale, cell_px, pane, cell));
+    }
+    by_row
+}
+
+/// SQ-1599: a run's own column origin — SQ-0892's block placement
+/// (`native_origin`, when the strip is a block the game composed in its own
+/// text grid) or [`run_cell`]'s scale-mapped answer, then SQ-1009/SQ-0783's
+/// lone box-glyph edge alignment ([`edge_glyph_col`]) — factored out of
+/// `strip_run_positions` and `draw_chrome_text_strip`'s own `base_span` so the
+/// two (and `strip_run_resolution`, SQ-1599's own new pass) share one formula
+/// rather than three copies of it.
+fn chrome_run_origin(
+    t: &crate::engine::PxText,
+    native_origin: Option<i32>,
+    native_x0: i32,
+    scale: &crate::render::v6_layout::Scale,
+    cell_px: (u16, u16),
+    pane: Rect,
+    native_w: u16,
+    cell: zvm::screen::V6Cell,
+) -> i32 {
+    let c = match native_origin {
+        Some(o) => o + ((t.x.max(1) as i32 - 1 - native_x0) as f32 / f32::from(cell.w())).round() as i32,
+        None => run_cell(t, scale, cell_px, pane, cell).0,
+    };
+    match t.text.chars().next() {
+        Some(g) if t.text.chars().count() == 1 && is_box_glyph(g) => {
+            edge_glyph_col(t.x.max(1) as u32 - 1, native_w as u32, scale, cell_px, pane, cell).unwrap_or(c)
+        }
+        _ => c,
+    }
 }
 
 /// A chrome run's terminal-cell origin within a hybrid TEXT strip, laid out the
@@ -5348,36 +5491,130 @@ fn strip_run_positions(
     native: (u16, u16),
     cell: zvm::screen::V6Cell,
 ) -> Vec<(crate::engine::PxText, i32, i32)> {
-    use std::collections::BTreeMap;
-    let font_h = i32::from(cell.h());
-    let game_row = |t: &crate::engine::PxText| (t.y.max(1) as i32 - 1) / font_h;
-    let first_row = runs.iter().map(game_row).min().unwrap_or(0);
-    let mut raw: BTreeMap<i32, Vec<&crate::engine::PxText>> = BTreeMap::new();
-    for t in runs {
-        raw.entry(rect.y as i32 + game_row(t) - first_row).or_default().push(t);
-    }
-    let mut by_row: BTreeMap<i32, Vec<(crate::engine::PxText, bool)>> = BTreeMap::new();
-    for (row, mut rr) in raw {
-        rr.sort_by_key(|t| t.x);
-        by_row.insert(row, collapse_row_rules(&rr, scale, cell_px, pane, cell));
-    }
+    let by_row = chrome_by_row(runs, rect, scale, cell_px, pane, cell);
     let drawn: Vec<&crate::engine::PxText> = by_row.values().flat_map(|r| r.iter().map(|(t, _)| t)).collect();
     let native_origin = strip_native_origin(&drawn, scale, cell_px, pane, cell);
     let native_x0 = drawn.iter().map(|t| t.x.max(1) as i32 - 1).min().unwrap_or(0);
     let mut out = Vec::new();
     for (row, row_runs) in &by_row {
         for (t, _rule) in row_runs {
-            let c = match native_origin {
-                Some(o) => o + ((t.x.max(1) as i32 - 1 - native_x0) as f32 / f32::from(cell.w())).round() as i32,
-                None => run_cell(t, scale, cell_px, pane, cell).0,
-            };
-            let c = match t.text.chars().next() {
-                Some(g) if t.text.chars().count() == 1 && is_box_glyph(g) => {
-                    edge_glyph_col(t.x.max(1) as u32 - 1, native.0 as u32, scale, cell_px, pane, cell).unwrap_or(c)
-                }
-                _ => c,
-            };
+            let c = chrome_run_origin(t, native_origin, native_x0, scale, cell_px, pane, native.0, cell);
             out.push((t.clone(), c, *row));
+        }
+    }
+    out
+}
+
+/// SQ-1599: `draw_chrome_text_strip`'s own strip/row ground-fill pass
+/// (SQ-0508(a)/SQ-0512/SQ-0946), computed without a `Buffer` to paint into —
+/// see [`V6HybridChromeLayout::ground`] for the shape and how a host uses it.
+/// Deliberately does NOT share `chrome_by_row`'s caller with
+/// `strip_run_positions`/`strip_run_resolution` beyond the row-bucketing
+/// itself: the flood decision only ever asks "is there an explicit colour, or
+/// is this row a reverse bar", never a run's own position.
+fn strip_ground_fills(
+    runs: &[crate::engine::PxText],
+    rect: Rect,
+    scale: &crate::render::v6_layout::Scale,
+    cell_px: (u16, u16),
+    pane: Rect,
+    native: (u16, u16),
+    cell: zvm::screen::V6Cell,
+) -> Vec<V6HybridGroundFill> {
+    use crate::render::v6_layout::packed_explicit;
+    let mut out = Vec::new();
+    let (screen_lo, screen_hi) = crate::render::v6_layout::screen_cols(scale, native.0, cell_px, pane);
+    let lo = rect.x.max(screen_lo);
+    let hi = rect.right().min(screen_hi);
+    if hi > lo {
+        let strip_fg = runs.iter().map(|t| t.fg).find(|&p| packed_explicit(p)).unwrap_or(0);
+        let strip_bg = runs.iter().map(|t| t.bg).find(|&p| packed_explicit(p)).unwrap_or(0);
+        out.push(V6HybridGroundFill { rect: Rect::new(lo, rect.y, hi - lo, rect.height), fg: strip_fg, bg: strip_bg, reverse: false });
+    }
+    let by_row = chrome_by_row(runs, rect, scale, cell_px, pane, cell);
+    for (row, row_runs) in &by_row {
+        if *row < rect.y as i32 || *row >= rect.bottom() as i32 {
+            continue;
+        }
+        let all_rev = row_is_reverse_bar(row_runs.iter().map(|(t, _)| t));
+        let row_fg = row_runs.iter().map(|(t, _)| t.fg).find(|&p| packed_explicit(p)).unwrap_or(0);
+        let row_bg = row_runs.iter().map(|(t, _)| t.bg).find(|&p| packed_explicit(p)).unwrap_or(0);
+        if (all_rev || packed_explicit(row_fg) || packed_explicit(row_bg)) && hi > lo {
+            out.push(V6HybridGroundFill { rect: Rect::new(lo, *row as u16, hi - lo, 1), fg: row_fg, bg: row_bg, reverse: all_rev });
+        }
+    }
+    out
+}
+
+/// SQ-1599: `draw_chrome_text_strip`'s own post-origin resolution — SQ-0747's
+/// rule stretch, its claimed-word collision guard, and the strip's own
+/// left-edge clip (SQ-0949) — computed per run without a `Buffer` to paint
+/// into. Returns one entry per run, in the SAME order `strip_run_positions`
+/// returns its own `(run, col, row)` triples for the identical inputs (both
+/// walk `chrome_by_row`'s `BTreeMap` the same way), so a caller may zip the
+/// two outputs positionally.
+fn strip_run_resolution(
+    runs: &[crate::engine::PxText],
+    rect: Rect,
+    scale: &crate::render::v6_layout::Scale,
+    cell_px: (u16, u16),
+    pane: Rect,
+    native: (u16, u16),
+    cell: zvm::screen::V6Cell,
+) -> Vec<Option<(i32, i32)>> {
+    let by_row = chrome_by_row(runs, rect, scale, cell_px, pane, cell);
+    let drawn: Vec<&crate::engine::PxText> = by_row.values().flat_map(|r| r.iter().map(|(t, _)| t)).collect();
+    let native_origin = strip_native_origin(&drawn, scale, cell_px, pane, cell);
+    let native_x0 = drawn.iter().map(|t| t.x.max(1) as i32 - 1).min().unwrap_or(0);
+    let base_span = |t: &crate::engine::PxText| -> (i32, i32) {
+        let c = chrome_run_origin(t, native_origin, native_x0, scale, cell_px, pane, native.0, cell);
+        (c, c + t.text.chars().count() as i32)
+    };
+    let mut out = Vec::new();
+    for row_runs in by_row.values() {
+        let mut spans: Vec<(i32, i32)> = Vec::with_capacity(row_runs.len());
+        for (i, (t, rule)) in row_runs.iter().enumerate() {
+            let (c0, c1) = base_span(t);
+            let span = if *rule {
+                let prev = spans.last().map_or(c0, |&(_, prev_end)| prev_end);
+                let left = row_runs[..i]
+                    .iter()
+                    .zip(&spans)
+                    .filter(|((p, _), _)| !p.text.trim().is_empty())
+                    .map(|(_, &(_, e))| e)
+                    .max()
+                    .map_or(prev, |ink| prev.max(ink));
+                let right = row_runs.get(i + 1).map_or(c1, |n| base_span(&n.0).0);
+                (left, right.max(left))
+            } else {
+                (c0, c1)
+            };
+            spans.push(span);
+        }
+        let claimed: Vec<(usize, (i32, i32), bool)> = row_runs
+            .iter()
+            .zip(&spans)
+            .enumerate()
+            .filter(|(_, ((t, _), _))| !t.text.trim().is_empty())
+            .map(|(i, ((t, _), &s))| (i, s, t.text.chars().count() > 1))
+            .collect();
+        let over_word = |i: usize, c: i32| claimed.iter().any(|&(j, (lo, hi), word)| word && j != i && c >= lo && c < hi);
+        for (i, ((t, rule), &(col, end))) in row_runs.iter().zip(&spans).enumerate() {
+            let resolved = if col >= rect.right() as i32 || end <= rect.x as i32 {
+                None
+            } else {
+                let clip = (rect.x as i32 - col).max(0);
+                let c2 = col + clip;
+                let max_w = (rect.right() as i32 - c2).max(0);
+                if !*rule && t.text.chars().count() == 1 && !t.text.trim().is_empty() && over_word(i, c2) {
+                    None
+                } else {
+                    let raw_len = if *rule { (end - c2).max(0) } else { (t.text.chars().count() as i32 - clip).max(0) };
+                    let len = raw_len.min(max_w);
+                    (len > 0).then_some((c2, c2 + len))
+                }
+            };
+            out.push(resolved);
         }
     }
     out
@@ -5386,11 +5623,15 @@ fn strip_run_positions(
 impl V6HybridChromeLayout {
     fn from_frame(frame: &HybridFrame, pane: Rect, native: (u16, u16), cell_px: (u16, u16), cell: zvm::screen::V6Cell) -> Self {
         let mut runs = Vec::new();
+        let mut ground = Vec::new();
         for s in &frame.strips {
             if let ChromeStrip::Text(rect, text_runs) = s {
-                for (run, col, row) in strip_run_positions(text_runs, *rect, &frame.scale, cell_px, pane, native, cell) {
-                    runs.push(V6HybridChromeRun { run, col, row, over_art: false, in_menu_band: false });
+                let positions = strip_run_positions(text_runs, *rect, &frame.scale, cell_px, pane, native, cell);
+                let resolved = strip_run_resolution(text_runs, *rect, &frame.scale, cell_px, pane, native, cell);
+                for ((run, col, row), r) in positions.into_iter().zip(resolved) {
+                    runs.push(V6HybridChromeRun { run, col, row, over_art: false, in_menu_band: false, resolved: r });
                 }
+                ground.extend(strip_ground_fills(text_runs, *rect, &frame.scale, cell_px, pane, native, cell));
             }
         }
         let menu_band: Vec<Rect> = frame
@@ -5403,9 +5644,12 @@ impl V6HybridChromeLayout {
         let menu_scale = frame.menu.as_ref().unwrap_or(&frame.scale);
         for s in &frame.menu_strips {
             if let ChromeStrip::Text(rect, text_runs) = s {
-                for (run, col, row) in strip_run_positions(text_runs, *rect, menu_scale, cell_px, pane, native, cell) {
-                    runs.push(V6HybridChromeRun { run, col, row, over_art: false, in_menu_band: true });
+                let positions = strip_run_positions(text_runs, *rect, menu_scale, cell_px, pane, native, cell);
+                let resolved = strip_run_resolution(text_runs, *rect, menu_scale, cell_px, pane, native, cell);
+                for ((run, col, row), r) in positions.into_iter().zip(resolved) {
+                    runs.push(V6HybridChromeRun { run, col, row, over_art: false, in_menu_band: true, resolved: r });
                 }
+                ground.extend(strip_ground_fills(text_runs, *rect, menu_scale, cell_px, pane, native, cell));
             }
         }
         // SQ-0944: text the game printed ON its own artwork, positioned exactly
@@ -5414,11 +5658,22 @@ impl V6HybridChromeLayout {
         // row layout, since the art strip they sit on carries no text band).
         for t in &frame.over_art_runs {
             let (col, row) = run_cell(t, &frame.scale, cell_px, pane, cell);
-            runs.push(V6HybridChromeRun { run: t.clone(), col, row, over_art: true, in_menu_band: false });
+            let resolved = Some((col, col + t.text.chars().count() as i32));
+            runs.push(V6HybridChromeRun { run: t.clone(), col, row, over_art: true, in_menu_band: false, resolved });
         }
         let click_scale = if frame.plan_is_menu { frame.menu.as_ref().unwrap_or(&frame.scale) } else { &frame.scale };
         let click_map = crate::render::graphics::build_hybrid_click_map(pane, click_scale, native, cell_px, frame.packed_text.clone());
-        V6HybridChromeLayout { viewport: frame.viewport, viewport_native: frame.vp_native, menu_band, runs, click_map }
+        V6HybridChromeLayout {
+            viewport: frame.viewport,
+            viewport_native: frame.vp_native,
+            menu_band,
+            runs,
+            click_map,
+            scale: frame.scale,
+            ground,
+            flank_borders: frame.flank_borders.clone(),
+            divider_exts: frame.divider_exts.clone(),
+        }
     }
 }
 
@@ -5476,6 +5731,76 @@ pub fn hybrid_chrome_layout(
     // any value here is fine; 0 is simplest.
     let frame = build_hybrid_frame_with(0, layout, story, native, pane, cell_px, true, true, 0, default_fg, default_bg, state);
     Some(V6HybridChromeLayout::from_frame(&frame, pane, native, cell_px, state.v6_text.cell()))
+}
+
+/// Where a v6 STORY-SLOT `Grid` belongs on a host's own screen (SQ-1599) —
+/// Shogun's InvisiClues hint screen (`hint`, then `y`) is the corpus's own
+/// specimen, the only v6 frame here that puts a `Grid` rather than a `Buffer`
+/// in the story window (Shogun's BOOT menu, "START the game", looks similar
+/// but keeps window 0 as an ordinary `Buffer` and paints its menu as chrome
+/// runs over it — it never exercises this function; see
+/// `shogun_hint_menu_story_slot_grid_matches_the_real_render`'s own doc
+/// comment in `v6_hybrid_chrome_layout.rs` for how that was confirmed).
+/// A SEPARATE function from [`hybrid_chrome_layout`] rather than a
+/// field on [`V6HybridChromeLayout`], deliberately: that type is the chrome
+/// RING's own classification — everything OUTSIDE the story slot — and a
+/// story-slot grid is the game's own PRIMARY content, never chrome; folding it
+/// in would blur what the type means. Call both for the same frame when the
+/// story slot might be either shape.
+///
+/// Mirrors `render_node`'s own v6-hybrid arm exactly (see the comment on its
+/// `WinNode::Grid` case): a v6 story-slot grid is placed 1:1 in native cells
+/// at the ring's own viewport, never centred — [`draw_grid_transparent`]'s
+/// rule, which is NOT [`draw_grid`]'s (the ordinary ZWK/Glulx grid-window
+/// renderer, which centres by column count and floods the theme's own page —
+/// right for every other engine's grid window, wrong here). An ordinary grid
+/// window elsewhere in the frame still wants `draw_grid`'s rule; this exists
+/// only for the one shape `draw_grid_transparent` exists for.
+///
+/// `viewport` is placement geometry ONLY, sized to the grid's own
+/// `rows`/`cols` clipped to the ring's viewport exactly as
+/// `draw_grid_transparent` clips them (`rows.min(grid.rows)`,
+/// `cols.min(grid.cols)`) — a host already holds the `GridWindow` itself off
+/// [`crate::engine::Engine::screen`]'s `WinNode::Grid` and reads its cells
+/// (`GridWindow::cell`) the same way the terminal renderer does, including
+/// [`draw_grid_transparent`]'s own blank-cell rule (a plain, non-reversed
+/// blank leaves the layer beneath showing through; a REVERSED blank is ink,
+/// SQ-1074) — this function answers only WHERE to put them, not what they are.
+///
+/// `None` wherever [`hybrid_chrome_layout`] itself would answer `None` (see
+/// that function's own doc), or where the story slot does not actually hold a
+/// `Grid` — a host should draw an ordinary Buffer/Grid window through its own
+/// existing paths in every other case.
+pub fn hybrid_story_slot_grid(
+    layout: &crate::render::v6_layout::V6Layout<'_>,
+    native: (u16, u16),
+    pane: Rect,
+    cell_px: (u16, u16),
+    state: &AppState,
+) -> Option<V6HybridStorySlotGrid> {
+    let story = layout.story?;
+    if picture_takeover_reason(story, &layout.chrome, layout.story_gfx, native).is_some() {
+        return None;
+    }
+    let WinNode::Grid(g) = &story.node else { return None };
+    let (default_fg, default_bg) = v6_host_pair(state);
+    let frame = build_hybrid_frame_with(0, layout, story, native, pane, cell_px, true, true, 0, default_fg, default_bg, state);
+    let viewport = frame.viewport;
+    if viewport.width == 0 || viewport.height == 0 {
+        return None;
+    }
+    let rows = viewport.height.min(g.rows);
+    let cols = viewport.width.min(g.cols);
+    Some(V6HybridStorySlotGrid { viewport: Rect::new(viewport.x, viewport.y, cols, rows) })
+}
+
+/// See [`hybrid_story_slot_grid`] for the full reasoning.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct V6HybridStorySlotGrid {
+    /// Place the grid's own cells 1:1 here — `(dx, dy)` in `GridWindow::cell`
+    /// terms lands at `(viewport.x + dx, viewport.y + dy)`, exactly as
+    /// [`draw_grid_transparent`] places them.
+    pub viewport: Rect,
 }
 
 /// A cheap change key for the whole v6 raster composite (SQ-0469). It folds
@@ -7014,15 +7339,25 @@ fn extend_raster_flanks(
 }
 
 /// A native `(x, y, w, h)` crop of the chrome canvas, as a band draw takes it.
-type BandCrop = (u32, u32, u32, u32);
+///
+/// `pub` (SQ-1599): a host reading [`V6HybridChromeLayout::flank_borders`]/
+/// [`V6HybridChromeLayout::divider_exts`] needs the crop's own type reachable —
+/// the crop itself is a native-pixel rect into the SAME full-frame artwork a
+/// host must already be able to render to draw its own copy of the chrome ring.
+pub type BandCrop = (u32, u32, u32, u32);
 
 /// How a flank's border column reaches the screen (SQ-0750).
 ///
 /// In hybrid, never rasterise what the game printed as a character: a border made
 /// of the game's own characters is stamped as those characters, and only pixels the
 /// paint runs cannot account for — genuine artwork — are carried as a bitmap.
+///
+/// `pub` (SQ-1599): published on [`V6HybridChromeLayout::flank_borders`]/
+/// `divider_exts` so a host can draw these columns exactly as
+/// `draw_chrome_text_strip`'s caller does — a `Band` crop stretched down the
+/// gap, or the game's own character stamped in its one column.
 #[derive(Clone, Copy, PartialEq, Debug)]
-enum BorderInk {
+pub enum BorderInk {
     /// Artwork: a one-native-row crop of the chrome canvas, replicated down the band.
     Band(BandCrop),
     /// The game's own character, with its Z-machine style bits and packed colours.
@@ -7040,7 +7375,7 @@ enum BorderInk {
 
 /// One of a flank's border columns carried down the reclaimed gap: where it is
 /// drawn, and what it is drawn WITH.
-type FlankBorderExt = (Rect, BorderInk);
+pub type FlankBorderExt = (Rect, BorderInk);
 
 /// What [`menu_flank_panel`] resolves for a side flank: the panel background, the
 /// rect to flood with it, the destination rect for the vertically centred art,

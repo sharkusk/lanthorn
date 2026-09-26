@@ -19,7 +19,12 @@ use zvm::screen::V6Cell;
 /// so they are NOT explicit and the theme keeps the channel. Standard 2-9 and
 /// every True/True24 value ARE explicit. Shared by the raster block-paint
 /// decision and the cell colour paths so both gate identically. (SQ-0487/0488)
-pub(crate) fn packed_explicit(packed: u32) -> bool {
+///
+/// `pub` (SQ-1599): a host reading [`crate::render::screen::V6HybridGroundFill`]'s
+/// raw packed `fg`/`bg` needs the same explicit-or-inherit test this module
+/// applies internally, or "0" and "Default" are indistinguishable from "the
+/// game actually chose black".
+pub fn packed_explicit(packed: u32) -> bool {
     packed != 0 && !((packed >> 24) == 1 && (packed & 0xFF) <= 1)
 }
 
