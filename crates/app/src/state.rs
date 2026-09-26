@@ -3644,7 +3644,18 @@ pub struct AppState {
     /// `char_px` the launch used rather than silently reverting to the
     /// picker/8×16 fallback, mirroring why `game_picker` above is carried the
     /// same way.
-    pub glk_cell_px: Option<(u32, u32)>,
+    ///
+    /// Fractional (SQ-1603): a host's real text cell is not always a whole
+    /// device pixel (e.g. 10.2×22.95 at a 17px font), and rounding it to an
+    /// integer HERE — before it ever reaches a graphics window — would force
+    /// every window's canvas to share one pre-rounded ratio, drifting further
+    /// from the host's true cell the more windows of different sizes a game
+    /// opens. The fractional value is carried as-is all the way to
+    /// [`crate::glk_backend::AppGlk::canvas_size`], which multiplies and
+    /// rounds PER WINDOW; only `AppGlk`'s `GlkBackend::char_pixels` impl (the
+    /// boundary a game's own bytecode can observe, e.g. `glk_window_get_size`)
+    /// rounds once, since gvm's own layout model is integer pixels.
+    pub glk_cell_px: Option<(f64, f64)>,
     /// The host's own stated floor on the pre-boot story pane, carried from
     /// `TerminalFacts::min_story_screen` (SQ-1596) — `None` when the host left
     /// no floor in force. Not itself read for anything past boot; kept so an

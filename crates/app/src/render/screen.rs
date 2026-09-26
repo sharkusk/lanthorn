@@ -12790,7 +12790,7 @@ mod tests {
         }
         let blorb = blorb::Blorb::parse(std::fs::read(&path).unwrap()).expect("parse gblorb");
         let image = blorb.executable().expect("exec chunk").1.to_vec();
-        let sess = crate::glulx_session::GlulxSession::new(image, 80, 24, true, false, false, (1, 1), None, &[])
+        let sess = crate::glulx_session::GlulxSession::new(image, 80, 24, true, false, false, (1.0, 1.0), None, &[])
             .expect("boot CM");
         let model = sess.screen();
         let (grids, buffers, others) = count_leaves(&model.root);

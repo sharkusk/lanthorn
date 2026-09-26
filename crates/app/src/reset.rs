@@ -397,7 +397,7 @@ mod tests {
             .join("../gvm-cli/tests/fixtures/glulxercise.ulx");
         let Ok(bytes) = std::fs::read(&fixture) else { return };
         let mut engine: Box<dyn app::engine::Engine> = Box::new(
-            app::glulx_session::GlulxSession::new(bytes.clone(), 80, 24, true, false, false, (1, 1), None, &[])
+            app::glulx_session::GlulxSession::new(bytes.clone(), 80, 24, true, false, false, (1.0, 1.0), None, &[])
                 .expect("glulx session"),
         );
         let mut mapper = mapper::mapper::Mapper::default();
@@ -457,7 +457,7 @@ mod tests {
         let image = image.to_vec();
         let blorb2 = blorb::Blorb::parse(raw.clone()).expect("parse blorb (pictures)");
         let mut engine: Box<dyn app::engine::Engine> = Box::new(
-            app::glulx_session::GlulxSession::new(image, pane.0, pane.1, true, true, false, (8, 16), Some(blorb2), &[])
+            app::glulx_session::GlulxSession::new(image, pane.0, pane.1, true, true, false, (8.0, 16.0), Some(blorb2), &[])
                 .expect("Anchorhead should boot"),
         );
 

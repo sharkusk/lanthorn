@@ -37,7 +37,7 @@ fn glulx_image(name: &str) -> Option<Vec<u8>> {
 fn boot(name: &str) -> Option<GlulxSession> {
     let image = glulx_image(name)?;
     Some(
-        GlulxSession::new(image, 80, 24, true, false, false, (1, 1), None, &[])
+        GlulxSession::new(image, 80, 24, true, false, false, (1.0, 1.0), None, &[])
             .expect("the story boots"),
     )
 }

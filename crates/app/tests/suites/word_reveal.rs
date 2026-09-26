@@ -568,7 +568,7 @@ fn glulx_session(name: &str) -> Option<app::glulx_session::GlulxSession> {
         bytes
     };
     Some(
-        app::glulx_session::GlulxSession::new(image, 80, 24, true, false, false, (1, 1), None, &[])
+        app::glulx_session::GlulxSession::new(image, 80, 24, true, false, false, (1.0, 1.0), None, &[])
             .expect("the story boots"),
     )
 }

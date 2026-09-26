@@ -928,7 +928,7 @@ pub fn probe_start_room(loaded: &LoadedStory) -> Option<crate::engine::LocationI
                 true,
                 false,
                 false,
-                (8, 16),
+                (8.0, 16.0),
                 None,
                 &[],
             )

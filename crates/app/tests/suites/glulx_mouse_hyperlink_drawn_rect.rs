@@ -116,7 +116,7 @@ fn boot_cos_help_menu() -> Option<GlulxSession> {
     let (_, image) = blorb1.executable().ok()?;
     let image = image.to_vec();
     let blorb2 = Blorb::parse(raw).ok()?;
-    let mut sess = GlulxSession::new(image, 80, 30, true, true, false, (8, 16), Some(blorb2), &[])
+    let mut sess = GlulxSession::new(image, 80, 30, true, true, false, (8.0, 16.0), Some(blorb2), &[])
         .expect("CoS should load and boot");
     let _ = Engine::take_transcript(&mut sess);
     for _ in 0..3 {

@@ -344,7 +344,7 @@ mod tests {
     fn fixture_session() -> Option<GlulxSession> {
         let path = "../gvm-cli/tests/fixtures/glulxercise.ulx";
         let bytes = std::fs::read(path).ok()?;
-        GlulxSession::new(bytes, 80, 24, true, false, false, (1, 1), None, &[]).ok()
+        GlulxSession::new(bytes, 80, 24, true, false, false, (1.0, 1.0), None, &[]).ok()
     }
 
     #[test]

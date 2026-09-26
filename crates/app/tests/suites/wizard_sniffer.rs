@@ -13,7 +13,7 @@ fn wizard_sniffer_reaches_input() {
         app::hints::LoadedStory::ZCode(_) => panic!("expected Glulx"),
         app::hints::LoadedStory::Scott(_) => panic!("expected Glulx"),
     };
-    let mut sess = GlulxSession::new(bytes, 80, 24, true, true, false, (8, 16), None, &[]).expect("ws session");
+    let mut sess = GlulxSession::new(bytes, 80, 24, true, true, false, (8.0, 16.0), None, &[]).expect("ws session");
     let _ = sess.take_transcript();
     // Two "press any key" char inputs then a directional command; the 2nd char
     // used to spin in a status-window resize loop and abort with quit=true.

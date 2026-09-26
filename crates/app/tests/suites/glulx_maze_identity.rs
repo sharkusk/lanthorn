@@ -34,7 +34,7 @@ fn advent_image() -> Option<Vec<u8>> {
 }
 
 fn boot(image: Vec<u8>) -> GlulxSession {
-    GlulxSession::new(image, 80, 24, true, false, false, (1, 1), None, &[]).expect("Adventure (Glulx) boots")
+    GlulxSession::new(image, 80, 24, true, false, false, (1.0, 1.0), None, &[]).expect("Adventure (Glulx) boots")
 }
 
 /// Walking Adventure's opening locks the `location` global, and distinct rooms

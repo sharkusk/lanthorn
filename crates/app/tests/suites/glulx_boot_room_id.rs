@@ -35,7 +35,7 @@ fn boot_in(dir: &std::path::Path, image: Vec<u8>) -> GlulxSession {
         false,
         false,
         false,
-        (8, 16),
+        (8.0, 16.0),
         None,
         &[],
         Default::default(),

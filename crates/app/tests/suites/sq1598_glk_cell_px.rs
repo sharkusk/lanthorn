@@ -73,7 +73,7 @@ fn theme_pairs_for(path: &Path) -> GlkStylePairs {
 /// Boot Kerkerkruip directly through the same constructor `boot_story` itself
 /// calls, at an explicit `cell_px` — the level `sq1565`/`sq1515` already test
 /// at, parametrized on cell size for this suite's own purposes.
-fn boot(path: &Path, cell_px: (u32, u32)) -> GlulxSession {
+fn boot(path: &Path, cell_px: (f64, f64)) -> GlulxSession {
     let bytes = std::fs::read(path).expect("read the story");
     let blorb = blorb::Blorb::parse(bytes).expect("Kerkerkruip is a Blorb");
     let image = blorb.executable().expect("Glulx exec chunk").1.to_vec();
@@ -113,7 +113,7 @@ fn settle(sess: &mut GlulxSession, done: impl Fn(&GlulxSession) -> bool) -> bool
     done(sess)
 }
 
-fn into_gameplay(cell_px: (u32, u32)) -> Option<GlulxSession> {
+fn into_gameplay(cell_px: (f64, f64)) -> Option<GlulxSession> {
     let mut sess = boot(&story_path()?, cell_px);
     settle(&mut sess, |s| Engine::pending_input(s) != InputKind::Event);
     let _ = Engine::submit_key(&mut sess, KeyInput::Char(' '));
@@ -162,7 +162,7 @@ fn headless_config(home: &Path) -> Config {
     }
 }
 
-fn boot_via_terminal_facts(story: PathBuf, home: &Path, glk_cell_px: Option<(u32, u32)>) -> BootedStory {
+fn boot_via_terminal_facts(story: PathBuf, home: &Path, glk_cell_px: Option<(f64, f64)>) -> BootedStory {
     let overrides = LaunchOverrides::default();
     let req = BootRequest {
         story_path: story,
@@ -186,7 +186,7 @@ fn boot_via_terminal_facts(story: PathBuf, home: &Path, glk_cell_px: Option<(u32
 #[test]
 fn host_cell_size_reaches_every_graphics_canvas_not_just_8x16() {
     const HOST_PX: (u32, u32) = (10, 23);
-    let Some(mut sess) = into_gameplay(HOST_PX) else { return };
+    let Some(mut sess) = into_gameplay((HOST_PX.0 as f64, HOST_PX.1 as f64)) else { return };
     assert_eq!(sess.char_pixels(), HOST_PX);
 
     // Two panels sized purely by cells on both axes: 54 and 45 cells wide,
@@ -224,6 +224,54 @@ fn host_cell_size_reaches_every_graphics_canvas_not_just_8x16() {
     );
 }
 
+/// SQ-1603: each graphics canvas must round `cells × char_px` PER WINDOW, at
+/// full fractional precision — not share one ratio pre-rounded ONCE before
+/// any window sees it. A genuinely fractional host cell (10.2×22.95, as a
+/// 17px-font terminal might report) makes the two approaches disagree in
+/// opposite directions on real Kerkerkruip specimens of different cell
+/// counts, which is what makes this discriminating rather than incidental:
+///
+/// | window | cells | per-window round(cells × px) | global round(px) × cells |
+/// |---|---|---|---|
+/// | win=19 (width)  | 54 | round(54 × 10.2)  = round(550.8)  = **551** | 54 × round(10.2) = 54 × 10  = 540 |
+/// | win=33 (width)  | 45 | round(45 × 10.2)  = round(459.0)  = **459** | 45 × round(10.2) = 45 × 10  = 450 |
+/// | win=11 (height) | 51 | round(51 × 22.95) = round(1170.45) = **1170** | 51 × round(22.95) = 51 × 23 = 1173 |
+///
+/// A global-pre-rounded ratio would report 540/450/1173 instead — every one
+/// of the three specimens differs from the correct per-window figure, and by
+/// a DIFFERENT amount each time (11px, 9px, 3px) rather than one fixed bias,
+/// which is the cumulative drift-across-window-sizes the quest exists to
+/// close. Verified against Python's `round()` (banker's-rounding-free, same
+/// half-away-from-zero behaviour as Rust's `f64::round` for these non-tied
+/// values) before being pinned here.
+#[test]
+fn canvas_size_rounds_per_window_not_from_one_pre_rounded_ratio() {
+    const HOST_PX_FRAC: (f64, f64) = (10.2, 22.95);
+    let Some(mut sess) = into_gameplay(HOST_PX_FRAC) else { return };
+
+    // Option (a)'s scope boundary: gvm's own layout math and every
+    // game-visible pixel report (`glk_window_get_size`, opcode 0x0025) read
+    // through `GlkBackend::char_pixels()`, which rounds ONCE — the host's
+    // 10.2×22.95 is a game-visible 10×23, never the fraction itself.
+    assert_eq!(sess.char_pixels(), (10, 23), "the game-visible cell size rounds once, at the trait boundary");
+
+    assert_eq!(
+        find_graphics(&sess, 19).canvas.width(),
+        551,
+        "win=19: round(54 × 10.2), not 54 × round(10.2) = 540"
+    );
+    assert_eq!(
+        find_graphics(&sess, 33).canvas.width(),
+        459,
+        "win=33: round(45 × 10.2), not 45 × round(10.2) = 450 — a DIFFERENT window, a DIFFERENT drift"
+    );
+    assert_eq!(
+        find_graphics(&sess, 11).canvas.height(),
+        1170,
+        "win=11: round(51 × 22.95), not 51 × round(22.95) = 1173"
+    );
+}
+
 // ── Boot-time plumbing: TerminalFacts::glk_cell_px → boot_story ────────────
 
 /// The host-facing entry point end to end: `TerminalFacts::glk_cell_px`
@@ -235,7 +283,7 @@ fn terminal_facts_glk_cell_px_reaches_the_boot_story_pipeline() {
     let Some(story) = story_path() else { return };
 
     let home_host = app::scratch_dir("sq1598-boot-host-px");
-    let mut host = boot_via_terminal_facts(story.clone(), &home_host, Some((10, 23)));
+    let mut host = boot_via_terminal_facts(story.clone(), &home_host, Some((10.0, 23.0)));
     {
         let gs = host.session.as_any_mut().downcast_mut::<GlulxSession>().expect("Glulx story");
         assert_eq!(gs.char_pixels(), (10, 23), "TerminalFacts::glk_cell_px reaches the constructor's char_px");
@@ -282,12 +330,12 @@ fn terminal_facts_glk_cell_px_reaches_the_boot_story_pipeline() {
 fn set_glk_cell_px_resizes_open_graphics_canvases_live() {
     const FROM_PX: (u32, u32) = (8, 16);
     const TO_PX: (u32, u32) = (13, 29);
-    let Some(mut sess) = into_gameplay(FROM_PX) else { return };
+    let Some(mut sess) = into_gameplay((FROM_PX.0 as f64, FROM_PX.1 as f64)) else { return };
 
     let before = find_graphics(&sess, 19);
     assert_eq!(before.canvas.dimensions(), (54 * FROM_PX.0, FROM_PX.1));
 
-    let changed = app::host::screen::set_glk_cell_px(&mut sess, TO_PX);
+    let changed = app::host::screen::set_glk_cell_px(&mut sess, (TO_PX.0 as f64, TO_PX.1 as f64));
     assert!(changed, "a Glulx session accepts the cell-size change");
     assert_eq!(sess.char_pixels(), TO_PX);
     assert!(!Engine::has_quit(&sess), "resizing must not itself end the game");
@@ -324,7 +372,7 @@ fn set_glk_cell_px_is_a_no_op_for_a_non_glulx_engine() {
     buf[0x0E] = 0x00; // static memory
     buf[0x40] = 0xBA; // QUIT
     let mut sess = app::session::GameSession::new(buf, true, false, None).expect("a minimal v3 story boots");
-    assert!(!app::host::screen::set_glk_cell_px(&mut sess, (10, 23)), "not a Glulx engine");
+    assert!(!app::host::screen::set_glk_cell_px(&mut sess, (10.0, 23.0)), "not a Glulx engine");
 }
 
 // ── @restart parity: AppState::glk_cell_px survives reset_game ─────────────
@@ -338,12 +386,12 @@ fn set_glk_cell_px_is_a_no_op_for_a_non_glulx_engine() {
 fn restart_keeps_the_hosts_glk_cell_px_not_the_8x16_fallback() {
     let Some(story) = story_path() else { return };
     let home = app::scratch_dir("sq1598-restart");
-    let mut b = boot_via_terminal_facts(story, &home, Some((10, 23)));
+    let mut b = boot_via_terminal_facts(story, &home, Some((10.0, 23.0)));
     {
         let gs = b.session.as_any_mut().downcast_mut::<GlulxSession>().expect("Glulx story");
         assert_eq!(gs.char_pixels(), (10, 23), "premise: the launch used the host's cell size");
     }
-    assert_eq!(b.state.glk_cell_px, Some((10, 23)), "carried onto AppState for reset.rs to re-read");
+    assert_eq!(b.state.glk_cell_px, Some((10.0, 23.0)), "carried onto AppState for reset.rs to re-read");
 
     app::host::reset::reset_game(
         &mut *b.session,

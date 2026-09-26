@@ -94,7 +94,7 @@ fn boot(name: &str, tag: &str) -> Option<GlulxSession> {
         false,
         false,
         false,
-        (8, 16),
+        (8.0, 16.0),
         None,
         &[],
         [[(None, None); 11]; 2],

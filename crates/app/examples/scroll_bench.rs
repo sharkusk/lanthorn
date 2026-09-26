@@ -447,7 +447,7 @@ fn run_glulx(path: &Path, turns: &[usize], repeats: usize) {
         app::hints::LoadedStory::Glulx(b) => b,
         _ => bytes,
     };
-    let mut engine: Box<dyn Engine> = match GlulxSession::new(image, 100, 40, true, false, false, (8, 16), None, &[]) {
+    let mut engine: Box<dyn Engine> = match GlulxSession::new(image, 100, 40, true, false, false, (8.0, 16.0), None, &[]) {
         Ok(s) => Box::new(s),
         Err(e) => {
             println!("  SKIP: boot failed: {e:?}\n");

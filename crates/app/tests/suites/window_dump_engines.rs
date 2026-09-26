@@ -73,7 +73,7 @@ fn glulx_dump_describes_the_window_tree() {
         _ => panic!("expected Glulx"),
     };
     let session =
-        app::glulx_session::GlulxSession::new(bytes, 138, 51, true, true, false, (8, 18), Some(blorb), &[])
+        app::glulx_session::GlulxSession::new(bytes, 138, 51, true, true, false, (8.0, 18.0), Some(blorb), &[])
             .expect("session");
     let text = session.window_dump().join("\n");
 

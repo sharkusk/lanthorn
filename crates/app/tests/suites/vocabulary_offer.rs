@@ -680,7 +680,7 @@ fn a_glulx_story_that_rewords_the_refusal_is_answered_all_the_same() {
     let b = blorb::Blorb::parse(bytes).expect("a gblorb parses");
     let exec = b.executable().expect("an Exec chunk").1.to_vec();
     let mut s =
-        app::glulx_session::GlulxSession::new(exec, 80, 24, true, false, false, (1, 1), Some(b), &[])
+        app::glulx_session::GlulxSession::new(exec, 80, 24, true, false, false, (1.0, 1.0), Some(b), &[])
             .expect("Dr Ludwig boots");
     s.set_strip_prompt(false);
     // Its opening runs on keypresses; step past them to the first line prompt.

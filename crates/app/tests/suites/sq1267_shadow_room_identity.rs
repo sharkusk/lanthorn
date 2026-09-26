@@ -122,7 +122,7 @@ impl GPlay {
         let (_kind, exec) = blorb.executable().ok()?;
         let store = app::scratch_dir("sq1267-glulx-play");
         let s = GlulxSession::new_in(
-            store.clone(), exec.to_vec(), 80, 24, true, false, false, false, (1, 1), None, &[],
+            store.clone(), exec.to_vec(), 80, 24, true, false, false, false, (1.0, 1.0), None, &[],
             [[(None, None); 11]; 2], false, None,
         )
         .expect("Adventure (Glulx) boots");

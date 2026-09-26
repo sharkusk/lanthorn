@@ -59,7 +59,7 @@ fn starting_rooms_resolve() {
     ];
     for (file, want) in cases {
         let Some(image) = glulx_image(file) else { continue };
-        let mut s = GlulxSession::new(image, 80, 24, true, false, false, (1, 1), None, &[]).expect("GlulxSession::new");
+        let mut s = GlulxSession::new(image, 80, 24, true, false, false, (1.0, 1.0), None, &[]).expect("GlulxSession::new");
         // FooFoo and "Dr Ludwig and the Devil" show a splash / dialogue that
         // needs a few keypresses before the room heading prints; Sub_Rosa and
         // TAKE already have it after boot. 5 is comfortably above the largest
@@ -79,7 +79,7 @@ fn pregame_menus_have_no_room() {
     ];
     for file in files {
         let Some(image) = glulx_image(file) else { continue };
-        let s = GlulxSession::new(image, 80, 24, true, false, false, (1, 1), None, &[]).expect("GlulxSession::new");
+        let s = GlulxSession::new(image, 80, 24, true, false, false, (1.0, 1.0), None, &[]).expect("GlulxSession::new");
         assert_eq!(s.current_location(), None, "{file}: pre-game menu should have no room");
     }
 }

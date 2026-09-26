@@ -162,7 +162,15 @@ pub struct TerminalFacts {
     /// as a terminal resize already does. Carried onto [`AppState::glk_cell_px`]
     /// so an `@restart` (`crate::host::reset`) agrees with the boot that
     /// preceded it rather than reverting to the picker/8×16 fallback.
-    pub glk_cell_px: Option<(u32, u32)>,
+    ///
+    /// Fractional (SQ-1603): a host's real text cell need not land on a whole
+    /// device pixel (10.2×22.95 at a 17px font is typical), and rounding it
+    /// HERE — before lanthorn ever sees it — would force every graphics
+    /// window's canvas through one pre-rounded ratio, which drifts further
+    /// from the true cell size the more windows of different cell counts a
+    /// game opens. Carried exactly as given all the way to `canvas_size`
+    /// (`glk_backend.rs`), which multiplies and rounds PER WINDOW.
+    pub glk_cell_px: Option<(f64, f64)>,
 }
 
 /// The per-story result of [`boot_story`]: the running engine, its map, the
@@ -629,7 +637,13 @@ pub fn boot_story(req: BootRequest<'_>, hooks: &mut dyn BootHooks) -> Result<Boo
     // `Picker` above cannot see — wins over the picker/8×16 cascade entirely,
     // taken exactly as given (see `TerminalFacts::glk_cell_px`'s doc for why
     // `glk_pixel_scale` is not applied to it too).
-    let char_px = match glk_cell_px {
+    // SQ-1603: `GlkPixelScale::apply` stays integer — it only ever runs on
+    // this fallback arm, whose own input (`Picker::font_size`) is already a
+    // whole `u16` cell, so there is no fraction to preserve through it. The
+    // cast to `f64` below is only to unify this arm's type with the `Some`
+    // arm's now-fractional host-stated value; it introduces no rounding of
+    // its own.
+    let char_px: (f64, f64) = match glk_cell_px {
         Some(px) => px,
         None => {
             let char_px = game_picker
@@ -646,7 +660,8 @@ pub fn boot_story(req: BootRequest<'_>, hooks: &mut dyn BootHooks) -> Result<Boo
             // game's artwork against unchanged text. See `GlkPixelScale::resolve`
             // for why this keys off the cell size rather than the display's DPI.
             // No-op at `auto` on an unscaled display with a normal font.
-            cfg.glk_pixel_scale.apply(char_px)
+            let (w, h) = cfg.glk_pixel_scale.apply(char_px);
+            (w as f64, h as f64)
         }
     };
     // Pixel-precise mouse reporting (SQ-0563) is NOT switched on here. The probe

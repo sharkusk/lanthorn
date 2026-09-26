@@ -163,7 +163,7 @@ fn boot(path: &Path, cols: u16, rows: u16) -> GlulxSession {
         true,  // graphics (the panels' rules are graphics windows)
         false, // sound
         false, // borderless
-        (8, 16),
+        (8.0, 16.0),
         Some(blorb),
         &[], // no VFS sidecar
         theme_pairs_for(path),

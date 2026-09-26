@@ -102,7 +102,7 @@ fn boot(tag: &str) -> Option<(GlulxSession, Vec<u8>, PathBuf)> {
         false,
         false,
         false,
-        (1, 1),
+        (1.0, 1.0),
         None,
         &[],
         [[(None, None); 11]; 2],

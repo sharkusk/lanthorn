@@ -142,7 +142,7 @@ fn boot_in(dir: &std::path::Path, bytes: Vec<u8>) -> GlulxSession {
         false,
         false,
         false,
-        (8, 16),
+        (8.0, 16.0),
         pict_blorb,
         &[],
         Default::default(),

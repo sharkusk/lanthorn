@@ -69,7 +69,7 @@ fn boot(image: Vec<u8>, blorb: blorb::Blorb, theme: GlkStylePairs) -> GlulxSessi
         true,  // graphics (the Gargoyle branch opens border windows)
         false, // sound
         false, // borderless
-        (8, 16),
+        (8.0, 16.0),
         Some(blorb),
         &[], // empty VFS: the game has no remembered answer to reuse
         theme,

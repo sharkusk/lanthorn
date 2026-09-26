@@ -718,7 +718,7 @@ fn counterfeit_monkeys_shadow_boots_the_way_the_live_game_boots() {
     let live_in = |dir: PathBuf, vfs: &[u8]| {
         let b = blorb::Blorb::parse(bytes.clone()).ok();
         app::glulx_session::GlulxSession::new_in(
-            dir, image.clone(), 80, 24, true, false, false, false, (8, 16), b, vfs,
+            dir, image.clone(), 80, 24, true, false, false, false, (8.0, 16.0), b, vfs,
             [[(None, None); 11]; 2], false, None,
         )
         .expect("Counterfeit Monkey boots")
@@ -841,7 +841,7 @@ fn a_lighter_glulx_story_is_still_probed() {
         panic!("Coloratura is a Glulx story");
     };
     let live =
-        app::glulx_session::GlulxSession::new(image, 80, 24, true, false, false, (8, 16), None, &[])
+        app::glulx_session::GlulxSession::new(image, 80, 24, true, false, false, (8.0, 16.0), None, &[])
             .expect("Coloratura boots");
     let mut probe = app::probe::ShadowProbe::default();
     probe.arm(recipe(&bytes));

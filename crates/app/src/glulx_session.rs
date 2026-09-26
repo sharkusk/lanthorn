@@ -520,7 +520,7 @@ impl GlulxSession {
         acceleration: bool,
         graphics_enabled: bool,
         sound_enabled: bool,
-        char_px: (u32, u32),
+        char_px: (f64, f64),
         pict_blorb: Option<blorb::Blorb>,
         vfs_bytes: &[u8],
     ) -> Result<GlulxSession, GError> {
@@ -559,7 +559,7 @@ impl GlulxSession {
         graphics_enabled: bool,
         sound_enabled: bool,
         borderless: bool,
-        char_px: (u32, u32),
+        char_px: (f64, f64),
         pict_blorb: Option<blorb::Blorb>,
         vfs_bytes: &[u8],
         theme: crate::glk_backend::GlkStylePairs,
@@ -607,7 +607,7 @@ impl GlulxSession {
             false, // graphics
             false, // sound
             false, // borderless
-            (8, 16),
+            (8.0, 16.0),
             None, // no picture Blorb
             vfs_bytes,
             [[(None, None); 11]; 2],
@@ -628,7 +628,7 @@ impl GlulxSession {
         graphics_enabled: bool,
         sound_enabled: bool,
         borderless: bool,
-        char_px: (u32, u32),
+        char_px: (f64, f64),
         pict_blorb: Option<blorb::Blorb>,
         vfs_bytes: &[u8],
         theme: crate::glk_backend::GlkStylePairs,
@@ -870,7 +870,7 @@ impl GlulxSession {
     /// via the same Glk Arrange event a terminal resize already delivers
     /// ([`Self::resize`]) — there is no separate redraw mechanism to invoke.
     /// A no-op once the game has quit.
-    pub fn set_char_px(&mut self, char_px: (u32, u32)) {
+    pub fn set_char_px(&mut self, char_px: (f64, f64)) {
         if self.quit {
             return;
         }
@@ -3129,7 +3129,7 @@ mod tests {
         // we assert the app-side delegation: `load_vfs` populates the machine VFS
         // and `vfs_bytes` re-encodes it, using gvm's public sidecar codec.
         let mut sess =
-            GlulxSession::new(image_for(enc(0x120, &[]), 1), 80, 24, true, false, false, (1, 1), None, &[])
+            GlulxSession::new(image_for(enc(0x120, &[]), 1), 80, 24, true, false, false, (1.0, 1.0), None, &[])
                 .expect("new");
         assert!(!sess.vfs_dirty(), "a fresh session's VFS is not dirty");
         assert!(
@@ -3163,7 +3163,7 @@ mod tests {
         let sidecar = gvm::glk::encode_files(&files);
 
         let sess = GlulxSession::new(
-            simple_line_image(), 80, 24, true, false, false, (1, 1), None, &sidecar,
+            simple_line_image(), 80, 24, true, false, false, (1.0, 1.0), None, &sidecar,
         )
         .expect("new");
 
@@ -3211,7 +3211,7 @@ mod tests {
         std::fs::write(dir.join("foo.qzl"), b"pretend-save-bytes").expect("write foo.qzl");
 
         let mut sess = GlulxSession::new_in(
-            dir.clone(), image_for(body, 3), 80, 24, true, false, false, false, (1, 1), None, &[],
+            dir.clone(), image_for(body, 3), 80, 24, true, false, false, false, (1.0, 1.0), None, &[],
             [[(None, None); 11]; 2], false, None,
         )
         .expect("new_in");
@@ -3278,7 +3278,7 @@ mod tests {
         body.extend(enc(0x130, &[Imm(0x84), Imm(2), Discard])); // glk_put_buffer
         body.extend(enc(0x120, &[])); // quit
 
-        let mut sess = GlulxSession::new(image_for(body, 2), 80, 24, true, false, false, (1, 1), None, &[]).expect("new");
+        let mut sess = GlulxSession::new(image_for(body, 2), 80, 24, true, false, false, (1.0, 1.0), None, &[]).expect("new");
         assert_eq!(sess.pending_input(), InputKind::Line);
         // Banner drained.
         assert_eq!(sess.take_transcript(), "OK");
@@ -3332,7 +3332,7 @@ mod tests {
         body.extend(enc(0x124, &[Imm(0), MemLoad(RESTORE_RES)])); // @restore -> mem[RESTORE_RES]
         body.extend(enc(0x120, &[])); // quit
 
-        let mut sess = GlulxSession::new(image_for(body, 1), 80, 24, true, false, false, (1, 1), None, &[]).expect("new");
+        let mut sess = GlulxSession::new(image_for(body, 1), 80, 24, true, false, false, (1.0, 1.0), None, &[]).expect("new");
         assert_eq!(sess.pending_input(), InputKind::Line, "opens at the turn-1 prompt");
 
         // Turn 1: the command drives into @save, which bubbles a Save request.
@@ -3377,7 +3377,7 @@ mod tests {
         body.extend(enc(0x124, &[Imm(0), MemLoad(RESTORE_RES)])); // @restore -> mem[RESTORE_RES]
         body.extend(enc(0x120, &[])); // quit
 
-        let mut sess = GlulxSession::new(image_for(body, 1), 80, 24, true, false, false, (1, 1), None, &[]).expect("new");
+        let mut sess = GlulxSession::new(image_for(body, 1), 80, 24, true, false, false, (1.0, 1.0), None, &[]).expect("new");
         assert_eq!(sess.pending_input(), InputKind::Line, "opens at the turn-1 prompt");
 
         // A window is open (from open_buffer_prelude) before the save.
@@ -3436,7 +3436,7 @@ mod tests {
         body.extend(enc(0x120, &[])); // quit
 
         let mut sess =
-            GlulxSession::new(image_for(body, 1), 80, 24, true, false, false, (1, 1), None, &[]).expect("new");
+            GlulxSession::new(image_for(body, 1), 80, 24, true, false, false, (1.0, 1.0), None, &[]).expect("new");
         assert_eq!(sess.submit("save").pending_io, Some(PendingIo::Save));
 
         // The two triggers pick DIFFERENT bytes for Glulx — that is the whole
@@ -3520,7 +3520,7 @@ mod tests {
         use crate::archive::SaveTrigger;
         use crate::persist_files::game_save_bytes;
 
-        let mut sess = GlulxSession::new(save_then_landmarks_story(), 80, 24, true, false, false, (1, 1), None, &[])
+        let mut sess = GlulxSession::new(save_then_landmarks_story(), 80, 24, true, false, false, (1.0, 1.0), None, &[])
             .expect("new");
         let _ = sess.take_transcript(); // drain the banner
         assert_eq!(sess.pending_input(), InputKind::Line, "opens at prompt 1");
@@ -3581,7 +3581,7 @@ mod tests {
         body.extend(line_prompt());
         body.extend(enc(0x120, &[])); // quit
 
-        let mut sess = GlulxSession::new(image_for(body, 1), 80, 24, true, false, false, (1, 1), None, &[]).expect("new");
+        let mut sess = GlulxSession::new(image_for(body, 1), 80, 24, true, false, false, (1.0, 1.0), None, &[]).expect("new");
         let _ = sess.take_transcript();
         assert_eq!(sess.submit("save").pending_io, Some(PendingIo::Save));
         let ingame = game_save_bytes(&sess, SaveTrigger::Ingame);
@@ -3613,7 +3613,7 @@ mod tests {
     /// identity check runs before anything is abandoned for exactly this.
     #[test]
     fn glulx_host_restore_refuses_a_foreign_game_save_and_leaves_the_session_playable() {
-        let mut sess = GlulxSession::new(save_then_landmarks_story(), 80, 24, true, false, false, (1, 1), None, &[])
+        let mut sess = GlulxSession::new(save_then_landmarks_story(), 80, 24, true, false, false, (1.0, 1.0), None, &[])
             .expect("new");
         let _ = sess.take_transcript();
 
@@ -3625,7 +3625,7 @@ mod tests {
             b.extend(line_prompt());
             b.extend(enc(0x123, &[Imm(0), MemLoad(0x410)]));
             b.extend(enc(0x120, &[]));
-            let mut o = GlulxSession::new(image_for(b, 2), 80, 24, true, false, false, (1, 1), None, &[]).expect("new");
+            let mut o = GlulxSession::new(image_for(b, 2), 80, 24, true, false, false, (1.0, 1.0), None, &[]).expect("new");
             assert_eq!(o.submit("save").pending_io, Some(PendingIo::Save));
             o.save_quetzal()
         };
@@ -3666,7 +3666,7 @@ mod tests {
         body.extend(enc(0x120, &[])); // quit
 
         let sess = GlulxSession::new_in(
-            dir.clone(), image_for(body, 2), 80, 24, true, false, false, false, (1, 1), None, &[],
+            dir.clone(), image_for(body, 2), 80, 24, true, false, false, false, (1.0, 1.0), None, &[],
             [[(None, None); 11]; 2], false, None,
         )
         .expect("new");
@@ -3692,7 +3692,7 @@ mod tests {
         body.extend(enc(0x130, &[Imm(0x62), Imm(3), MemLoad(FREF_RES)]));
         body.extend(line_prompt()); // resume point after supply_filename
         body.extend(enc(0x120, &[])); // quit
-        let mut sess = GlulxSession::new(image_for(body, 1), 80, 24, true, false, false, (1, 1), None, &[]).expect("new");
+        let mut sess = GlulxSession::new(image_for(body, 1), 80, 24, true, false, false, (1.0, 1.0), None, &[]).expect("new");
         assert_eq!(sess.pending_input(), InputKind::Line, "opens at the turn-1 prompt");
 
         // The command drives into create_by_prompt, which bubbles a filename request.
@@ -3724,7 +3724,7 @@ mod tests {
         body.extend(enc(0x123, &[Imm(0), MemLoad(SAVE_RES)])); // @save (host-intercepted)
         body.extend(line_prompt());
         body.extend(enc(0x120, &[])); // quit
-        let mut sess = GlulxSession::new(image_for(body, 1), 80, 24, true, false, false, (1, 1), None, &[]).expect("new");
+        let mut sess = GlulxSession::new(image_for(body, 1), 80, 24, true, false, false, (1.0, 1.0), None, &[]).expect("new");
         let r1 = sess.submit("save");
         // SavedGame create_by_prompt must NOT surface a filename request; it auto-resolves
         // in-session so the turn reaches @save and bubbles a Save request in ONE turn.
@@ -3740,7 +3740,7 @@ mod tests {
         body.extend(line_prompt());
         body.extend(enc(0x124, &[Imm(0), MemLoad(RESTORE_RES)])); // @restore
         body.extend(enc(0x120, &[])); // quit
-        let mut sess = GlulxSession::new(image_for(body, 1), 80, 24, true, false, false, (1, 1), None, &[]).expect("new");
+        let mut sess = GlulxSession::new(image_for(body, 1), 80, 24, true, false, false, (1.0, 1.0), None, &[]).expect("new");
 
         let r1 = sess.submit("restore");
         assert_eq!(r1.pending_io, Some(PendingIo::Restore));
@@ -3765,7 +3765,7 @@ mod tests {
 
     #[test]
     fn submit_key_delivers_char_and_skips_unmapped() {
-        let mut sess = GlulxSession::new(char_echo_image(), 80, 24, true, false, false, (1, 1), None, &[]).expect("new");
+        let mut sess = GlulxSession::new(char_echo_image(), 80, 24, true, false, false, (1.0, 1.0), None, &[]).expect("new");
         assert_eq!(sess.pending_input(), InputKind::Char);
         // An unmapped key (Insert) leaves the VM untouched.
         assert!(sess.submit_key(KeyInput::Insert).is_none());
@@ -3785,7 +3785,7 @@ mod tests {
         // never ran. Falsify by reverting the `pending == InputKind::Char`
         // branch in `GlulxSession::submit`: this then asserts `quit` on a
         // session left stuck waiting, which fails.
-        let mut sess = GlulxSession::new(char_echo_image(), 80, 24, true, false, false, (1, 1), None, &[]).expect("new");
+        let mut sess = GlulxSession::new(char_echo_image(), 80, 24, true, false, false, (1.0, 1.0), None, &[]).expect("new");
         assert_eq!(sess.pending_input(), InputKind::Char);
 
         let r = sess.submit("Zebra");
@@ -3798,7 +3798,7 @@ mod tests {
         // An empty submitted line at a char prompt behaves like the app's own
         // Enter keypress (`key_to_glk(KeyInput::Enter)`), not like the
         // dropped-turn no-op a bare `supply_line("")` would produce.
-        let mut sess = GlulxSession::new(char_echo_image(), 80, 24, true, false, false, (1, 1), None, &[]).expect("new");
+        let mut sess = GlulxSession::new(char_echo_image(), 80, 24, true, false, false, (1.0, 1.0), None, &[]).expect("new");
         assert_eq!(sess.pending_input(), InputKind::Char);
 
         let r = sess.submit("");
@@ -3821,7 +3821,7 @@ mod tests {
 
     #[test]
     fn timer_only_select_suspends_as_event_and_deliver_timer_advances() {
-        let mut sess = GlulxSession::new(timer_wait_image(), 80, 24, true, false, false, (1, 1), None, &[])
+        let mut sess = GlulxSession::new(timer_wait_image(), 80, 24, true, false, false, (1.0, 1.0), None, &[])
             .expect("new");
         // The timer-only select suspends as Event (not Line/Char) and did NOT
         // spin to quit — the SQ-0299 fix.
@@ -3906,7 +3906,7 @@ mod tests {
         // Shrinking the pane to 40 cols halves its width to 80 px (rows
         // unchanged); the game re-suspends on its line request (not quit).
         let mut sess =
-            GlulxSession::new(graphics_split_line_image(), 80, 24, true, true, false, (2, 2), None, &[])
+            GlulxSession::new(graphics_split_line_image(), 80, 24, true, true, false, (2.0, 2.0), None, &[])
                 .expect("new");
         assert_eq!(sess.pending_input(), InputKind::Line);
         let (w0, h0) = graphics_canvas_dims(&sess.screen().root).expect("a graphics window");
@@ -3922,7 +3922,7 @@ mod tests {
     #[test]
     fn resize_after_quit_is_a_noop() {
         // A quit session must ignore resize (no drive, no panic).
-        let mut sess = GlulxSession::new(simple_line_image(), 80, 24, true, false, false, (1, 1), None, &[])
+        let mut sess = GlulxSession::new(simple_line_image(), 80, 24, true, false, false, (1.0, 1.0), None, &[])
             .expect("new");
         let r = sess.submit("go"); // drives to quit
         assert!(r.quit);
@@ -3934,7 +3934,7 @@ mod tests {
     fn finish_turn_drains_buffered_sound_ops() {
         use crate::session::SchannelOp;
         use gvm::glk::GlkBackend;
-        let mut sess = GlulxSession::new(simple_line_image(), 80, 24, true, false, true, (1, 1), None, &[])
+        let mut sess = GlulxSession::new(simple_line_image(), 80, 24, true, false, true, (1.0, 1.0), None, &[])
             .expect("new");
         {
             let g = sess.appglk();
@@ -3978,7 +3978,7 @@ mod tests {
         body.extend(enc(0x120, &[])); // quit
         let image = image_for(body, 1);
 
-        let mut sess = GlulxSession::new(image, 80, 24, true, false, false, (1, 1), None, &[]).expect("new");
+        let mut sess = GlulxSession::new(image, 80, 24, true, false, false, (1.0, 1.0), None, &[]).expect("new");
         assert_eq!(sess.take_transcript(), "Hi", "banner drops the trailing prompt");
         let r = sess.submit("x");
         assert_eq!(r.transcript, "done", "turn output drops the trailing prompt");
@@ -4012,7 +4012,7 @@ mod tests {
         body.extend(enc(0x120, &[])); // quit
         let image = image_for(body, 1);
 
-        let mut sess = GlulxSession::new(image, 80, 24, true, false, false, (1, 1), None, &[]).expect("new");
+        let mut sess = GlulxSession::new(image, 80, 24, true, false, false, (1.0, 1.0), None, &[]).expect("new");
         sess.strip_prompt = false;
         assert_eq!(sess.take_transcript(), "Hi\n> ", "banner keeps the trailing prompt");
         let r = sess.submit("x");
@@ -4040,7 +4040,7 @@ mod tests {
         body.extend(enc(0x130, &[Imm(0xc0), Imm(1), Discard])); // glk_select (banner)
         let image = image_for(body, 1);
 
-        let mut sess = GlulxSession::new(image, 80, 24, true, false, false, (1, 1), None, &[]).expect("new");
+        let mut sess = GlulxSession::new(image, 80, 24, true, false, false, (1.0, 1.0), None, &[]).expect("new");
         let dummy = crate::inline_image::InlineImage {
             pixels: std::sync::Arc::new(image::RgbaImage::new(3, 3)),
             align: crate::inline_image::ImageAlign::InlineUp,
@@ -4065,7 +4065,7 @@ mod tests {
 
     #[test]
     fn save_state_is_tagged_and_round_trips_with_guard() {
-        let mut sess = GlulxSession::new(simple_line_image(), 80, 24, true, false, false, (1, 1), None, &[]).expect("new");
+        let mut sess = GlulxSession::new(simple_line_image(), 80, 24, true, false, false, (1.0, 1.0), None, &[]).expect("new");
         let save = sess.save_state();
         assert_eq!(save.engine, GLULX_ENGINE);
         assert!(!save.bytes.is_empty(), "gvm snapshot is non-empty");
@@ -4090,7 +4090,7 @@ mod tests {
     /// would have quietly turned every refusal into a false empty world.
     #[test]
     fn introspect_refuses_a_story_with_no_object_list() {
-        let sess = GlulxSession::new(simple_line_image(), 80, 24, true, false, false, (1, 1), None, &[]).expect("new");
+        let sess = GlulxSession::new(simple_line_image(), 80, 24, true, false, false, (1.0, 1.0), None, &[]).expect("new");
         assert!(sess.parse_names().is_none(), "the hand-built image holds no Inform object list");
         assert!(sess.introspect().is_none(), "so introspection refuses rather than answering empty");
     }
@@ -4146,7 +4146,7 @@ mod tests {
         // Arrange + its re-select) than the archived save point, so the state
         // is functionally equivalent, not byte-identical.
         let mut sess =
-            GlulxSession::new(graphics_split_line_image(), 80, 24, true, true, false, (2, 2), None, &[])
+            GlulxSession::new(graphics_split_line_image(), 80, 24, true, true, false, (2.0, 2.0), None, &[])
                 .expect("new");
         let _ = sess.take_transcript(); // drain the banner
         assert_eq!(sess.pending_input(), InputKind::Line, "source session reached its line prompt");
@@ -4166,7 +4166,7 @@ mod tests {
         assert_eq!(ac.save, es.bytes, "archived bytes are the Glulx save");
 
         let mut fresh =
-            GlulxSession::new(graphics_split_line_image(), 80, 24, true, true, false, (2, 2), None, &[])
+            GlulxSession::new(graphics_split_line_image(), 80, 24, true, true, false, (2.0, 2.0), None, &[])
                 .expect("new");
         let _ = fresh.take_transcript();
         fresh.restore_state(&ac.engine_save()).expect("Glulx restore from archive");
@@ -4178,7 +4178,7 @@ mod tests {
     fn glulx_restore_refuses_zmachine_archive() {
         // The foreign-engine guard fires gracefully (no panic) when a zmachine
         // save is offered to a Glulx session.
-        let mut sess = GlulxSession::new(simple_line_image(), 80, 24, true, false, false, (1, 1), None, &[]).expect("new");
+        let mut sess = GlulxSession::new(simple_line_image(), 80, 24, true, false, false, (1.0, 1.0), None, &[]).expect("new");
         let foreign = EngineSave::new("zmachine", 1, vec![1, 2, 3]);
         assert!(matches!(
             sess.restore_state(&foreign),
@@ -4215,7 +4215,7 @@ mod tests {
             image_for(body, 1)
         };
 
-        let mut sess = GlulxSession::new(image, 78, 20, true, false, false, (1, 1), None, &[]).expect("new");
+        let mut sess = GlulxSession::new(image, 78, 20, true, false, false, (1.0, 1.0), None, &[]).expect("new");
 
         // Mirror the app loop: drain the banner into the transcript, take a turn.
         let mut state = AppState::default();
@@ -4266,7 +4266,7 @@ mod tests {
     #[test]
     fn mouse_windows_lists_only_watching_windows_and_char_pixels_exposed() {
         let mut sess =
-            GlulxSession::new(grid_mouse_watch_image(), 80, 24, true, false, false, (9, 19), None, &[]).expect("new");
+            GlulxSession::new(grid_mouse_watch_image(), 80, 24, true, false, false, (9.0, 19.0), None, &[]).expect("new");
         assert_eq!(sess.pending_input(), InputKind::Char, "suspends on the grid char request");
 
         // Only the grid (window 2) watches; the buffer (window 1) does not. Ids
@@ -4281,7 +4281,7 @@ mod tests {
     #[test]
     fn deliver_mouse_resumes_the_game_and_is_one_shot() {
         let mut sess =
-            GlulxSession::new(grid_mouse_watch_image(), 80, 24, true, false, false, (1, 1), None, &[]).expect("new");
+            GlulxSession::new(grid_mouse_watch_image(), 80, 24, true, false, false, (1.0, 1.0), None, &[]).expect("new");
         assert!(!sess.mouse_windows().is_empty(), "armed before the click");
 
         // The click resumes the suspended select; the game runs to its trailing quit.
@@ -4298,7 +4298,7 @@ mod tests {
     #[test]
     fn mouse_coordinates_are_clamped_into_the_window_the_game_was_told() {
         let mut sess =
-            GlulxSession::new(grid_mouse_watch_image(), 80, 24, true, false, false, (1, 1), None, &[]).expect("new");
+            GlulxSession::new(grid_mouse_watch_image(), 80, 24, true, false, false, (1.0, 1.0), None, &[]).expect("new");
         // Window 2 is the grid: one row, the pane's full 80 columns.
         assert_eq!(sess.clamp_into_window(2, 5, 0), (5, 0), "a click inside the window is untouched");
         assert_eq!(
@@ -4460,7 +4460,7 @@ mod tests {
     #[test]
     fn hyperlink_windows_lists_only_watching_windows() {
         let mut sess =
-            GlulxSession::new(grid_hyperlink_watch_image(), 80, 24, true, false, false, (9, 19), None, &[]).expect("new");
+            GlulxSession::new(grid_hyperlink_watch_image(), 80, 24, true, false, false, (9.0, 19.0), None, &[]).expect("new");
         assert_eq!(sess.pending_input(), InputKind::Char, "suspends on the grid char request");
 
         // Only the grid (window 2) watches; the buffer (window 1) does not. Ids
@@ -4472,7 +4472,7 @@ mod tests {
     #[test]
     fn deliver_hyperlink_resumes_the_game_and_is_one_shot() {
         let mut sess =
-            GlulxSession::new(grid_hyperlink_watch_image(), 80, 24, true, false, false, (1, 1), None, &[]).expect("new");
+            GlulxSession::new(grid_hyperlink_watch_image(), 80, 24, true, false, false, (1.0, 1.0), None, &[]).expect("new");
         assert!(!sess.hyperlink_windows().is_empty(), "armed before the click");
 
         // The click resumes the suspended select; the game runs to its trailing quit.
@@ -4572,7 +4572,7 @@ mod tests {
         else {
             panic!("Counterfeit Monkey is a Glulx story");
         };
-        let mut s = GlulxSession::new(image, 80, 30, true, false, false, (8, 16), pict, &[])
+        let mut s = GlulxSession::new(image, 80, 30, true, false, false, (8.0, 16.0), pict, &[])
             .expect("Counterfeit Monkey boots");
         let _ = s.take_transcript();
         if !ask {
@@ -4711,7 +4711,7 @@ mod tests {
         else {
             panic!("Cragne Manor is a Glulx story");
         };
-        let s = GlulxSession::new(image, 80, 30, true, false, false, (8, 16), pict, &[])
+        let s = GlulxSession::new(image, 80, 30, true, false, false, (8.0, 16.0), pict, &[])
             .expect("Cragne Manor boots");
         let world = s.i7_world().expect("Cragne Manor has a compiled I7 map");
         let names = s.parse_names().expect("Cragne Manor has an object table");
@@ -4745,7 +4745,7 @@ mod tests {
         let body = enc(0x120, &[]); // quit immediately; the boot drive is all we need
         GlulxSession::new_in(
             dir.to_path_buf(), image_for(body, 1), 80, 24, true, false, false, false,
-            (1, 1), None, &[], [[(None, None); 11]; 2], false, None,
+            (1.0, 1.0), None, &[], [[(None, None); 11]; 2], false, None,
         )
         .expect("tiny image boots")
     }

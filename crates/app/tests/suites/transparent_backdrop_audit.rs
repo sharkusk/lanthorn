@@ -72,7 +72,7 @@ fn glulx_graphics_window_leaves_no_transparency_for_the_terminal() {
         panic!("advent.blb holds a Glulx story");
     };
     let mut sess =
-        app::glulx_session::GlulxSession::new(bytes, 138, 51, true, true, false, (8, 18), Some(blorb), &[])
+        app::glulx_session::GlulxSession::new(bytes, 138, 51, true, true, false, (8.0, 18.0), Some(blorb), &[])
             .expect("advent boots");
     let _ = sess.take_transcript();
     for _ in 0..4 {

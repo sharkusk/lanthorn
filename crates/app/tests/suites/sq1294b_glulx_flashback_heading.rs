@@ -114,7 +114,7 @@ fn play() -> Option<(GlulxSession, Vec<(&'static str, TurnResult)>)> {
     else {
         panic!("{STORY} is a Glulx story");
     };
-    let mut s = GlulxSession::new(image, 80, 30, true, false, false, (8, 16), pict_blorb, &[])
+    let mut s = GlulxSession::new(image, 80, 30, true, false, false, (8.0, 16.0), pict_blorb, &[])
         .expect("Counterfeit Monkey boots");
     let _ = s.take_transcript();
 

@@ -92,7 +92,7 @@ fn drawn(pic: (u32, u32), rule: ImageRule, draw_band_px: u32) -> InlineImage {
     let mut glk = app::glk_backend::AppGlk::with_graphics(
         80,
         24,
-        (1, 1),
+        (1.0, 1.0),
         app::graphics::PictSource::new(Some(blorb)),
     );
     glk.window_open(1, WinType::TextBuffer);
@@ -261,7 +261,7 @@ fn imagetest_drives_the_new_call_and_anchors_standing_rules() {
         /*honor_game_colours*/ true,
         /*graphics*/ true,
         /*sound*/ false,
-        (8, 16),
+        (8.0, 16.0),
         Some(blorb),
         &[],
     )
@@ -333,7 +333,7 @@ fn an_invalid_rule_word_draws_nothing() {
     let mut glk = app::glk_backend::AppGlk::with_graphics(
         80,
         24,
-        (1, 1),
+        (1.0, 1.0),
         app::graphics::PictSource::new(Some(blorb)),
     );
     glk.window_open(1, WinType::TextBuffer);

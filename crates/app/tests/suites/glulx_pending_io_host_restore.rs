@@ -38,7 +38,7 @@ fn advent_image() -> Option<Vec<u8>> {
 
 fn booted() -> Option<GlulxSession> {
     let image = advent_image()?;
-    let mut sess = GlulxSession::new(image, 80, 24, true, false, false, (1, 1), None, &[])
+    let mut sess = GlulxSession::new(image, 80, 24, true, false, false, (1.0, 1.0), None, &[])
         .expect("Adventure (Glulx) boots");
     let _ = sess.take_transcript(); // drain the banner
     Some(sess)

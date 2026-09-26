@@ -100,7 +100,7 @@ fn boot_anchorhead() -> Option<GlulxSession> {
     let (_, image) = blorb1.executable().ok()?;
     let image = image.to_vec();
     let blorb2 = blorb::Blorb::parse(raw).ok()?;
-    GlulxSession::new(image, 100, 60, true, true, false, (8, 16), Some(blorb2), &[]).ok()
+    GlulxSession::new(image, 100, 60, true, true, false, (8.0, 16.0), Some(blorb2), &[]).ok()
 }
 
 /// Drive past the opening title/banner sequence into real gameplay ("Outside

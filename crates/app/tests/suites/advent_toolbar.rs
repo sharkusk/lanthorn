@@ -27,7 +27,7 @@ fn boot_advent() -> Option<GlulxSession> {
         _ => panic!("expected Glulx"),
     };
     Some(
-        GlulxSession::new(bytes, 138, 51, true, true, false, (8, 18), Some(blorb), &[])
+        GlulxSession::new(bytes, 138, 51, true, true, false, (8.0, 18.0), Some(blorb), &[])
             .expect("session"),
     )
 }

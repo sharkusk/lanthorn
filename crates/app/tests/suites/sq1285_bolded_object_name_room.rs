@@ -112,7 +112,7 @@ fn play() -> Option<Vec<(String, TurnResult)>> {
     };
     // No persistent store: the game's own fixed-name startup cache auto-fails, so this
     // runs its full initialisation every time and depends on nothing left on disk.
-    let mut s = GlulxSession::new(image, 80, 30, true, false, false, (8, 16), pict_blorb, &[])
+    let mut s = GlulxSession::new(image, 80, 30, true, false, false, (8.0, 16.0), pict_blorb, &[])
         .expect("Counterfeit Monkey boots");
     let _ = s.take_transcript();
 

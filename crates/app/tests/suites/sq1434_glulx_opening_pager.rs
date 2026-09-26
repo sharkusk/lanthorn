@@ -134,7 +134,7 @@ fn boot_glulx(file: &str, w: u16, h: u16) -> Option<GlulxSession> {
         panic!("{file} is a Glulx story");
     };
     Some(
-        GlulxSession::new(image, w.into(), h.into(), true, false, false, (8, 16), pict_blorb, &[])
+        GlulxSession::new(image, w.into(), h.into(), true, false, false, (8.0, 16.0), pict_blorb, &[])
             .expect("Glulx story boots"),
     )
 }

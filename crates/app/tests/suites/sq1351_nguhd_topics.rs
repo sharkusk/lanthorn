@@ -86,7 +86,7 @@ impl Play {
             false,
             false,
             false,
-            (1, 1),
+            (1.0, 1.0),
             None,
             &[],
             [[(None, None); 11]; 2],

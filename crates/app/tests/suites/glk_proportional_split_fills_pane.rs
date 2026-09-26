@@ -50,7 +50,7 @@ fn boot(name: &str, cols: u32, rows: u32, cmds: &[&str]) -> Option<app::glulx_se
         true,
         true,
         false,
-        (8, 16),
+        (8.0, 16.0),
         Some(resources),
         &[],
     )

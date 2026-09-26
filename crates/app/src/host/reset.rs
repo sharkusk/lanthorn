@@ -282,15 +282,18 @@ pub fn reset_game(
             // wins over the picker/8×16 cascade here exactly as it did at boot
             // (`host::boot::boot_story`) — so a restart agrees with the launch
             // that preceded it rather than reverting to the fallback.
-            let char_px = state.glk_cell_px.unwrap_or_else(|| {
+            // SQ-1603: fractional, matching `state.glk_cell_px`'s type — the
+            // fallback arm casts up from the picker's whole-cell `u16` (or the
+            // 8×16 constant), introducing no rounding of its own.
+            let char_px: (f64, f64) = state.glk_cell_px.unwrap_or_else(|| {
                 state
                     .game_picker
                     .as_ref()
                     .map(|p| {
                         let f = p.font_size();
-                        (f.width as u32, f.height as u32)
+                        (f.width as f64, f.height as f64)
                     })
-                    .unwrap_or((8, 16))
+                    .unwrap_or((8.0, 16.0))
             });
             let pict_blorb = resolve_pict_blorb(story_path, state.config.images);
             // Carry the current in-memory Glk file VFS (e.g. CM's boot cache,

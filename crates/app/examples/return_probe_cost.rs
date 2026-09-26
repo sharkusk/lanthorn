@@ -80,7 +80,7 @@ fn boot(path: &Path, bytes: Vec<u8>) -> Option<(Box<dyn Engine>, ShadowRecipe)> 
                 false,
                 false,
                 false,
-                (8, 16),
+                (8.0, 16.0),
                 None,
                 &recipe.vfs_bytes,
                 Default::default(),

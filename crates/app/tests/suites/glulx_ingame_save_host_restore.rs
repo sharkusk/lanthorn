@@ -37,7 +37,7 @@ fn advent_image() -> Option<Vec<u8>> {
 #[test]
 fn a_real_glulx_ingame_save_archive_restores_through_the_host_path() {
     let Some(image) = advent_image() else { return };
-    let mut sess = GlulxSession::new(image, 80, 24, true, false, false, (1, 1), None, &[])
+    let mut sess = GlulxSession::new(image, 80, 24, true, false, false, (1.0, 1.0), None, &[])
         .expect("Adventure (Glulx) boots");
     let _ = sess.take_transcript(); // drain the banner
 

@@ -286,7 +286,15 @@ pub struct AppGlk {
     graphics: std::collections::BTreeMap<u32, crate::graphics::Canvas>,
     /// The `(width, height)` of one text-grid cell in pixels, for pixel↔cell
     /// layout of graphics windows.
-    char_px: (u32, u32),
+    ///
+    /// Fractional (SQ-1603) — see `TerminalFacts::glk_cell_px`'s doc for why:
+    /// a host's real cell need not land on a whole device pixel, and rounding
+    /// it before it reaches here would force every graphics window's canvas
+    /// through one shared pre-rounded ratio. Stored at full precision;
+    /// `canvas_size` rounds PER WINDOW at the multiplication site, and
+    /// `char_pixels()` (the `GlkBackend` trait boundary gvm's own layout math
+    /// and every game-visible pixel report read through) rounds once.
+    char_px: (f64, f64),
     /// Resolves + caches Blorb `Pict` resources for `graphics_draw_image`.
     picts: crate::graphics::PictSource,
     /// Live sound channels, keyed by Glk channel ref (BTree for stable iterate).
@@ -428,7 +436,7 @@ impl AppGlk {
     /// A backend reporting a `cols × rows` display. Stylehint colour is always
     /// recorded; the `honor_game_colours` gate is applied at render time.
     pub fn new(cols: u32, rows: u32) -> AppGlk {
-        AppGlk::with_graphics(cols, rows, (1, 1), crate::graphics::PictSource::new(None))
+        AppGlk::with_graphics(cols, rows, (1.0, 1.0), crate::graphics::PictSource::new(None))
     }
 
     /// A backend also carrying the char-cell pixel size and a `Pict` source,
@@ -436,7 +444,7 @@ impl AppGlk {
     pub fn with_graphics(
         cols: u32,
         rows: u32,
-        char_px: (u32, u32),
+        char_px: (f64, f64),
         picts: crate::graphics::PictSource,
     ) -> AppGlk {
         AppGlk {
@@ -477,7 +485,7 @@ impl AppGlk {
     /// at the next relayout — the caller re-lays the tree out (e.g.
     /// `Machine::rearrange`) for it to show immediately, exactly as
     /// `set_borderless` above does for its own field.
-    pub fn set_char_px(&mut self, char_px: (u32, u32)) {
+    pub fn set_char_px(&mut self, char_px: (f64, f64)) {
         self.char_px = char_px;
     }
 
@@ -506,7 +514,15 @@ impl AppGlk {
             .find(|&&(id, _, _, _)| id == win)
             .map(|&(_, _, r, _)| (r.width, r.height))
             .unwrap_or((1, 1));
-        let (mut cw, mut ch) = (cells.0 * self.char_px.0, cells.1 * self.char_px.1);
+        // SQ-1603: rounds PER WINDOW, at this multiplication, rather than
+        // sharing one pre-rounded `char_px` across every window's canvas — a
+        // fractional cell size multiplied by different cell counts must be
+        // allowed to round differently window to window, or the error
+        // compounds unevenly against the host's real, uniform cell grid.
+        let (mut cw, mut ch) = (
+            (cells.0 as f64 * self.char_px.0).round() as u32,
+            (cells.1 as f64 * self.char_px.1).round() as u32,
+        );
         if let Some((vertical, px)) = self.graphics_split_px(win) {
             if vertical {
                 ch = px;
@@ -1499,7 +1515,13 @@ impl GlkBackend for AppGlk {
     }
 
     fn char_pixels(&self) -> (u32, u32) {
-        self.char_px
+        // SQ-1603: the ONE boundary where the fractional host-stated cell
+        // size is rounded — gvm's own layout math (`Glk::relayout`,
+        // `window_pixel_size`, and every game-visible pixel report such as
+        // `glk_window_get_size`) is integer, and stays that way; only
+        // `canvas_size` below reads `self.char_px` at full precision, and it
+        // rounds PER WINDOW rather than sharing this one pre-rounded value.
+        (self.char_px.0.round() as u32, self.char_px.1.round() as u32)
     }
 
     fn image_info(&mut self, resnum: u32) -> Option<(u32, u32)> {
@@ -2304,7 +2326,7 @@ mod tests {
 
     #[test]
     fn appglk_graphics_fill_composites_into_canvas() {
-        let mut g = AppGlk::with_graphics(80, 24, (2, 2), crate::graphics::PictSource::new(None));
+        let mut g = AppGlk::with_graphics(80, 24, (2.0, 2.0), crate::graphics::PictSource::new(None));
         // Simulate a laid-out graphics window id=1 occupying 4x4 cells → 8x8 px.
         g.window_open(1, gvm::glk::WinType::Graphics);
         g.window_layout(&[(1, gvm::glk::WinType::Graphics, gvm::glk::Rect { left: 0, top: 0, width: 4, height: 4 }, Some(true))]);
@@ -2322,7 +2344,7 @@ mod tests {
     // the canvas's initial fill happens to be, reading as a solid block.
     #[test]
     fn appglk_graphics_canvas_uses_pixel_exact_split_height() {
-        let mut g = AppGlk::with_graphics(30, 24, (8, 16), crate::graphics::PictSource::new(None));
+        let mut g = AppGlk::with_graphics(30, 24, (8.0, 16.0), crate::graphics::PictSource::new(None));
         g.window_open(1, gvm::glk::WinType::Graphics);
         g.window_open(2, gvm::glk::WinType::TextBuffer);
         // Cell-rounded footprint: a 2px rule still reserves one whole 16px row.
@@ -2352,7 +2374,7 @@ mod tests {
     /// stays exactly as before: the TUI's own layout is unaffected.
     #[test]
     fn screen_model_split_carries_pixel_exact_footprint() {
-        let mut g = AppGlk::with_graphics(30, 24, (8, 16), crate::graphics::PictSource::new(None));
+        let mut g = AppGlk::with_graphics(30, 24, (8.0, 16.0), crate::graphics::PictSource::new(None));
         g.window_open(1, gvm::glk::WinType::Graphics);
         g.window_open(2, gvm::glk::WinType::TextBuffer);
         g.window_layout(&[
@@ -2377,7 +2399,7 @@ mod tests {
 
     #[test]
     fn screen_model_emits_graphics_leaf() {
-        let mut g = AppGlk::with_graphics(80, 24, (1, 1), crate::graphics::PictSource::new(None));
+        let mut g = AppGlk::with_graphics(80, 24, (1.0, 1.0), crate::graphics::PictSource::new(None));
         g.window_open(1, gvm::glk::WinType::Graphics);
         g.window_layout(&[(1, gvm::glk::WinType::Graphics, gvm::glk::Rect { left: 0, top: 0, width: 10, height: 4 }, Some(true))]);
         g.window_tree(Some(leaf(1, WinType::Graphics, rect(0, 0, 10, 4))));
@@ -2402,7 +2424,7 @@ mod tests {
     #[test]
     fn screen_model_survives_zero_area_window() {
         use gvm::glk::{Rect, WinType};
-        let mut g = AppGlk::with_graphics(80, 24, (9, 19), crate::graphics::PictSource::new(None));
+        let mut g = AppGlk::with_graphics(80, 24, (9.0, 19.0), crate::graphics::PictSource::new(None));
         g.window_open(1, WinType::TextBuffer);
         g.window_open(2, WinType::TextGrid);
         g.window_open(4, WinType::Graphics);
@@ -2558,12 +2580,12 @@ mod tests {
         // A resnum backed by a real, decodable Pict in the Blorb must report
         // true on both the buffer-window and graphics-window draw paths.
         let blorb = crate::graphics::test_blorb_with_pict(1, &png_bytes());
-        let mut glk = AppGlk::with_graphics(80, 24, (1, 1), crate::graphics::PictSource::new(Some(blorb)));
+        let mut glk = AppGlk::with_graphics(80, 24, (1.0, 1.0), crate::graphics::PictSource::new(Some(blorb)));
         glk.window_open(1, WinType::TextBuffer);
         assert!(glk.graphics_draw_image(1, /*resnum*/ 1, /*imagealign*/ 1, 0, None, 0), "buffer window, resolvable image");
 
         let blorb2 = crate::graphics::test_blorb_with_pict(1, &png_bytes());
-        let mut glk2 = AppGlk::with_graphics(80, 24, (1, 1), crate::graphics::PictSource::new(Some(blorb2)));
+        let mut glk2 = AppGlk::with_graphics(80, 24, (1.0, 1.0), crate::graphics::PictSource::new(Some(blorb2)));
         glk2.window_open(5, WinType::Graphics);
         assert!(glk2.graphics_draw_image(5, /*resnum*/ 1, 10, 10, None, 0), "graphics window, resolvable image");
     }
@@ -2578,7 +2600,7 @@ mod tests {
     #[test]
     fn image_draw_to_buffer_window_carries_its_link() {
         let blorb = crate::graphics::test_blorb_with_pict(1, &png_bytes());
-        let mut glk = AppGlk::with_graphics(80, 24, (1, 1), crate::graphics::PictSource::new(Some(blorb)));
+        let mut glk = AppGlk::with_graphics(80, 24, (1.0, 1.0), crate::graphics::PictSource::new(Some(blorb)));
         glk.window_open(1, WinType::TextBuffer);
         assert!(
             glk.graphics_draw_image(1, /*resnum*/ 1, /*imagealign*/ 1, 0, None, /*link*/ 77),
@@ -2598,7 +2620,7 @@ mod tests {
     #[test]
     fn image_draw_to_buffer_window_carries_its_resource_number() {
         let blorb = crate::graphics::test_blorb_with_pict(5, &png_bytes());
-        let mut glk = AppGlk::with_graphics(80, 24, (1, 1), crate::graphics::PictSource::new(Some(blorb)));
+        let mut glk = AppGlk::with_graphics(80, 24, (1.0, 1.0), crate::graphics::PictSource::new(Some(blorb)));
         glk.window_open(1, WinType::TextBuffer);
         assert!(glk.graphics_draw_image(1, /*resnum*/ 5, /*imagealign*/ 1, 0, None, 0));
         let log = &glk.buffers.get(&1).unwrap().log;

@@ -71,7 +71,7 @@ fn boot(path: &Path) -> GlulxSession {
         true,
         false,
         false,
-        CELL_PX,
+        (CELL_PX.0 as f64, CELL_PX.1 as f64),
         Some(blorb),
         &[],
         theme_pairs_for(path),

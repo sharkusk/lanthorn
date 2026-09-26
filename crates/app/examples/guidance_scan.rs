@@ -309,7 +309,7 @@ fn boot(loaded: app::hints::LoadedStory) -> Option<Box<dyn Engine>> {
         }
         app::hints::LoadedStory::Glulx(b) => {
             let s =
-                app::glulx_session::GlulxSession::new(b, 80, 24, true, false, false, (1, 1), None, &[])
+                app::glulx_session::GlulxSession::new(b, 80, 24, true, false, false, (1.0, 1.0), None, &[])
                     .ok()?;
             Some(Box::new(s))
         }

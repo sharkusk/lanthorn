@@ -45,7 +45,7 @@ fn glulx_image(name: &str) -> Option<Vec<u8>> {
 
 fn boot(name: &str) -> Option<GlulxSession> {
     let image = glulx_image(name)?;
-    let mut s = GlulxSession::new(image, 80, 24, true, false, false, (1, 1), None, &[])
+    let mut s = GlulxSession::new(image, 80, 24, true, false, false, (1.0, 1.0), None, &[])
         .expect("GlulxSession::new");
     // Past any "press a key" splash to the first command prompt.
     for _ in 0..6 {
@@ -276,7 +276,7 @@ fn boot_like_the_app(name: &str) -> Option<GlulxSession> {
         true,
         true,
         false,
-        (8, 16),
+        (8.0, 16.0),
         None,
         &[],
         [[(None, None); 11]; 2],
