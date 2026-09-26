@@ -201,6 +201,52 @@ pub fn grid_content_x_span(upper: &GridWindow, colors: &ColorScheme, area: Rect)
     (area.x + x_off + left, uw_w.saturating_sub(border_cols))
 }
 
+/// The column [`draw_grid`] scrolls its viewport to, and the clip width it
+/// draws through: 1-based first visible grid column, and how many columns are
+/// visible.
+///
+/// A host that renders the grid window itself (own fonts/cells, driving the
+/// engine only for content — e.g. to reproduce lanthorn's horizontal
+/// auto-follow of an in-place form wider than its pane, such as Bureaucracy's
+/// licence form on a narrow terminal) needs the SAME answer `draw_grid` acts
+/// on, not a restatement of the arithmetic (SQ-0951's precedent for
+/// [`grid_content_x_span`], which this is a sibling of). `draw_grid` calls
+/// this too, for its own `col_offset`, so there is exactly one place the
+/// column-follow rule lives.
+///
+/// The clip width is [`grid_content_x_span`]'s own second return value — the
+/// pane-relative content width `draw_framed`'s inset reaches by a different
+/// route but always the same number, since both are `upper.cols` plus border
+/// columns, clamped to `area.width`.
+///
+/// Only the COLUMN offset is covered (SQ-1594's scope: the horizontal
+/// auto-follow of an in-place form). Row scrolling (`draw_grid`'s
+/// `row_offset`) is a separate, unrelated fact this function does not report.
+pub fn grid_viewport(
+    upper: &GridWindow,
+    colors: &ColorScheme,
+    area: Rect,
+    cursor: (u16, u16),
+    show_cursor: bool,
+) -> (u16, u16) {
+    let (_, width) = grid_content_x_span(upper, colors, area);
+    let ccol = cursor.1.saturating_sub(1); // 1-based -> 0-based
+    let col_offset = col_follow_offset(ccol, width, show_cursor);
+    (col_offset + 1, width)
+}
+
+/// The column-follow rule itself, shared by [`grid_viewport`] and `draw_grid`:
+/// scroll right so the cursor column is visible, but ONLY while the cursor is
+/// the player's (`show_cursor`) — see the comment on this same rule inside
+/// `draw_grid` for why (SQ-0679).
+fn col_follow_offset(ccol: u16, content_width: u16, show_cursor: bool) -> u16 {
+    if show_cursor && content_width > 0 && ccol >= content_width {
+        ccol.saturating_sub(content_width - 1)
+    } else {
+        0
+    }
+}
+
 // ── Core grid renderer ────────────────────────────────────────────────────────
 
 /// Draw the upper-window grid into `area`.
@@ -319,11 +365,12 @@ pub fn draw_grid(
     // the right. Following that parked cursor scrolled the room name off the
     // left edge and showed the score/moves fields floating alone. Nobody is
     // typing there; there is no caret to keep on screen.
-    let col_offset: u16 = if show_cursor && ccol >= content.width {
-        ccol.saturating_sub(content.width - 1)
-    } else {
-        0
-    };
+    //
+    // Shared with the public `grid_viewport` (SQ-1594) — one place this
+    // arithmetic lives, so a host reproducing this follow behaviour reads the
+    // same answer this draw acts on rather than a restatement of it.
+    let (first_visible_col, _) = grid_viewport(upper, colors, area, cursor, show_cursor);
+    let col_offset: u16 = first_visible_col - 1;
 
     // Fill content area with background style.
     for dy in 0..content.height {
@@ -1221,6 +1268,58 @@ mod tests {
             row(&buf).chars().last(),
             Some('#'),
             "with a live caret the viewport follows it to the grid's last column"
+        );
+    }
+
+    /// SQ-1594: `grid_viewport` is the public door to the SAME column-follow
+    /// rule `draw_grid` acts on — a host drawing the grid window itself (its
+    /// own fonts/cells) reaches for this to reproduce the horizontal
+    /// auto-follow of an in-place form wider than its pane (e.g. Bureaucracy's
+    /// licence form on a narrow terminal).
+    #[test]
+    fn grid_viewport_matches_draw_grid_column_follow() {
+        let mut upper = GridWindow::default();
+        upper.resize(1, 20);
+        for (i, ch) in "ROOM NAME".chars().enumerate() {
+            upper.put(1, i as u16 + 1, ch, 0);
+        }
+        upper.put(1, 20, '#', 0); // far right — where a live caret would sit
+
+        let mut colors = make_colors();
+        colors.virtual_window_border = BorderStyle::None;
+        colors.upper_window_border_sides = crate::render::paneframe::PaneSides::all(BorderStyle::None);
+
+        let area = Rect::new(0, 0, 10, 2);
+        let cursor = (1, 20);
+
+        // Not the player's cursor (parked, e.g. a status bar): left-aligned,
+        // unscrolled — the SQ-0679 behaviour, restated as the public answer.
+        let (first_col, width) = grid_viewport(&upper, &colors, area, cursor, false);
+        assert_eq!(first_col, 1, "a parked cursor must not scroll the viewport off column 1");
+        assert_eq!(width, 10, "clip width matches the pane's content width");
+
+        // The player's own cursor, far right of a pane narrower than the grid:
+        // the viewport follows it, and the cursor's column falls inside
+        // [first_visible_col, first_visible_col + width).
+        let (first_col, width) = grid_viewport(&upper, &colors, area, cursor, true);
+        let ccol_1based = cursor.1; // already 1-based
+        assert!(
+            ccol_1based >= first_col && ccol_1based < first_col + width,
+            "cursor column {ccol_1based} must fall within the reported viewport [{first_col}, {})",
+            first_col + width
+        );
+
+        // Cross-check against an actual `draw_grid` render at the same area/cursor:
+        // the glyph `draw_grid` places at column (cursor - first_visible_col) of
+        // the buffer must be the grid's own cursor-column glyph ('#') — i.e. the
+        // two must agree on where the viewport starts.
+        let mut buf = Buffer::empty(area);
+        draw_grid(&upper, 1, cursor, true, &colors, area, &mut buf, true, &mut Vec::new());
+        let screen_dx = ccol_1based - first_col; // 0-based offset into content
+        assert_eq!(
+            buf.cell((screen_dx, 0)).unwrap().symbol(),
+            "#",
+            "grid_viewport's first_visible_col must be the same one draw_grid actually scrolled to"
         );
     }
 
