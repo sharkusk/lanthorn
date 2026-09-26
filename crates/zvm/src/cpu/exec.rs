@@ -692,6 +692,28 @@ pub struct Machine {
     /// header simply still holding what we wrote (re-assert ours). Not part of
     /// saved state: a restore re-derives it from the selection.
     transcript_bit_seen: bool,
+    /// Sticky per-turn flag: the GAME's own `loadb`/`loadw` (opcodes 0x10/0x0F)
+    /// read header byte `$21` (screen width, ZMSD §11.1, v4+) since the host
+    /// last drained it (SQ-1604).
+    ///
+    /// Scoped to exactly those two opcodes, not [`crate::memory::Memory`]'s
+    /// `read_byte`/`read_word` generally — those are called constantly for the
+    /// interpreter's OWN bookkeeping (header pokes, dictionary lookups, opcode
+    /// fetches), so hooking them there would both cost a check on every memory
+    /// access and misattribute the interpreter's own reads to "the game read
+    /// it". `loadb`/`loadw` are the game's explicit memory-read opcodes, which
+    /// is what "the game reads `$21`" has to mean.
+    ///
+    /// The host uses this to tell a story that only ever reads `$21` once, at
+    /// boot, and bakes its status-line field columns into fixed positions
+    /// forever after (Zork 1 r52) from one that recomputes its layout from the
+    /// header every turn (Lost Pig) — the SQ-0681 restore-width floor on
+    /// `boot_screen_cols` protects the former permanently and the latter only
+    /// until its next repaint, and this flag is how the host tells which one
+    /// it is running. Mirrors [`crate::screen::ScreenState::erase_lower_requested`]'s
+    /// shape: set inside opcode execution, drained once per turn by the host
+    /// via [`Self::take_header_width_read`].
+    header_width_read: bool,
     /// v5/v6 mouse state (ZMSD §15/§8). Set by [`set_mouse`](Machine::set_mouse)
     /// when the host reports a click; `read_mouse` (EXT:0x16) reports these back.
     /// Coordinates are game pixels, 1-based (ZMSD §8.8.1 coordinate convention).
@@ -888,6 +910,7 @@ impl Machine {
             ever_exec_pcs: std::collections::HashSet::new(),
             buffer_screen_mode: 0,
             transcript_bit_seen: false,
+            header_width_read: false,
             mouse_x: 0,
             mouse_y: 0,
             mouse_buttons: 0,
@@ -2137,6 +2160,13 @@ impl Machine {
         std::mem::take(&mut self.diagnostics)
     }
 
+    /// Take and clear [`Machine::header_width_read`] — whether the game's own
+    /// `loadb`/`loadw` read header byte `$21` (screen width) since the host
+    /// last drained it (SQ-1604).
+    pub fn take_header_width_read(&mut self) -> bool {
+        std::mem::take(&mut self.header_width_read)
+    }
+
     /// Latch a fault for an opcode number this Z-machine version does not
     /// define, and continue — [`Machine::step`] drains `state.fault` into
     /// [`StepResult::Fault`] right after this returns (the same latch
@@ -2395,6 +2425,12 @@ impl Machine {
             // group (crates/zvm/tests/regression.rs).
             0x0F => {
                 let addr = a.wrapping_add(2u16.wrapping_mul(b)) as u32;
+                // SQ-1604: a word read at $20 (or, misaligned, at $21 itself)
+                // covers header byte $21 (screen width, v4+) — the game asking
+                // for its own screen height/width together, in one load.
+                if addr == 0x20 || addr == 0x21 {
+                    self.header_width_read = true;
+                }
                 let result = self.mem.read_word(addr);
                 self.do_store(store, result);
                 StepResult::Continue
@@ -2402,6 +2438,11 @@ impl Machine {
             // 0x10 loadb — load byte from array: result = mem[a + b] (16-bit wrap).
             0x10 => {
                 let addr = a.wrapping_add(b) as u32;
+                // SQ-1604: the game's own explicit read of header byte $21
+                // (screen width, v4+) — see `Machine::header_width_read`.
+                if addr == 0x21 {
+                    self.header_width_read = true;
+                }
                 let result = self.mem.read_byte(addr) as u16;
                 self.do_store(store, result);
                 StepResult::Continue
@@ -15286,5 +15327,53 @@ pub(crate) mod tests {
             "frame count must never exceed the cap, got {}",
             m.state.frames.len(),
         );
+    }
+
+    // ── SQ-1604: the game's own loadb/loadw reading header byte $21 ────────
+
+    #[test]
+    fn loadb_of_header_width_byte_sets_the_sticky_flag() {
+        let mut m = build_test_machine(&[]);
+        assert!(!m.take_header_width_read(), "nothing read yet");
+        // loadb(a=0, b=0x21) → mem[0x21], the game's own explicit array read
+        // of the screen-width byte (ZMSD §11.1, v4+).
+        m.exec_2op(0x10, &[0, 0x21], Some(0), None);
+        assert!(m.take_header_width_read(), "loadb of $21 must set the flag");
+        assert!(!m.take_header_width_read(), "draining clears it (one-shot)");
+    }
+
+    #[test]
+    fn loadb_of_an_unrelated_byte_never_sets_the_flag() {
+        let mut m = build_test_machine(&[]);
+        // loadb(a=0, b=0x20) reads the screen-HEIGHT byte, not $21, and a
+        // handful of other array reads elsewhere in low memory: none of them
+        // are the game asking for its own screen width.
+        m.exec_2op(0x10, &[0, 0x20], Some(0), None);
+        m.exec_2op(0x10, &[0, 0x00], Some(0), None);
+        m.exec_2op(0x10, &[0, 0x22], Some(0), None);
+        assert!(!m.take_header_width_read(), "no read of $21 occurred");
+    }
+
+    #[test]
+    fn loadw_covering_the_header_width_byte_sets_the_flag() {
+        // loadw(a=0, b=0x10) → mem[0 + 2*0x10] = mem[0x20], a word read that
+        // covers both $20 (screen height) and $21 (screen width) in one load —
+        // exactly the shape a game reading both header facts together takes.
+        let mut m = build_test_machine(&[]);
+        m.exec_2op(0x0F, &[0, 0x10], Some(0), None);
+        assert!(m.take_header_width_read(), "a word read spanning $20/$21 must set the flag");
+
+        // Misaligned: b chosen so a + 2*b = 0x21 lands the word ON $21 itself.
+        let mut m2 = build_test_machine(&[]);
+        m2.exec_2op(0x0F, &[1, 0x10], Some(0), None); // 1 + 2*0x10 = 0x21
+        assert!(m2.take_header_width_read(), "a misaligned word read starting at $21 must set the flag too");
+    }
+
+    #[test]
+    fn loadw_away_from_the_header_never_sets_the_flag() {
+        let mut m = build_test_machine(&[]);
+        // mem[0 + 2*0x08] = mem[0x10] — nowhere near $20/$21.
+        m.exec_2op(0x0F, &[0, 0x08], Some(0), None);
+        assert!(!m.take_header_width_read(), "a word read elsewhere must not set the flag");
     }
 }

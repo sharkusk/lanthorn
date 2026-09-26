@@ -42,6 +42,8 @@ mod maze_layer_commands;
 mod maze_layer_frozen;
 #[path = "suites/lostpig_room_and_inventory.rs"]
 mod lostpig_room_and_inventory;
+#[path = "suites/lostpig_restore_status_width.rs"]
+mod lostpig_restore_status_width;
 #[path = "suites/mysterious_room_detection.rs"]
 mod mysterious_room_detection;
 #[path = "suites/nameonly_room_corroboration.rs"]

@@ -1001,6 +1001,24 @@ pub struct GameSession {
     ///
     /// [`declared_story_screen_dims`]: crate::render::screen::declared_story_screen_dims
     pub boot_screen_cols: u16,
+    /// What [`boot_screen_cols`](Self::boot_screen_cols) was immediately BEFORE
+    /// the most recent [`note_restored_screen_cols`](Self::note_restored_screen_cols)
+    /// raised it, so the raise can be given back once it is safe to (SQ-1604).
+    ///
+    /// The SQ-0681 floor is a blunt protection: it holds the restored save's
+    /// width for the rest of the session even for a story that recomputes its
+    /// status-line layout from header byte $21 every turn, for which the floor
+    /// protects nothing after the first repaint. Set only when a restore is
+    /// about to WIDEN the floor (`cols > boot_screen_cols`, so a restore into a
+    /// narrower save that never raises anything leaves this `None` and never
+    /// reverts a floor the story's own boot established). `drain_turn` clears it
+    /// back to `None` the first time [`GameSession::take_header_width_read`]
+    /// reports the game itself read `$21` — proof the running story does not
+    /// need the floor's protection any more, because it lays its own fields out
+    /// fresh every turn rather than baking them in once at boot the way Zork 1
+    /// r52 does (SQ-0681's specimen, which never reads `$21` again and must keep
+    /// this pin forever).
+    pre_restore_screen_cols: Option<u16>,
     /// The pre-loaded text (ZMSD §15 `read`, v5+ — TerpEtude option 12,
     /// Beyond Zork's "AGAIN") `zvm` reported for the CURRENTLY pending line
     /// read, empty when nothing is pre-loaded (the overwhelmingly common
@@ -1232,6 +1250,7 @@ impl GameSession {
             v6_win0_chars_seen: 0,
             unreplayable: std::collections::HashSet::new(),
             boot_screen_cols,
+            pre_restore_screen_cols: None,
             line_preload,
             line_preload_seeded: false,
         })
@@ -1837,7 +1856,23 @@ impl GameSession {
         if version < 4 || version == 6 {
             return;
         }
+        // Remember what the floor was about to give up, but only when this
+        // restore actually raises it — a restore into a narrower save is a
+        // no-op `max` with nothing to revert (SQ-1604).
+        if cols > self.boot_screen_cols {
+            self.pre_restore_screen_cols = Some(self.boot_screen_cols);
+        }
         self.boot_screen_cols = self.boot_screen_cols.max(cols);
+    }
+
+    /// Drain whether the game's own `loadb`/`loadw` read header byte `$21`
+    /// (screen width) since the last drain (SQ-1604) — `zvm`'s own
+    /// [`zvm::cpu::exec::Machine::take_header_width_read`], set inside those
+    /// two opcode arms alone (never the interpreter's own internal reads),
+    /// forwarded from here so `drain_turn` reads it the same way it reads
+    /// every other per-turn VM signal.
+    pub fn take_header_width_read(&mut self) -> bool {
+        self.machine.take_header_width_read()
     }
 
     /// Build the `TurnResult` from a `RunStop` and drain the VM's per-turn
@@ -1956,6 +1991,21 @@ impl GameSession {
                 .and_then(|v6| v6.windows.get(idx))
                 .is_some_and(|w| w.stream_origin == Some(pen))
         });
+        // SQ-1604: a real turn just ran, so this is the earliest safe point to
+        // ask whether the story read header byte $21 itself — restoring never
+        // executes Z-code, so `take_header_width_read` cannot fire from the
+        // restore that raised `pre_restore_screen_cols` in the first place,
+        // only from a turn processed after it. Once it fires, give the
+        // SQ-0681 floor back what a restore borrowed from it: a story that
+        // reads $21 every turn (Lost Pig) lays its fields out fresh from
+        // whatever's declared next turn, so the wide pin has nothing left to
+        // protect; one that never reads it again (Zork 1 r52) never satisfies
+        // this and keeps the pin forever, exactly as SQ-0681 intended.
+        if self.take_header_width_read() {
+            if let Some(cols) = self.pre_restore_screen_cols.take() {
+                self.boot_screen_cols = cols;
+            }
+        }
         let win0_base = self.v6_win0_chars_seen;
         let (erase_lower, cleared_at) = self.take_screen_clear();
         let (raw, raw_runs) = sink_mut(&mut self.machine).take_styled();
@@ -8493,6 +8543,7 @@ mod tests {
             v6_win0_chars_seen: 0,
             unreplayable: std::collections::HashSet::new(),
             boot_screen_cols: zvm::screen::DEFAULT_SCREEN_COLS as u16,
+            pre_restore_screen_cols: None,
             line_preload: String::new(),
             line_preload_seeded: false,
         };
@@ -8568,6 +8619,7 @@ mod tests {
             v6_win0_chars_seen: 0,
             unreplayable: std::collections::HashSet::new(),
             boot_screen_cols: zvm::screen::DEFAULT_SCREEN_COLS as u16,
+            pre_restore_screen_cols: None,
             line_preload: String::new(),
             line_preload_seeded: false,
         };
@@ -8638,6 +8690,7 @@ mod tests {
             v6_win0_chars_seen: 0,
             unreplayable: std::collections::HashSet::new(),
             boot_screen_cols: zvm::screen::DEFAULT_SCREEN_COLS as u16,
+            pre_restore_screen_cols: None,
             line_preload: String::new(),
             line_preload_seeded: false,
         };
@@ -8697,6 +8750,7 @@ mod tests {
             v6_win0_chars_seen: 0,
             unreplayable: std::collections::HashSet::new(),
             boot_screen_cols: zvm::screen::DEFAULT_SCREEN_COLS as u16,
+            pre_restore_screen_cols: None,
             line_preload: String::new(),
             line_preload_seeded: false,
         };
@@ -8799,6 +8853,7 @@ mod tests {
             v6_win0_chars_seen: 0,
             unreplayable: std::collections::HashSet::new(),
             boot_screen_cols: zvm::screen::DEFAULT_SCREEN_COLS as u16,
+            pre_restore_screen_cols: None,
             line_preload: String::new(),
             line_preload_seeded: false,
         };
@@ -8860,6 +8915,7 @@ mod tests {
             v6_win0_chars_seen: 0,
             unreplayable: std::collections::HashSet::new(),
             boot_screen_cols: zvm::screen::DEFAULT_SCREEN_COLS as u16,
+            pre_restore_screen_cols: None,
             line_preload: String::new(),
             line_preload_seeded: false,
         };
@@ -8905,6 +8961,7 @@ mod tests {
             v6_win0_chars_seen: 0,
             unreplayable: std::collections::HashSet::new(),
             boot_screen_cols: zvm::screen::DEFAULT_SCREEN_COLS as u16,
+            pre_restore_screen_cols: None,
             line_preload: String::new(),
             line_preload_seeded: false,
         };
@@ -8964,6 +9021,7 @@ mod tests {
             v6_win0_chars_seen: 0,
             unreplayable: std::collections::HashSet::new(),
             boot_screen_cols: zvm::screen::DEFAULT_SCREEN_COLS as u16,
+            pre_restore_screen_cols: None,
             line_preload: String::new(),
             line_preload_seeded: false,
         };
@@ -9061,6 +9119,7 @@ mod tests {
             v6_win0_chars_seen: 0,
             unreplayable: std::collections::HashSet::new(),
             boot_screen_cols: zvm::screen::DEFAULT_SCREEN_COLS as u16,
+            pre_restore_screen_cols: None,
             line_preload: String::new(),
             line_preload_seeded: false,
         };
@@ -9116,6 +9175,7 @@ mod tests {
             v6_win0_chars_seen: 0,
             unreplayable: std::collections::HashSet::new(),
             boot_screen_cols: zvm::screen::DEFAULT_SCREEN_COLS as u16,
+            pre_restore_screen_cols: None,
             line_preload: String::new(),
             line_preload_seeded: false,
         };
@@ -9709,6 +9769,7 @@ mod tests {
             v6_win0_chars_seen: 0,
             unreplayable: std::collections::HashSet::new(),
             boot_screen_cols: zvm::screen::DEFAULT_SCREEN_COLS as u16,
+            pre_restore_screen_cols: None,
             line_preload: String::new(),
             line_preload_seeded: false,
         }
