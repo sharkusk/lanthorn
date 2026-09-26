@@ -3637,6 +3637,14 @@ pub struct AppState {
     /// the same nothing. Set once at launch (`startup.rs`) and never revised
     /// afterward — see `loop_tick::poll_picker_requery`, the only reader.
     pub game_picker_query_answered: bool,
+    /// The host's own stated Glk cell pixel size, carried from
+    /// `TerminalFacts::glk_cell_px` (SQ-1598) — `None` when the host left the
+    /// `game_picker`/8×16 cascade to decide. Not itself read for anything past
+    /// boot; kept so an `@restart` (`host::reset`) re-derives the SAME Glulx
+    /// `char_px` the launch used rather than silently reverting to the
+    /// picker/8×16 fallback, mirroring why `game_picker` above is carried the
+    /// same way.
+    pub glk_cell_px: Option<(u32, u32)>,
     /// Bytes and frame flushes the ratatui backend has written to the terminal,
     /// for `/dump-terminal` (SQ-0994). `None` in every headless harness, which
     /// builds no terminal at all — and the report says "unavailable" rather than
@@ -3925,6 +3933,7 @@ impl Default for AppState {
             picture_pace_next: None,
             game_picker: None,
             game_picker_query_answered: false,
+            glk_cell_px: None,
             term_traffic: None,
             term_default_colors: crate::term_colors::TermDefaultColors::default(),
             query_sweep: crate::query_sweep::QuerySweep::default(),

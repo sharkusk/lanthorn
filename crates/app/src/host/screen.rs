@@ -82,6 +82,24 @@ pub fn resize_glulx(session: &mut dyn Engine, (cols, rows): (u16, u16)) -> bool 
     }
 }
 
+/// Set a Glulx story's Glk cell pixel size, `(width, height)`, and deliver the
+/// Glk Arrange its graphics windows repaint on (SQ-1598) — the resize-time
+/// sibling of `TerminalFacts::glk_cell_px`, for a host whose text cells are
+/// not 8×16 changing size live (a proportional-font frontend re-measuring its
+/// own font, or a window moved to a different display). Resizes every open
+/// graphics canvas to `(window cells) × char_px` and drives the game's own
+/// redraw the same way [`resize_glulx`] does for a terminal-size change —
+/// there is no separate mechanism. `false` for any other engine.
+pub fn set_glk_cell_px(session: &mut dyn Engine, char_px: (u32, u32)) -> bool {
+    match session.as_any_mut().downcast_mut::<GlulxSession>() {
+        Some(gs) => {
+            gs.set_char_px(char_px);
+            true
+        }
+        None => false,
+    }
+}
+
 /// Tell the story its pane is `(cols, rows)` cells, whatever the engine: the
 /// Z-machine header (when it changed) or a Glulx resize. Returns `true` when the
 /// story was told something new. A zero-area pane is ignored.

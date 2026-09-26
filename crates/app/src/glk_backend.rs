@@ -472,6 +472,15 @@ impl AppGlk {
         self.borderless
     }
 
+    /// Set the `(width, height)` in pixels of one text-grid cell, used to size
+    /// every graphics window's canvas (`canvas_size`) — SQ-1598. Takes effect
+    /// at the next relayout — the caller re-lays the tree out (e.g.
+    /// `Machine::rearrange`) for it to show immediately, exactly as
+    /// `set_borderless` above does for its own field.
+    pub fn set_char_px(&mut self, char_px: (u32, u32)) {
+        self.char_px = char_px;
+    }
+
     /// Update the theme's rendered default colours reported through
     /// `glk_style_measure` (SQ-0315/SQ-0803): one `(fg, bg)` pair per Glk style
     /// class for text-buffer windows (row 0) and text-grid windows (row 1), as

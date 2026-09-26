@@ -860,6 +860,30 @@ impl GlulxSession {
         self.appglk().borderless()
     }
 
+    /// Set the `(width, height)` in pixels of one Glk text-grid cell and
+    /// relayout so every open graphics window's canvas is resized to match —
+    /// SQ-1598, for a host whose own cells are not the constructor's 8×16
+    /// fallback (a proportional-font frontend, or any host stating its own
+    /// pixel size directly rather than through the in-game image `Picker`).
+    /// Same shape as [`Self::set_borderless`]: the game hears about it (and
+    /// redraws whatever it painted at the old canvas size) at its next select,
+    /// via the same Glk Arrange event a terminal resize already delivers
+    /// ([`Self::resize`]) — there is no separate redraw mechanism to invoke.
+    /// A no-op once the game has quit.
+    pub fn set_char_px(&mut self, char_px: (u32, u32)) {
+        if self.quit {
+            return;
+        }
+        self.appglk().set_char_px(char_px);
+        self.machine.rearrange();
+        // Same rule as `resize`/`set_borderless`: no non-interactive drive
+        // while a dialog holds a suspended `@save`/`@restore` (SQ-0656). The
+        // size is already set on the backend and the tree relaid out; the
+        // game hears about it at its next select. Nothing to queue.
+        self.settle_after_event();
+        self.refresh_screen();
+    }
+
     /// Drive one turn's worth of execution, updating `pending`/`quit`/`pending_io`.
     /// On an in-game `@save`/`@restore` the drive stops with `pending_io` set (and
     /// `pending`/`quit` left unchanged, since the game is mid-turn); the run loop

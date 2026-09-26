@@ -906,6 +906,12 @@ pub(crate) fn boot_story(
         // no smaller cell to subdivide into, so it applies no floor and a
         // story below its own minimum reads exactly as it always has.
         min_story_screen: None,
+        // SQ-1598: the TUI's own Glk cells ARE its terminal's, already carried
+        // in through `game_picker`'s font-size probe above — it has no
+        // separate cell size of its own to state, so this stays the honest
+        // `None` and the existing picker/8×16 cascade decides exactly as
+        // before.
+        glk_cell_px: None,
     };
     let req = app::host::BootRequest {
         story_path,

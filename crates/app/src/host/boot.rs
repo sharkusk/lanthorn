@@ -141,6 +141,28 @@ pub struct TerminalFacts {
     /// [`crate::render::screen::declared_story_screen_dims`] — explicit intent
     /// outranks a floor lanthorn computed on the host's behalf.
     pub min_story_screen: Option<(u16, u16)>,
+    /// The `(width, height)` in device pixels of ONE of the host's own text
+    /// cells, for sizing a Glulx story's Glk graphics-window canvases —
+    /// SQ-1598. A graphics canvas is measured as `(window cells) × (this
+    /// size)`, so a host whose cells are not the constructor's 8×16 fallback
+    /// (a proportional-font frontend, or any terminal at a font the in-game
+    /// image `Picker` cannot see — Glk graphics run independently of the
+    /// cover-art picker's own font probe) gets a canvas matching its actual
+    /// windows 1:1 instead of one it has to stretch unevenly to compensate
+    /// for. `None` (the default) leaves the existing cascade: the `game_picker`
+    /// probe's own font size, falling back to 8×16 when there is no picker
+    /// either — and, on that fallback-free path only, `Config::glk_pixel_scale`
+    /// still divides out the terminal's DPI scale (see `boot_story`). A value
+    /// given here is taken as the host's own stated physical cell size and is
+    /// used exactly as given, with no further scaling applied — the host is in
+    /// the best position to know what its own pixels already account for. Read
+    /// once at boot; change it on an already-booted session with
+    /// [`crate::host::screen::set_glk_cell_px`], which resizes any open
+    /// graphics canvases and delivers the game's own Arrange event, the same
+    /// as a terminal resize already does. Carried onto [`AppState::glk_cell_px`]
+    /// so an `@restart` (`crate::host::reset`) agrees with the boot that
+    /// preceded it rather than reverting to the picker/8×16 fallback.
+    pub glk_cell_px: Option<(u32, u32)>,
 }
 
 /// The per-story result of [`boot_story`]: the running engine, its map, the
@@ -403,6 +425,7 @@ pub fn boot_story(req: BootRequest<'_>, hooks: &mut dyn BootHooks) -> Result<Boo
         query_sweep,
         size: terminal_size,
         min_story_screen,
+        glk_cell_px,
     } = terminal;
 
     // `disk_entry` is which story on the image the browser row stood for
@@ -601,20 +624,31 @@ pub fn boot_story(req: BootRequest<'_>, hooks: &mut dyn BootHooks) -> Result<Boo
     // them at their defaults. The picker is reused both for the Glulx session's
     // char-cell pixel size and, below, `AppState.game_picker` (the render side
     // already tolerates None).
-    let char_px = game_picker
-        .as_ref()
-        .map(|p| {
-            let f = p.font_size();
-            (f.width as u32, f.height as u32)
-        })
-        .unwrap_or((8, 16));
-    // SQ-0593: divide out the terminal's scale before the game sees it. A Glk game's
-    // graphics-window sizes are pixel constants its author picked against a
-    // conventional screen; a cell twice the reference height turns the same request
-    // into half the rows, shrinking the game's artwork against unchanged text. See
-    // `GlkPixelScale::resolve` for why this keys off the cell size rather than the
-    // display's DPI. No-op at `auto` on an unscaled display with a normal font.
-    let char_px = cfg.glk_pixel_scale.apply(char_px);
+    // SQ-1598: a host that states its own Glk cell size outright — a
+    // proportional-font frontend, or any host whose cells the cover-art
+    // `Picker` above cannot see — wins over the picker/8×16 cascade entirely,
+    // taken exactly as given (see `TerminalFacts::glk_cell_px`'s doc for why
+    // `glk_pixel_scale` is not applied to it too).
+    let char_px = match glk_cell_px {
+        Some(px) => px,
+        None => {
+            let char_px = game_picker
+                .as_ref()
+                .map(|p| {
+                    let f = p.font_size();
+                    (f.width as u32, f.height as u32)
+                })
+                .unwrap_or((8, 16));
+            // SQ-0593: divide out the terminal's scale before the game sees it. A
+            // Glk game's graphics-window sizes are pixel constants its author
+            // picked against a conventional screen; a cell twice the reference
+            // height turns the same request into half the rows, shrinking the
+            // game's artwork against unchanged text. See `GlkPixelScale::resolve`
+            // for why this keys off the cell size rather than the display's DPI.
+            // No-op at `auto` on an unscaled display with a normal font.
+            cfg.glk_pixel_scale.apply(char_px)
+        }
+    };
     // Pixel-precise mouse reporting (SQ-0563) is NOT switched on here. The probe
     // works — terminals answer "set" — but the cell size to divide the reported
     // pixels by does not: the Picker's `font_size` above is in logical points,
@@ -1359,6 +1393,7 @@ pub fn boot_story(req: BootRequest<'_>, hooks: &mut dyn BootHooks) -> Result<Boo
     state.show_status_bar = cfg.show_status_bar;
     state.game_picker = game_picker;
     state.game_picker_query_answered = game_picker_query_answered;
+    state.glk_cell_px = glk_cell_px;
     state.term_default_colors = term_default_colors;
     state.query_sweep = query_sweep;
     state.pane_sizes = crate::state::PaneSizes {

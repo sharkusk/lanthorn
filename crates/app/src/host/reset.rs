@@ -257,14 +257,21 @@ pub fn reset_game(
             // the stored game Picker for char-cell size, so graphics come back
             // enabled per config.images — matching the initial launch even for a
             // bare .ulx with a sidecar .blorb.
-            let char_px = state
-                .game_picker
-                .as_ref()
-                .map(|p| {
-                    let f = p.font_size();
-                    (f.width as u32, f.height as u32)
-                })
-                .unwrap_or((8, 16));
+            // SQ-1598: the host's own stated Glk cell size, carried from the
+            // launch's `TerminalFacts::glk_cell_px` onto `state.glk_cell_px`,
+            // wins over the picker/8×16 cascade here exactly as it did at boot
+            // (`host::boot::boot_story`) — so a restart agrees with the launch
+            // that preceded it rather than reverting to the fallback.
+            let char_px = state.glk_cell_px.unwrap_or_else(|| {
+                state
+                    .game_picker
+                    .as_ref()
+                    .map(|p| {
+                        let f = p.font_size();
+                        (f.width as u32, f.height as u32)
+                    })
+                    .unwrap_or((8, 16))
+            });
             let pict_blorb = resolve_pict_blorb(story_path, state.config.images);
             // Carry the current in-memory Glk file VFS (e.g. CM's boot cache,
             // kept in sync with the sidecar) into the restarted session so the

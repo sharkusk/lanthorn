@@ -192,4 +192,6 @@ mod sq1515_kerkerkruip_restore_arrange;
 mod sq1529_kerkerkruip_grid_fg_ground;
 #[path = "suites/sq1565_kerkerkruip_title_rule_pixel_height.rs"]
 mod sq1565_kerkerkruip_title_rule_pixel_height;
+#[path = "suites/sq1598_glk_cell_px.rs"]
+mod sq1598_glk_cell_px;
 
