@@ -91,6 +91,7 @@ Every setting `~/.lanthorn/config.toml` accepts, grouped the way the seeded temp
 | `animation.enabled` | `true` |  | Master switch. False makes every animation instant. |
 | `animation.easing` | `"ease-out"` |  | Easing curve: "linear", "ease-in", "ease-out", "ease-in-out". |
 | `animation.scroll_ms` | `120` |  | Smooth-scroll duration in milliseconds. 0 is instant. |
+| `animation.follow_ms` | `200` |  | How long the story pane eases toward new output arriving at the bottom, in milliseconds. 0 is instant. Only applies while you were already following the bottom - scrolled into history, nothing drags your view back. Any keypress or mouse action ends an in-flight ease at once, same as it does for paced pictures. |
 | `animation.scrollbar_hide_ms` | `1500` |  | How long the STORY PANE's scrollbar stays up after you scroll it, in milliseconds. 0 keeps it up permanently. Only the story pane auto-hides - a modal's bar is reserved out of its content width, so hiding it there would reflow the list. |
 | `animation.scrollbar_fade_ms` | `300` |  | Fade-out time for that bar once the delay expires. 0 pops it. |
 
