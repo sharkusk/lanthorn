@@ -103,6 +103,18 @@ impl Tween {
     pub fn done(&self) -> bool {
         self.started.elapsed() >= self.duration
     }
+
+    /// The tween's total duration, as given to [`Self::new`] (SQ-1597) — so a
+    /// host driving its own copy of the ease can read back which timing key
+    /// (`scroll_ms` vs. `follow_ms`) produced it, without re-deriving it.
+    pub fn duration(&self) -> Duration {
+        self.duration
+    }
+
+    /// The tween's easing curve, as given to [`Self::new`] (SQ-1597).
+    pub fn easing(&self) -> Easing {
+        self.easing
+    }
 }
 
 /// Session-only slide state for a slide-in panel/dock. Holds a target fraction

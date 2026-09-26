@@ -1672,6 +1672,22 @@ pub struct SoundPulse {
 /// `to` over the tween. Driven by the run loop, which snaps to `to` and clears
 /// this once the tween is `done()`. The single animated-offset type, reused by
 /// the transcript and by `ListScroll`.
+/// Which rule armed a [`ScrollAnim`] (SQ-1597) — so a host driving its own copy
+/// of the ease (e.g. a raster host that draws the story pane itself) can run
+/// the SAME ease the library decided on, instead of re-deriving SQ-1595's own
+/// "when does a follow apply" rule (at bottom, clamped to `[more]`, cancelled
+/// by input).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ScrollAnimKind {
+    /// An ordinary, reader-driven scroll — wheel, page/half-page keys, the
+    /// `[more]` pager's own advance/dismiss, selection-drag autoscroll, or a
+    /// `HintSession` scroll — timed off `config.animation.scroll_ms`.
+    Scroll,
+    /// New output arriving while the reader was already at the bottom
+    /// (SQ-1595) — timed off `config.animation.follow_ms` instead.
+    Follow,
+}
+
 #[derive(Debug, Clone)]
 pub struct ScrollAnim {
     /// Displayed offset (rows) when the animation was armed.
@@ -1680,26 +1696,38 @@ pub struct ScrollAnim {
     pub to: usize,
     /// The timing curve.
     pub tween: crate::anim::Tween,
+    /// Which rule armed this animation (SQ-1597).
+    pub kind: ScrollAnimKind,
 }
 
 impl ScrollAnim {
     /// Arm an animation easing the displayed offset from `from` to `to` per the
     /// `[animation]` config. Returns `None` when animation is disabled or
     /// `scroll_ms == 0` (the caller should jump instantly and clear any anim) —
-    /// the byte-for-byte instant path.
+    /// the byte-for-byte instant path. Always tags [`ScrollAnimKind::Scroll`] —
+    /// every caller of `to` (the transcript's reader-driven scroll, `ListScroll`,
+    /// the hint panel) is an ordinary scroll, never a follow.
     pub fn to(from: usize, to: usize, cfg: &crate::config::AnimationConfig) -> Option<Self> {
-        Self::over(from, to, cfg.enabled, cfg.scroll_ms, cfg.easing)
+        Self::over(from, to, cfg.enabled, cfg.scroll_ms, cfg.easing, ScrollAnimKind::Scroll)
     }
 
-    /// Same as [`Self::to`], but with an explicit duration instead of always
-    /// reading `cfg.scroll_ms` — used by the transcript follow-ease (SQ-1595),
-    /// which times off `cfg.follow_ms` while still honoring the master switch
-    /// and the shared easing curve.
-    pub fn over(from: usize, to: usize, enabled: bool, ms: u64, easing: crate::anim::Easing) -> Option<Self> {
+    /// Same as [`Self::to`], but with an explicit duration and an explicit
+    /// [`ScrollAnimKind`] instead of always reading `cfg.scroll_ms` and tagging
+    /// `Scroll` — used by the transcript follow-ease (SQ-1595), which times off
+    /// `cfg.follow_ms` while still honoring the master switch and the shared
+    /// easing curve.
+    pub fn over(
+        from: usize,
+        to: usize,
+        enabled: bool,
+        ms: u64,
+        easing: crate::anim::Easing,
+        kind: ScrollAnimKind,
+    ) -> Option<Self> {
         if !enabled || ms == 0 {
             return None;
         }
-        Some(Self { from, to, tween: crate::anim::Tween::new(Duration::from_millis(ms), easing) })
+        Some(Self { from, to, tween: crate::anim::Tween::new(Duration::from_millis(ms), easing), kind })
     }
 
     /// The current displayed offset: `lerp(from, to, tween.progress())`.
@@ -4306,7 +4334,14 @@ impl AppState {
     pub fn arm_transcript_follow_ease(&mut self, from: u16, target: u16) {
         self.transcript_scroll = target;
         let anim = &self.config.animation;
-        self.scroll_anim = ScrollAnim::over(from as usize, target as usize, anim.enabled, anim.follow_ms, anim.easing);
+        self.scroll_anim = ScrollAnim::over(
+            from as usize,
+            target as usize,
+            anim.enabled,
+            anim.follow_ms,
+            anim.easing,
+            ScrollAnimKind::Follow,
+        );
     }
 
     /// Snap the transcript's displayed scroll offset to its animation's target
@@ -7009,6 +7044,7 @@ mod tests {
                 std::time::Duration::from_millis(100),
                 crate::anim::Easing::EaseOut,
             ),
+            kind: ScrollAnimKind::Scroll,
         });
         assert!(s.has_active_animation(), "scroll anim counts as active");
         s.scroll_anim = None;
@@ -7060,6 +7096,45 @@ mod tests {
         assert_eq!(a.target(), 8, "to = new target");
     }
 
+    /// `scroll_transcript_to` is the ordinary, reader-driven scroll path
+    /// (wheel, page keys, the pager's own advance/dismiss, drag-autoscroll —
+    /// see its own doc comment) — its `ScrollAnim` must always be tagged
+    /// `Scroll`, never `Follow`, and time off `scroll_ms` (SQ-1597).
+    #[test]
+    fn scroll_transcript_to_produces_scroll_kind_timed_off_scroll_ms() {
+        let mut s = AppState::default();
+        s.config.animation.scroll_ms = 250;
+        s.config.animation.follow_ms = 999_000; // if this leaked in, the duration below would betray it
+        s.scroll_transcript_to(8);
+        let a = s.scroll_anim.as_ref().expect("animation armed when enabled");
+        assert_eq!(a.kind, ScrollAnimKind::Scroll, "reader-driven scroll must tag Scroll, not Follow");
+        assert_eq!(
+            a.tween.duration(),
+            Duration::from_millis(250),
+            "must time off scroll_ms, not follow_ms"
+        );
+        assert_eq!(a.tween.easing(), s.config.animation.easing);
+    }
+
+    /// The transcript follow-ease (SQ-1595) must tag its `ScrollAnim` `Follow`
+    /// and time off `follow_ms`, so a host can tell it apart from an ordinary
+    /// scroll without re-deriving the "at bottom" rule itself (SQ-1597).
+    #[test]
+    fn arm_transcript_follow_ease_produces_follow_kind_timed_off_follow_ms() {
+        let mut s = AppState::default();
+        s.config.animation.scroll_ms = 999_000; // if this leaked in, the duration below would betray it
+        s.config.animation.follow_ms = 250;
+        s.arm_transcript_follow_ease(30, 12);
+        let a = s.scroll_anim.as_ref().expect("follow-ease armed");
+        assert_eq!(a.kind, ScrollAnimKind::Follow, "follow-ease must tag Follow, not Scroll");
+        assert_eq!(
+            a.tween.duration(),
+            Duration::from_millis(250),
+            "must time off follow_ms, not scroll_ms"
+        );
+        assert_eq!(a.tween.easing(), s.config.animation.easing);
+    }
+
     // ── Transcript follow-ease (SQ-1595) ─────────────────────────────────────
 
     /// `ScrollAnim::over` is what the follow-ease uses instead of `to` — same
@@ -7068,11 +7143,18 @@ mod tests {
     #[test]
     fn scroll_anim_over_honors_enabled_and_zero_duration() {
         use crate::anim::Easing;
-        assert!(ScrollAnim::over(0, 10, false, 200, Easing::EaseOut).is_none(), "disabled arms nothing");
-        assert!(ScrollAnim::over(0, 10, true, 0, Easing::EaseOut).is_none(), "0ms arms nothing");
-        let a = ScrollAnim::over(5, 10, true, 200, Easing::EaseOut).expect("armed");
+        assert!(
+            ScrollAnim::over(0, 10, false, 200, Easing::EaseOut, ScrollAnimKind::Follow).is_none(),
+            "disabled arms nothing"
+        );
+        assert!(
+            ScrollAnim::over(0, 10, true, 0, Easing::EaseOut, ScrollAnimKind::Follow).is_none(),
+            "0ms arms nothing"
+        );
+        let a = ScrollAnim::over(5, 10, true, 200, Easing::EaseOut, ScrollAnimKind::Follow).expect("armed");
         assert_eq!(a.from, 5);
         assert_eq!(a.target(), 10);
+        assert_eq!(a.kind, ScrollAnimKind::Follow, "caller-supplied kind is carried through");
     }
 
     /// `arm_transcript_follow_ease` sets the logical target immediately (same
@@ -7279,6 +7361,7 @@ mod tests {
             from: 0,
             to: 4,
             tween: crate::anim::Tween::new(std::time::Duration::ZERO, crate::anim::Easing::Linear),
+            kind: ScrollAnimKind::Scroll,
         });
         assert_eq!(s.effective_transcript_scroll(), 4, "done tween shows rounded target");
     }
@@ -7292,6 +7375,7 @@ mod tests {
                 std::time::Duration::from_millis(100),
                 crate::anim::Easing::Linear,
             ),
+            kind: ScrollAnimKind::Scroll,
         };
         // Right after construction progress is ~0, so current() is near `from`.
         let c = a.current();
@@ -8242,6 +8326,24 @@ mod tests {
         // A max of 0 (nothing to scroll) pins scroll at 0.
         hs.scroll_by(4, 0, &anim);
         assert_eq!(hs.scroll, 0);
+    }
+
+    /// `HintSession::scroll_by` has no follow concept at all — SQ-1595 never
+    /// touched hint-panel scrolling — so its `ScrollAnim` must always tag
+    /// `Scroll`, protecting against a future accidental follow-tagging of
+    /// hint scrolling (SQ-1597).
+    #[test]
+    fn hint_session_scroll_by_produces_scroll_kind_not_follow() {
+        let Some(mut hs) = make_hint_session() else { return }; // fixture absent — skip
+        let anim = crate::config::AnimationConfig {
+            enabled: true,
+            easing: crate::anim::Easing::EaseOut,
+            scroll_ms: 100,
+            ..Default::default()
+        };
+        hs.scroll_by(3, 5, &anim);
+        let a = hs.scroll_anim.as_ref().expect("animation armed when enabled");
+        assert_eq!(a.kind, ScrollAnimKind::Scroll, "hint-panel scroll must never tag Follow");
     }
 
     /// Build a minimal `HintSession` off the minizork fixture (its transcript

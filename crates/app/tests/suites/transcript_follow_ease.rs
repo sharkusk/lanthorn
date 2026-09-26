@@ -114,6 +114,42 @@ fn a_real_turn_arms_the_follow_ease_when_the_reader_is_at_the_bottom() {
         state.transcript_scroll,
         "immediately after the turn the display must still be mid-tween, not already settled"
     );
+    assert_eq!(
+        state.scroll_anim.as_ref().unwrap().kind,
+        app::state::ScrollAnimKind::Follow,
+        "SQ-1597: a real follow-ease armed through pager::apply_frame must be tagged Follow"
+    );
+}
+
+/// A real reader-driven scroll (an explicit page-down, routed through
+/// `input::page_scroll` the same way `Action::TranscriptScrollPage` resolves
+/// it in `main.rs`, then `scroll_transcript_to`) must tag its `ScrollAnim`
+/// `Scroll`, never `Follow` — the counterpart to the follow-ease case above
+/// (SQ-1597).
+#[test]
+fn a_real_reader_driven_scroll_tags_scroll_not_follow() {
+    let Some(mut s) = boot() else { return };
+    let mut state = AppState::default();
+    state.colors = app::colors::ColorScheme::terminal_default();
+    state.config.animation.enabled = true;
+    state.config.animation.scroll_ms = 60_000; // long enough to still be mid-flight below
+    let area = Rect::new(0, 0, 80, 30);
+    flush_boot(&mut s, &mut state);
+
+    // Reach some scrollback so a page-down has somewhere to land.
+    drive_one_turn(&mut s, &mut state, area, "look");
+    drive_one_turn(&mut s, &mut state, area, "inventory");
+    let (m, _) = render(&state, &s, area);
+
+    let target = app::input::page_scroll(state.transcript_scroll, 1, m.viewport_rows, m.max_scroll);
+    state.scroll_transcript_to(target);
+
+    let a = state.scroll_anim.as_ref().expect("a reader-driven scroll must arm an animation");
+    assert_eq!(
+        a.kind,
+        app::state::ScrollAnimKind::Scroll,
+        "SQ-1597: an explicit reader scroll must be tagged Scroll, not Follow"
+    );
 }
 
 /// `follow_ms = 0` is the documented instant path (matches `enabled = false`
