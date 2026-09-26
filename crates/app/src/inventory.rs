@@ -113,12 +113,25 @@ pub fn list_visible_contents(
 
 /// Parse the text output of an inventory command into a list of item names.
 ///
-/// Recognises:
-/// - A header line matching "carrying", "holding", "have", or "You are empty"
-///   (case-insensitive).
-/// - Subsequent non-empty lines as items; leading articles (a/an/the), bullets
-///   (-, *) and whitespace are stripped.
+/// Recognises two header styles, both starting with "you are carrying", "you
+/// are holding", "you have", or "you are empty" (case-insensitive, anchored
+/// to the start of the line — a bare "have" inside a narration sentence, e.g.
+/// "You have not been here before.", is not a header):
+/// - **Header-plus-list**: the header line ends at a colon (or has nothing
+///   after it), and each subsequent non-empty line is one item; leading
+///   articles (a/an/the), bullets (-, *) and whitespace are stripped.
+/// - **Single-sentence**: the header line names its contents directly on the
+///   same line, e.g. "You are carrying a pile of napkins." or "You are
+///   carrying an apple, a sword and a lamp." — split on commas and "and",
+///   with the trailing sentence punctuation and each item's leading article
+///   stripped. Nothing after this line is collected: the sentence is the
+///   whole answer, and the game's own narration on the following lines must
+///   not be swept in as items.
 /// - An "empty-handed" phrase in the output → empty list.
+///
+/// In the header-plus-list style, collection also stops as soon as a line
+/// stops looking like an item (a quoted line, or a line long enough and
+/// punctuated enough to read as a sentence) — see `looks_like_item_line`.
 ///
 /// Returns `[]` for non-inventory text.
 pub fn parse_inventory_output(text: &str) -> Vec<String> {
@@ -127,6 +140,9 @@ pub fn parse_inventory_output(text: &str) -> Vec<String> {
         return Vec::new();
     }
 
+    const HEADER_PHRASES: &[&str] =
+        &["you are carrying", "you are holding", "you have", "you are empty"];
+
     let mut found_header = false;
     let mut items = Vec::new();
 
@@ -134,13 +150,26 @@ pub fn parse_inventory_output(text: &str) -> Vec<String> {
         let trimmed = line.trim();
         if !found_header {
             let lower = trimmed.to_lowercase();
-            if lower.contains("carrying")
-                || lower.contains("holding")
-                || lower.contains("have")
-                || lower.contains("you are empty")
-            {
-                found_header = true;
+            let Some(&phrase) = HEADER_PHRASES.iter().find(|p| lower.starts_with(**p)) else {
+                continue;
+            };
+            let remainder = trimmed[phrase.len()..].trim();
+            let after_colon = remainder.trim_start_matches(':').trim();
+            // "You have not been here before." starts with "you have" too;
+            // a negation right after the phrase means this is narration, not
+            // an inventory header.
+            if phrase == "you have" && after_colon.to_lowercase().starts_with("not ") {
+                continue;
             }
+            found_header = true;
+            if !after_colon.is_empty() {
+                // Single-sentence style: everything worth collecting is on
+                // this line, and nothing after it belongs to the listing.
+                items.extend(parse_same_line_items(after_colon));
+                break;
+            }
+            // Otherwise: colon/blank-tail header; items follow on subsequent
+            // lines (header-plus-list style).
         } else {
             if trimmed.is_empty() {
                 continue;
@@ -153,6 +182,11 @@ pub fn parse_inventory_output(text: &str) -> Vec<String> {
             if stripped.is_empty() {
                 continue;
             }
+            if !looks_like_item_line(stripped) {
+                // The list has plainly ended; what follows is the story's
+                // own narration for this turn, not more items.
+                break;
+            }
             // Strip leading article (a/an/the followed by a space).
             let item = strip_article(stripped);
             if !item.is_empty() {
@@ -162,6 +196,41 @@ pub fn parse_inventory_output(text: &str) -> Vec<String> {
     }
 
     items
+}
+
+/// Split a single-sentence inventory tail ("an apple, a sword and a lamp.")
+/// into item phrases: trailing sentence punctuation is stripped, then the
+/// text is split on commas and the literal " and ", and each resulting
+/// phrase has its leading article stripped.
+fn parse_same_line_items(s: &str) -> Vec<String> {
+    let trimmed = s.trim().trim_end_matches(['.', '!']).trim();
+    let mut out = Vec::new();
+    for comma_part in trimmed.split(',') {
+        for part in comma_part.split(" and ") {
+            let part = part.trim();
+            if part.is_empty() {
+                continue;
+            }
+            let item = strip_article(part);
+            if !item.is_empty() {
+                out.push(item.to_owned());
+            }
+        }
+    }
+    out
+}
+
+/// Whether `s` (already stripped of bullets/whitespace) still reads as an
+/// item name rather than the story's own narration. A quoted line is
+/// dialogue; a line long and punctuated enough to be a full sentence is
+/// prose printed on the same turn, not a carried item.
+fn looks_like_item_line(s: &str) -> bool {
+    if s.starts_with('"') || s.starts_with('\u{201c}') {
+        return false;
+    }
+    let ends_like_a_sentence = s.ends_with(['.', '!', '?']);
+    let word_count = s.split_whitespace().count();
+    !(ends_like_a_sentence && word_count > 6)
 }
 
 /// Strip a leading "a ", "an ", or "the " (case-insensitive) from `s`.
@@ -274,6 +343,31 @@ mod tests {
     fn parse_holding_header() {
         let text = "You are holding:\n  a lantern";
         assert_eq!(parse_inventory_output(text), vec!["lantern"]);
+    }
+
+    #[test]
+    fn parse_single_sentence_header_with_trailing_narration() {
+        // SQ-1590: Zork Zero's Scullery, "inventory" on turn 2. The header
+        // names its one item in the same sentence, and the servant's
+        // exclamation on the next line must not be swept in as an "item".
+        let text = "You are carrying a pile of napkins.\n   \"When I give an order, servant, I mean NOW!\" The force of the voice is almost enough to propel you southward.";
+        let items = parse_inventory_output(text);
+        assert_eq!(items, vec!["pile of napkins"]);
+        assert!(!items.iter().any(|i| i.contains("force of the voice")));
+    }
+
+    #[test]
+    fn parse_single_sentence_header_multiple_items() {
+        let text = "You are carrying an apple, a sword and a lamp.";
+        assert_eq!(parse_inventory_output(text), vec!["apple", "sword", "lamp"]);
+    }
+
+    #[test]
+    fn parse_have_not_sentence_is_not_a_header() {
+        // "have" appears bare in ordinary narration; it must not be mistaken
+        // for the "You have:" / "You have <items>." inventory header.
+        let text = "You have not been here before.";
+        assert_eq!(parse_inventory_output(text), Vec::<String>::new());
     }
 
     // ── list_inventory (synthetic memory) ────────────────────────────────────
