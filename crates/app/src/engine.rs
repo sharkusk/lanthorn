@@ -368,6 +368,18 @@ pub struct Split {
     /// `fixed` unchanged; this is an additional fact a pixel-aware host (or a
     /// window's own canvas allocation) can use instead (SQ-1565).
     pub fixed_px: Option<u32>,
+    /// Size (rows or cols, per `vertical`) given to the SECOND child — its own
+    /// cell count, exactly as gvm's `layout_window` computed it (each child
+    /// rounds down independently on a proportional split; see the doc comment
+    /// there). This is NOT "whatever's left over after `fixed` and the
+    /// border": a proportional split can leave a one-cell remainder that
+    /// belongs to neither child, and a consumer that instead handed the second
+    /// child the full remaining area drew it one cell too large (SQ-1605).
+    /// `None` for a `WinNode::Pair` that isn't built from a real gvm split
+    /// (the app's own fixed-upper/fill-lower layouts for Z-machine and Scott
+    /// Adams, and hand-built test fixtures) — those have no rounding slack to
+    /// account for, so the second child correctly takes whatever's left.
+    pub rest: Option<u16>,
 }
 
 /// A graphics-window leaf: a snapshot of the window's canvas for rendering.
@@ -1413,7 +1425,7 @@ mod tests {
         let model = ScreenModel {
             root: WinNode::Pair {
                 vertical: true,
-                split: Split { fixed: 1, fixed_px: None },
+                split: Split { fixed: 1, fixed_px: None, rest: None },
                 border: false,
                 key_bg: None,
                 key_fg: None,

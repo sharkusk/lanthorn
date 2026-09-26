@@ -623,7 +623,7 @@ fn render_node(
             // reserves no gutter either — no line, no gap (SQ-0821).
             let sep_style = border.then(|| separator_style(*vertical, grid_colors)).flatten();
             let (a1, sep, a2) =
-                split_area_bordered(area, *vertical, split.fixed, u16::from(sep_style.is_some()));
+                split_area_bordered(area, *vertical, split.fixed, split.rest, u16::from(sep_style.is_some()));
             let m1 = render_node(first, status, char_mode, introspect, state, a1, buf, game_input, links, win_rects, grid_colors);
             // Only rule between two VISIBLE siblings. A border before a collapsed
             // (zero-extent) window — e.g. Counterfeit Monkey's image pane before it
@@ -2242,7 +2242,7 @@ fn collect_graphics_rects(node: &WinNode, area: Rect, out: &mut Vec<Rect>, state
             // since SQ-0821 means asking the THEME, not the game's border flag.
             let sep = border.then(|| separator_style(*vertical, &state.colors)).flatten();
             let (a1, _sep, a2) =
-                split_area_bordered(area, *vertical, split.fixed, u16::from(sep.is_some()));
+                split_area_bordered(area, *vertical, split.fixed, split.rest, u16::from(sep.is_some()));
             collect_graphics_rects(first, a1, out, state);
             collect_graphics_rects(second, a2, out, state);
         }
@@ -2379,23 +2379,71 @@ fn edge_touches_painted_graphics(node: &WinNode, vertical: bool, high: bool) -> 
 }
 
 /// Split `area` for a pair, reserving `border` cells (0 or 1) between the children
-/// for the separator rule. `first` gets `fixed` cells; the separator gets `border`;
-/// `second` gets the rest. gvm already reserved this 1-cell gutter between bordered
-/// siblings, so the two child areas never include it — the rule is drawn in `sep`.
-fn split_area_bordered(area: Rect, vertical: bool, fixed: u16, border: u16) -> (Rect, Rect, Rect) {
+/// for the separator rule. `first` gets `fixed` cells; the separator gets `border`.
+/// `second` gets its own real `rest` cells when known (gvm's independently-floored
+/// count for it — NOT "whatever's left") — a proportional split's independent
+/// per-child flooring can leave a one-cell remainder that belongs to neither child
+/// (see the doc comment on gvm's `layout_window`), and since `second` is sized from
+/// `rest` rather than "extent minus fixed minus border", that slack cell shows up
+/// as unclaimed gutter between `sep` and `second` instead of being silently
+/// absorbed into `second`'s canvas (SQ-1605) — matching gvm's own `split_rect`,
+/// which anchors each child to its own outer edge and leaves the slack beside the
+/// border.
+///
+/// `rest: Some(_)` reclaims up to one cell of that gutter back into `second`
+/// whenever the caller passes `border: 0` (no separator actually drawn there) —
+/// same as the no-`rest` path below, so a theme with no separator style (the
+/// shipped default, SQ-0821) still abuts as before on an ordinary
+/// (non-proportional) bordered split, AND on a `winmethod_NoBorder` split
+/// (`render_node`/`collect_graphics_rects` always pass `border: 0` for one,
+/// regardless of theme, since there's no border to veto in the first place —
+/// so this reclaims that pair's whole one-cell gutter, reproducing the
+/// borderless-abut guarantee, SQ-0341). Only a GENUINE proportional-rounding
+/// remainder — the second cell of a gutter that already got its one reclaimable
+/// cell back — stays withheld either way, which is the one thing this function
+/// cannot tell apart from a border reservation on its own; it doesn't need to,
+/// since gvm's "at most one cell" invariant means a bordered split's gutter never
+/// exceeds two cells and a borderless one's never exceeds one.
+///
+/// `rest: None` (a `WinNode::Pair` not built from a real gvm split) keeps the
+/// old behaviour: `second` fills exactly whatever's left after `fixed` and the
+/// drawn separator.
+fn split_area_bordered(area: Rect, vertical: bool, fixed: u16, rest: Option<u16>, border: u16) -> (Rect, Rect, Rect) {
     if vertical {
         let f = fixed.min(area.height);
-        let b = border.min(area.height - f);
+        let (r, b) = match rest {
+            Some(r) => {
+                let r = r.min(area.height - f);
+                let reclaim = 1u16.saturating_sub(border).min(area.height - f - r);
+                let r = r + reclaim;
+                (r, border.min(area.height - f - r))
+            }
+            None => {
+                let b = border.min(area.height - f);
+                (area.height - f - b, b)
+            }
+        };
         let first = Rect::new(area.x, area.y, area.width, f);
         let sep = Rect::new(area.x, area.y + f, area.width, b);
-        let second = Rect::new(area.x, area.y + f + b, area.width, area.height - f - b);
+        let second = Rect::new(area.x, area.y + area.height - r, area.width, r);
         (first, sep, second)
     } else {
         let f = fixed.min(area.width);
-        let b = border.min(area.width - f);
+        let (r, b) = match rest {
+            Some(r) => {
+                let r = r.min(area.width - f);
+                let reclaim = 1u16.saturating_sub(border).min(area.width - f - r);
+                let r = r + reclaim;
+                (r, border.min(area.width - f - r))
+            }
+            None => {
+                let b = border.min(area.width - f);
+                (area.width - f - b, b)
+            }
+        };
         let first = Rect::new(area.x, area.y, f, area.height);
         let sep = Rect::new(area.x + f, area.y, b, area.height);
-        let second = Rect::new(area.x + f + b, area.y, area.width - f - b, area.height);
+        let second = Rect::new(area.x + area.width - r, area.y, r, area.height);
         (first, sep, second)
     }
 }
@@ -11986,7 +12034,7 @@ mod tests {
         let model = ScreenModel {
             root: WinNode::Pair {
                 vertical: true,
-                split: Split { fixed: 1 , fixed_px: None },
+                split: Split { fixed: 1 , fixed_px: None, rest: None },
                 border: false,
                 key_bg: None,
                 key_fg: None,
@@ -12158,7 +12206,7 @@ mod tests {
             WinNode::Grid(g)
         }
         fn pair(vertical: bool, split: u16, first: WinNode, second: WinNode) -> WinNode {
-            WinNode::Pair { vertical, split: Split { fixed: split , fixed_px: None }, border: true, key_bg: None, key_fg: None, first: Box::new(first), second: Box::new(second) }
+            WinNode::Pair { vertical, split: Split { fixed: split , fixed_px: None, rest: None }, border: true, key_bg: None, key_fg: None, first: Box::new(first), second: Box::new(second) }
         }
         let root =
             pair(false, 123,
@@ -12255,7 +12303,7 @@ mod tests {
         panel.panel = true;
         let root = WinNode::Pair {
             vertical: true,
-            split: Split { fixed: 1 , fixed_px: None },
+            split: Split { fixed: 1 , fixed_px: None, rest: None },
             border: false,
             key_bg: None,
             key_fg: None,
@@ -12288,7 +12336,7 @@ mod tests {
         let zm = ScreenModel {
             root: WinNode::Pair {
                 vertical: true,
-                split: Split { fixed: 1 , fixed_px: None },
+                split: Split { fixed: 1 , fixed_px: None, rest: None },
                 border: false,
                 key_bg: None,
                 key_fg: None,
@@ -12314,7 +12362,7 @@ mod tests {
         let two = ScreenModel {
             root: WinNode::Pair {
                 vertical: false,
-                split: Split { fixed: 10 , fixed_px: None },
+                split: Split { fixed: 10 , fixed_px: None, rest: None },
                 border: false,
                 key_bg: None,
                 key_fg: None,
@@ -12340,7 +12388,7 @@ mod tests {
         let side = ScreenModel {
             root: WinNode::Pair {
                 vertical: false, // horizontal pair = Left/Right split
-                split: Split { fixed: 20 , fixed_px: None },
+                split: Split { fixed: 20 , fixed_px: None, rest: None },
                 border: false,
                 key_bg: None,
                 key_fg: None,
@@ -12363,7 +12411,7 @@ mod tests {
         let below = ScreenModel {
             root: WinNode::Pair {
                 vertical: true,
-                split: Split { fixed: 22 , fixed_px: None },
+                split: Split { fixed: 22 , fixed_px: None, rest: None },
                 border: false,
                 key_bg: None,
                 key_fg: None,
@@ -12394,7 +12442,7 @@ mod tests {
         let model = ScreenModel {
             root: WinNode::Pair {
                 vertical: false,
-                split: Split { fixed: 6 , fixed_px: None },
+                split: Split { fixed: 6 , fixed_px: None, rest: None },
                 border: false,
                 key_bg: None,
                 key_fg: None,
@@ -12427,28 +12475,80 @@ mod tests {
     fn split_area_bordered_vertical_and_horizontal() {
         let area = Rect::new(0, 0, 20, 10);
         // Borderless (b=0): the gutter is empty, children abut.
-        let (top, sep, bottom) = split_area_bordered(area, true, 3, 0);
+        let (top, sep, bottom) = split_area_bordered(area, true, 3, None, 0);
         assert_eq!(top, Rect::new(0, 0, 20, 3));
         assert_eq!(sep, Rect::new(0, 3, 20, 0));
         assert_eq!(bottom, Rect::new(0, 3, 20, 7));
-        let (left, sep, right) = split_area_bordered(area, false, 8, 0);
+        let (left, sep, right) = split_area_bordered(area, false, 8, None, 0);
         assert_eq!(left, Rect::new(0, 0, 8, 10));
         assert_eq!(sep, Rect::new(8, 0, 0, 10));
         assert_eq!(right, Rect::new(8, 0, 12, 10));
         // Bordered (b=1): a 1-cell gutter is carved out between the children.
-        let (top, sep, bottom) = split_area_bordered(area, true, 3, 1);
+        let (top, sep, bottom) = split_area_bordered(area, true, 3, None, 1);
         assert_eq!(top, Rect::new(0, 0, 20, 3));
         assert_eq!(sep, Rect::new(0, 3, 20, 1));
         assert_eq!(bottom, Rect::new(0, 4, 20, 6));
-        let (left, sep, right) = split_area_bordered(area, false, 8, 1);
+        let (left, sep, right) = split_area_bordered(area, false, 8, None, 1);
         assert_eq!(left, Rect::new(0, 0, 8, 10));
         assert_eq!(sep, Rect::new(8, 0, 1, 10));
         assert_eq!(right, Rect::new(9, 0, 11, 10));
         // Oversized fixed clamps to the extent; the border can't overflow either.
-        let (l2, sep, r2) = split_area_bordered(area, true, 99, 1);
+        let (l2, sep, r2) = split_area_bordered(area, true, 99, None, 1);
         assert_eq!(l2.height, 10);
         assert_eq!(sep.height, 0);
         assert_eq!(r2.height, 0);
+    }
+
+    /// SQ-1605: when `rest` carries the second child's OWN real cell count
+    /// (a genuine gvm proportional-split fact), `second` is sized from it —
+    /// not from "whatever's left" — and any slack the independent per-child
+    /// flooring left over lands as unclaimed gutter beside the separator,
+    /// never inside `second`'s canvas.
+    #[test]
+    fn split_area_bordered_second_child_uses_its_own_rest_not_the_remainder() {
+        // Content 79 (extent 80, border 1) at a 50/50 proportional split floors
+        // both halves to 39, one cell short of the content — gvm's documented
+        // at-most-one-cell remainder (see `layout_window`'s doc comment).
+        let area = Rect::new(0, 0, 80, 5);
+        let (first, sep, second) = split_area_bordered(area, false, 39, Some(39), 1);
+        assert_eq!(first, Rect::new(0, 0, 39, 5), "first keeps its own fixed cells");
+        assert_eq!(second.width, 39, "second is sized from `rest`, not the remainder");
+        assert_eq!(second, Rect::new(41, 0, 39, 5), "second anchors to the far edge, past the slack");
+        // The separator still gets exactly its `border` cell, right after `first`.
+        assert_eq!(sep, Rect::new(39, 0, 1, 5));
+        // The buggy old formula (`area.width - fixed - border` = 80-39-1 = 40)
+        // must NOT be what `second` reports — that's the one-cell-too-large bug.
+        assert_ne!(second.width, area.width - 39 - 1, "must not fall back to the old all-remainder formula");
+        // The slack cell (80 - 39 - 1 - 39 = 1) is unclaimed gutter between `sep`
+        // and `second`, not part of either child.
+        assert_eq!(sep.x + sep.width, 40);
+        assert_eq!(second.x, 41);
+    }
+
+    /// SQ-1605 follow-up: `rest: Some(_)` is only produced for a pair where gvm
+    /// itself reserved a border cell (see `AppGlk::convert_tree`), so the one
+    /// cell of slop that ISN'T the genuine proportional-rounding remainder is
+    /// exactly that reservation — and `second` must still reclaim it when the
+    /// THEME draws no rule (`border` param 0), the shipped default (SQ-0821).
+    /// Only the real rounding slack stays withheld either way, unlike the
+    /// `border` param 1 case above where the drawn separator already accounts
+    /// for that reserved cell.
+    #[test]
+    fn split_area_bordered_reclaims_the_border_cell_but_not_the_slack_when_no_rule_is_drawn() {
+        // Same 50/50-at-80 proportional split as above, but the theme draws no
+        // separator at all (border param 0).
+        let area = Rect::new(0, 0, 80, 5);
+        let (first, sep, second) = split_area_bordered(area, false, 39, Some(39), 0);
+        assert_eq!(first, Rect::new(0, 0, 39, 5), "first keeps its own fixed cells");
+        assert_eq!(sep.width, 0, "no rule drawn ⇒ no separator cell");
+        // The reserved border cell is reclaimed (second grows from its raw `rest`
+        // of 39 to 40) — but the genuine rounding slack is not, so second does
+        // NOT reach the old all-remainder formula's 41.
+        assert_eq!(second.width, 40, "the border reservation is reclaimed, the slack is not");
+        assert_ne!(second.width, area.width - 39, "must not reclaim the slack cell too (old all-remainder formula)");
+        // The withheld slack cell sits right after `first`, exactly where the
+        // (undrawn) separator would have been — `second` starts one cell later.
+        assert_eq!(second, Rect::new(40, 0, 40, 5));
     }
 
     #[test]
@@ -12457,7 +12557,7 @@ mod tests {
         let model = ScreenModel {
             root: WinNode::Pair {
                 vertical: true,
-                split: Split { fixed: 1 , fixed_px: None },
+                split: Split { fixed: 1 , fixed_px: None, rest: None },
                 border: false,
                 key_bg: None,
                 key_fg: None,
@@ -12466,7 +12566,7 @@ mod tests {
                 first: Box::new(WinNode::Grid(grid_with("STATUS"))),
                 second: Box::new(WinNode::Pair {
                     vertical: false,
-                    split: Split { fixed: 10 , fixed_px: None },
+                    split: Split { fixed: 10 , fixed_px: None, rest: None },
                     border: false,
                     key_bg: None,
                     key_fg: None,
@@ -12519,13 +12619,13 @@ mod tests {
         let model = ScreenModel {
             root: WinNode::Pair {
                 vertical: false,
-                split: Split { fixed: 8 , fixed_px: None },
+                split: Split { fixed: 8 , fixed_px: None, rest: None },
                 border: false,
                 key_bg: None,
                 key_fg: None,
                 first: Box::new(WinNode::Pair {
                     vertical: true,
-                    split: Split { fixed: 1 , fixed_px: None },
+                    split: Split { fixed: 1 , fixed_px: None, rest: None },
                     border: false,
                     key_bg: None,
                     key_fg: None,
@@ -12534,7 +12634,7 @@ mod tests {
                 }),
                 second: Box::new(WinNode::Pair {
                     vertical: false,
-                    split: Split { fixed: 1 , fixed_px: None },
+                    split: Split { fixed: 1 , fixed_px: None, rest: None },
                     border: false,
                     key_bg: None,
                     key_fg: None,
@@ -12600,7 +12700,7 @@ mod tests {
         let model = ScreenModel {
             root: WinNode::Pair {
                 vertical: true,
-                split: Split { fixed: 1 , fixed_px: None },
+                split: Split { fixed: 1 , fixed_px: None, rest: None },
                 border: false,
                 key_bg: None,
                 key_fg: None,
@@ -12642,14 +12742,14 @@ mod tests {
         let model = ScreenModel {
             root: WinNode::Pair {
                 vertical: true,
-                split: Split { fixed: 1 , fixed_px: None },
+                split: Split { fixed: 1 , fixed_px: None, rest: None },
                 border: false,
                 key_bg: None,
                 key_fg: None,
                 first: Box::new(WinNode::Grid(grid_with("ST"))),
                 second: Box::new(WinNode::Pair {
                     vertical: false,
-                    split: Split { fixed: 4 , fixed_px: None },
+                    split: Split { fixed: 4 , fixed_px: None, rest: None },
                     border: false,
                     key_bg: None,
                     key_fg: None,
@@ -12932,7 +13032,7 @@ mod tests {
         // region must be everything right of the graphics — text + map.
         let model = model_with(WinNode::Pair {
             vertical: false,
-            split: Split { fixed: 10 , fixed_px: None },
+            split: Split { fixed: 10 , fixed_px: None, rest: None },
             border: false,
             key_bg: None,
             key_fg: None,
@@ -12949,7 +13049,7 @@ mod tests {
         // Graphics banner (rows 0..3) over the text buffer; no map (TranscriptFull).
         let model = model_with(WinNode::Pair {
             vertical: true,
-            split: Split { fixed: 3 , fixed_px: None },
+            split: Split { fixed: 3 , fixed_px: None, rest: None },
             border: false,
             key_bg: None,
             key_fg: None,
@@ -12966,7 +13066,7 @@ mod tests {
         // and the dialog centers over the whole frame.
         let model = model_with(WinNode::Pair {
             vertical: false,
-            split: Split { fixed: 10 , fixed_px: None },
+            split: Split { fixed: 10 , fixed_px: None, rest: None },
             border: false,
             key_bg: None,
             key_fg: None,
@@ -13171,7 +13271,7 @@ mod tests {
         let model = ScreenModel {
             root: WinNode::Pair {
                 vertical: true,
-                split: Split { fixed: 1 , fixed_px: None },
+                split: Split { fixed: 1 , fixed_px: None, rest: None },
                 border: true,
                 key_bg: None,
                 key_fg: None,
@@ -13211,7 +13311,7 @@ mod tests {
         let model = ScreenModel {
             root: WinNode::Pair {
                 vertical: false,
-                split: Split { fixed: 6 , fixed_px: None },
+                split: Split { fixed: 6 , fixed_px: None, rest: None },
                 border: true,
                 key_bg: None,
                 key_fg: None,
@@ -13251,7 +13351,7 @@ mod tests {
             let model = ScreenModel {
                 root: WinNode::Pair {
                     vertical,
-                    split: Split { fixed: if vertical { 1 } else { 6 } , fixed_px: None },
+                    split: Split { fixed: if vertical { 1 } else { 6 } , fixed_px: None, rest: None },
                     border: false,
                     key_bg: None,
                     key_fg: None,
@@ -13295,7 +13395,7 @@ mod tests {
             let model = ScreenModel {
                 root: WinNode::Pair {
                     vertical,
-                    split: Split { fixed: if vertical { 1 } else { 6 } , fixed_px: None },
+                    split: Split { fixed: if vertical { 1 } else { 6 } , fixed_px: None, rest: None },
                     // The game asks for a border, the way almost every Glk game does
                     // simply by not asking for `winmethod_NoBorder`.
                     border: true,
@@ -13346,7 +13446,7 @@ mod tests {
         let model = |vertical: bool| ScreenModel {
             root: WinNode::Pair {
                 vertical,
-                split: Split { fixed: if vertical { 1 } else { 6 } , fixed_px: None },
+                split: Split { fixed: if vertical { 1 } else { 6 } , fixed_px: None, rest: None },
                 border: true,
                 key_bg: None,
                 key_fg: None,
@@ -13398,7 +13498,7 @@ mod tests {
         let model = ScreenModel {
             root: WinNode::Pair {
                 vertical: true,
-                split: Split { fixed: 1 , fixed_px: None },
+                split: Split { fixed: 1 , fixed_px: None, rest: None },
                 border: true,
                 key_bg: Some(0x0000_00FF),
                 key_fg: Some(0x00FF_0000),
@@ -13439,7 +13539,7 @@ mod tests {
         let make = |second: WinNode| ScreenModel {
             root: WinNode::Pair {
                 vertical: false, // left/right split → a │ separator
-                split: Split { fixed: 10 , fixed_px: None },
+                split: Split { fixed: 10 , fixed_px: None, rest: None },
                 border: true,
                 key_bg: None,
                 key_fg: None,
@@ -13473,7 +13573,7 @@ mod tests {
         });
         let tree = WinNode::Pair {
             vertical: false,
-            split: Split { fixed: 10 , fixed_px: None },
+            split: Split { fixed: 10 , fixed_px: None, rest: None },
             border: false,
             key_bg: None,
             key_fg: None,

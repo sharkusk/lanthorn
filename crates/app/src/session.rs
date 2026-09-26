@@ -5415,7 +5415,7 @@ pub fn screen_model_from_machine(machine: &Machine) -> ScreenModel {
     ScreenModel {
         root: WinNode::Pair {
             vertical: true,
-            split: Split { fixed: screen.upper.rows , fixed_px: None },
+            split: Split { fixed: screen.upper.rows , fixed_px: None, rest: None },
             // The Z-machine has no Glk border; its status box is drawn by the simple path.
             border: false,
             key_bg: None,

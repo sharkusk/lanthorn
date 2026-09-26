@@ -1228,15 +1228,32 @@ impl AppGlk {
                     WinNode::Buffer(b)
                 }
             },
-            WinTree::Pair { vertical, border, split, split_px, key_bg, key_fg, first, second, .. } => WinNode::Pair {
-                vertical: *vertical,
-                split: Split { fixed: *split as u16, fixed_px: *split_px },
-                border: *border,
-                key_bg: *key_bg,
-                key_fg: *key_fg,
-                first: Box::new(self.convert_tree(first)),
-                second: Box::new(self.convert_tree(second)),
-            },
+            WinTree::Pair { vertical, border, split, split_px, key_bg, key_fg, first, second, .. } => {
+                // `second`'s own resolved rect already carries gvm's real,
+                // independently-floored cell count for it (`layout_window` /
+                // `split_rect`) — read it here instead of letting a consumer
+                // compute "whatever's left" and swallow the split's withheld
+                // slack cell into it (SQ-1605). This is unconditional (even for
+                // a `winmethod_NoBorder` split, whose real geometry can still
+                // carry the same one-cell proportional remainder): `render_node`
+                // and `collect_graphics_rects` already force NO separator cell
+                // for a `border: false` pair regardless of theme, so
+                // `split_area_bordered`'s reclaim step (see its doc comment)
+                // always hands that pair's WHOLE gutter back to `second` —
+                // reproducing the borderless abut guarantee (SQ-0341) without
+                // this call site needing to special-case it.
+                let second_rect = second.rect();
+                let rest = Some((if *vertical { second_rect.height } else { second_rect.width }) as u16);
+                WinNode::Pair {
+                    vertical: *vertical,
+                    split: Split { fixed: *split as u16, fixed_px: *split_px, rest },
+                    border: *border,
+                    key_bg: *key_bg,
+                    key_fg: *key_fg,
+                    first: Box::new(self.convert_tree(first)),
+                    second: Box::new(self.convert_tree(second)),
+                }
+            }
         }
     }
 
@@ -2392,6 +2409,43 @@ mod tests {
             crate::engine::WinNode::Pair { split, .. } => {
                 assert_eq!(split.fixed, 1, "the cell-based layout figure is unchanged");
                 assert_eq!(split.fixed_px, Some(2), "Split also carries the pixel-exact figure");
+            }
+            other => panic!("expected a pair root, got {other:?}"),
+        }
+    }
+
+    /// SQ-1605: `second`'s own real cell count — gvm's independently-floored
+    /// fact, read straight off its own `WinTree` rect — reaches `Split::rest`,
+    /// not "whatever's left of the pair's own (union) rect". Content 78
+    /// (extent 80, border 1) at a 50/50 split floors both halves to 39 apiece,
+    /// one cell short of the content (gvm's documented at-most-one-cell
+    /// remainder, see `layout_window`'s doc comment): `first` sits at columns
+    /// 0..39, `second` at 41..80, leaving columns 39 (border) and 40 (slack)
+    /// unclaimed — exactly gvm's own `split_rect` anchoring.
+    #[test]
+    fn screen_model_split_carries_second_childs_true_cell_count() {
+        let mut g = AppGlk::new(80, 24);
+        g.window_open(1, WinType::TextBuffer);
+        g.window_open(2, WinType::TextBuffer);
+        g.window_layout(&[
+            (1, WinType::TextBuffer, rect(0, 0, 39, 24), Some(true)),
+            (2, WinType::TextBuffer, rect(41, 0, 39, 24), Some(true)),
+        ]);
+        g.window_tree(Some(hpair(
+            39,
+            leaf(1, WinType::TextBuffer, rect(0, 0, 39, 24)),
+            leaf(2, WinType::TextBuffer, rect(41, 0, 39, 24)),
+        )));
+        let model = g.screen_model();
+        match model.root {
+            crate::engine::WinNode::Pair { split, .. } => {
+                assert_eq!(split.fixed, 39, "the first child's cell count is unchanged");
+                assert_eq!(split.rest, Some(39), "the second child's own true cell count reaches Split::rest");
+                // The buggy computation this fixes: the pair's own (union) rect
+                // spans columns 0..80, so "extent minus fixed minus a 1-cell
+                // border" gives 40 — one cell too many, the slack this bug drew
+                // into `second`.
+                assert_ne!(split.rest, Some(40), "must not fall back to area-minus-fixed-minus-border");
             }
             other => panic!("expected a pair root, got {other:?}"),
         }
