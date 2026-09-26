@@ -45,7 +45,10 @@ use std::path::PathBuf;
 
 use app::engine::{Engine, PxText, WinNode};
 use app::graphics::PictSource;
+use app::host::input::deliver_v6_click;
+use app::host::{boot_story, BootRequest, BootedStory, LaunchFlags, QuietBoot, TerminalFacts, TurnCtx};
 use app::interpreter::InterpreterProfile;
+use app::launch_options::LaunchOverrides;
 use app::render::screen::{compose_v6_frame, RasterMetrics, V6FrameInputs};
 use app::render::v6_layout::{self as v6, MainText, RasterFrame, V6TextMode};
 use app::session::{GameSession, InputKind};
@@ -935,5 +938,289 @@ fn menu_anchor_compose_pc_right_bar_has_no_notch_before_the_gap() {
         "{file} (r{release}): the right bar has {} notch row(s) between its own top ({top}) and the band \
          ({avail_h}) — {gap_rows:?}",
         gap_rows.len()
+    );
+}
+
+// ── (f) SQ-1588: the raster host's click inverse for the relocated menu band ──
+//
+// `RasterFrame::game_px` alone drops every click on Journey's menu whenever a
+// host's pane leaves it spare height: `bottom_anchor_menu_runs` relocates the
+// band's own runs DOWN by the extension, into exactly the canvas rows that
+// rule treats as lanthorn's own scrollback (SQ-1032) and rejects. This is
+// `V6Frame::menu_band_game_px`'s acceptance — the three-region inverse
+// recovers the SAME game pixel the band was moved from, and delivering it
+// through `deliver_v6_click` (SQ-1568) changes the SAME menu state a click at
+// the game's own unmoved coordinate does.
+
+/// SQ-1588's geometric case, on BOTH releases: every canvas pixel above the
+/// story's own bottom edge answers exactly as `RasterFrame::game_px` already
+/// does; every pixel in the gap the extension opened answers `None`; and every
+/// pixel where the band actually landed answers the run's own PRE-shift
+/// coordinate — cross-checked against the moved runs `RecordOnly` reports
+/// (`V6TextRun`), never a second hand-derived expectation.
+///
+/// A frame that never relocated the band (the `bottom_anchor_menu` flag left
+/// off, exactly today's `Raster`/`Extended`) reports `menu_band_shift: None`,
+/// so this method degenerates to `frame.game_px` byte for byte — the guarantee
+/// behind "Frame/Extend/Letterbox titles are unchanged".
+///
+/// FALSIFY by reverting `V6Frame::menu_band_game_px` to call
+/// `self.frame.game_px(canvas_px)` unconditionally (i.e. delete the
+/// `menu_band_shift` branch): every assertion about the RELOCATED region below
+/// fails with `None` where a coordinate was expected — the quest's own
+/// symptom, a dropped click.
+#[test]
+fn menu_band_game_px_maps_the_three_canvas_regions() {
+    for (file, release) in RELEASES {
+        let Some(session) = boot(file) else { return };
+        let model = session.screen();
+        let WinNode::Layered(items) = &model.root else { panic!("a v6 frame has a Layered root") };
+        let tf = app::native_font::TextFace::cell_only(zvm::screen::V6Cell::DEFAULT);
+        let native = v6::native_extent(items, &tf);
+        let cell = tf.cell();
+        let layout = v6::classify_windows(items, cell);
+        let story = layout.story.expect("Journey has a story window on this frame");
+        let story_bottom = story.y_px as u32 + story.h_px as u32;
+
+        // Declined: no relocation happened, and the method must fall straight
+        // through to the plain rule for every canvas pixel — including rows
+        // past `native.1` that `game_px` itself drops.
+        let declined = menu_anchor_compose(&session, RasterFrame::native(native), V6TextMode::Rasterise, false);
+        assert_eq!(declined.menu_band_shift, None, "{file} (r{release}): a declined frame must not relocate the band");
+        for y in [0u32, story_bottom.saturating_sub(1), story_bottom, u32::from(native.1).saturating_sub(1)] {
+            for x in [0u32, u32::from(native.0) / 2] {
+                assert_eq!(
+                    declined.menu_band_game_px((x, y)),
+                    declined.frame.game_px((x, y)),
+                    "{file} (r{release}): a declined frame's inverse must equal the plain rule at ({x},{y})"
+                );
+            }
+        }
+
+        // Relocated: build the SAME frame extended, with a real pane's slack.
+        let want = RasterFrame::extended(native, TALL_PANE_DEV, cell, Some(2.0), true);
+        let extension = want.extension();
+        assert!(extension > 0, "{file} (r{release}): premise — this pane must actually extend");
+        let after = menu_anchor_compose(&session, want, V6TextMode::RasteriseAndRecord, true);
+        assert_eq!(
+            after.menu_band_shift,
+            Some((story_bottom, extension)),
+            "{file} (r{release}): a relocated frame must publish (story_bottom, extension)"
+        );
+
+        // Region 1 — above the band, unshifted, and identical to the plain rule.
+        for y in [0u32, story_bottom.saturating_sub(1)] {
+            for x in [0u32, u32::from(native.0) / 2, u32::from(native.0) - 1] {
+                assert_eq!(
+                    after.menu_band_game_px((x, y)),
+                    after.frame.game_px((x, y)),
+                    "{file} (r{release}): a canvas row above the band ({x},{y}) must map unshifted"
+                );
+                assert!(
+                    after.menu_band_game_px((x, y)).is_some(),
+                    "{file} (r{release}): ({x},{y}) is above the band and must map to a game pixel"
+                );
+            }
+        }
+
+        // Region 2 — the gap the extension opened: lanthorn's own grown prose,
+        // never the game's, on every column.
+        for y in [story_bottom, story_bottom + extension / 2, story_bottom + extension - 1] {
+            for x in [0u32, u32::from(native.0) / 2, u32::from(native.0) - 1] {
+                assert_eq!(
+                    after.menu_band_game_px((x, y)),
+                    None,
+                    "{file} (r{release}): a canvas row inside the gap ({x},{y}) must be dropped, not the game's"
+                );
+            }
+        }
+
+        // Region 3 — where the band actually landed. Cross-checked against the
+        // moved runs themselves (`RecordOnly`'s own data, SQ-1574's `after.text`
+        // in the earlier acceptance test), never a hand re-derivation: every
+        // moved run's own glyph box, read back, must invert to the run's
+        // PRE-shift native position.
+        let moved_runs: Vec<&v6::V6TextRun> = after.text.iter().filter(|r| r.y >= story_bottom + extension).collect();
+        assert!(!moved_runs.is_empty(), "{file} (r{release}): premise — the band must carry moved runs");
+        for r in &moved_runs {
+            for &(bx, bw) in &r.boxes {
+                if bw == 0 {
+                    continue;
+                }
+                let canvas_px = (bx, r.y + r.h / 2);
+                let want_native = (
+                    u16::try_from(bx + 1).expect("native x fits u16"),
+                    u16::try_from(r.y + r.h / 2 - extension + 1).expect("native y fits u16"),
+                );
+                assert_eq!(
+                    after.menu_band_game_px(canvas_px),
+                    Some(want_native),
+                    "{file} (r{release}): moved run {:?}'s own glyph box at {canvas_px:?} must invert to its \
+                     pre-shift native position {want_native:?}",
+                    r.text
+                );
+            }
+        }
+    }
+}
+
+/// Boot `file` through the FULL headless host stack (`app::host::boot_story`,
+/// SQ-1568's own boot) rather than this file's bare `GameSession` — delivering
+/// a click needs the `AppState`/`Mapper`/`TurnCtx` triple only that stack
+/// assembles, and its `AppState` carries the machine's own face/colours/art
+/// scale, set the way `startup.rs` sets them (CLAUDE.md: "boot a harness the
+/// way `startup.rs` boots"). `None` (with a SKIP note) when the gitignored
+/// fixture is absent.
+fn boot_host(file: &str, want_release: u16, tag: &str) -> Option<BootedStory> {
+    let path = stories_dir().join(file);
+    let Ok(bytes) = std::fs::read(&path) else {
+        eprintln!("SKIP: gitignored story missing at {}", path.display());
+        return None;
+    };
+    assert_eq!(u16::from_be_bytes([bytes[2], bytes[3]]), want_release, "{file} is not the pinned release");
+    let home = app::scratch_dir(tag);
+    let overrides = LaunchOverrides::default();
+    let req = BootRequest {
+        story_path: path,
+        disk_entry: None,
+        overrides: &overrides,
+        cfg: app::config::Config {
+            user_dir: home.clone(),
+            config_file: home.join("config.toml"),
+            random_seed: Some(1),
+            ..app::config::Config::default()
+        },
+        data_base: home.join("saves"),
+        flags: LaunchFlags::default(),
+        terminal: TerminalFacts::default(),
+    };
+    Some(boot_story(req, &mut QuietBoot).expect("the story boots headlessly"))
+}
+
+/// Deliver a click on 1-based game pixel `game_px`, the way `host_v6_click.rs`'s
+/// own `click` helper does — this file's own copy, since `deliver_v6_click`
+/// needs the `TurnCtx` triple this section's `boot_host` (not this file's
+/// bare `boot`) assembles.
+fn host_click(b: &mut BootedStory, tidy: &mut u32, game_px: (u16, u16)) -> Option<app::host::TurnOutcome> {
+    let mut ctx = TurnCtx { game_dir: &b.game_dir, ifid: &b.ifid, arc_file: &b.arc_file, map_view: None, bg_tidy_counter: tidy };
+    deliver_v6_click(&mut b.state, &mut b.mapper, &mut *b.session, &mut ctx, game_px)
+}
+
+/// Answer whatever read is pending, the way `host_v6_click.rs`'s own `answer`
+/// helper does.
+fn host_answer(b: &mut BootedStory, tidy: &mut u32, line: &str) -> String {
+    match b.session.pending_input() {
+        InputKind::Line => {
+            let r = b.session.submit(line);
+            let text = r.transcript.clone();
+            let _ = app::host::finish_command_turn(
+                line, true, r, &mut b.state, &mut b.mapper, &mut *b.session, &b.game_dir, &b.ifid, &b.arc_file, None,
+                tidy,
+            );
+            text
+        }
+        InputKind::Char | InputKind::Event => {
+            let z = app::engine_helpers::zvm_session_opt_mut(&mut *b.session).expect("a z-machine story");
+            let r = z.submit_char(13);
+            let text = r.transcript.clone();
+            let _ = app::host::apply_game_driven_result(
+                &mut b.state, &mut b.mapper, &r, &b.game_dir, None, &*b.session, app::pager::Driver::PlayerInput,
+            );
+            text
+        }
+    }
+}
+
+/// Every non-blank chrome run's `(x, y, style, text)` — the menu's own visible
+/// state, diffed before/after a click (the same shape `host_v6_click.rs`'s
+/// `zork0_click_on_a_hint_topic_selects_it` reads a style bit through).
+fn menu_snapshot(session: &dyn Engine) -> Vec<(u16, u16, u8, String)> {
+    let model = session.screen();
+    let WinNode::Layered(items) = &model.root else { return Vec::new() };
+    items
+        .iter()
+        .filter_map(|it| match &it.node {
+            WinNode::Grid(g) => Some(g.px_texts.iter().cloned()),
+            _ => None,
+        })
+        .flatten()
+        .filter(|t| !t.text.trim().is_empty())
+        .map(|t| (t.x, t.y, t.style, t.text))
+        .collect()
+}
+
+/// SQ-1588's end-to-end acceptance case: recover a click on Journey's
+/// RELOCATED menu band through `V6Frame::menu_band_game_px`, then actually
+/// drive it through `deliver_v6_click` and confirm the menu changes — not
+/// merely that a coordinate comes back.
+///
+/// `(269, 361)` (1-based native) sits on Minar's row, clear of every glyph
+/// box, right of the row's own `-->` marker — confirmed by direct
+/// experimentation to open that row's action menu on a fresh boot (Minar's
+/// currently-queued verb, "Scout", is no longer displayed once the row is
+/// clicked). Any click that reaches the game's own row-level hit test, not a
+/// specific glyph, does the same thing, which is why this test diffs the
+/// WHOLE menu snapshot rather than pinning one run's exact new position.
+///
+/// FALSIFY by using `frame.frame.game_px(canvas_px)` (the plain rule) in place
+/// of `frame.menu_band_game_px(canvas_px)`: it returns `None` for the same
+/// `canvas_px`, so `deliver_v6_click` is never reached at all and the menu
+/// snapshot is unchanged — the quest's own symptom, a dropped click.
+#[test]
+fn menu_band_game_px_recovers_the_relocated_click_and_delivering_it_changes_the_menu() {
+    let (file, release) = ("journey-r83-s890706.z6", 83u16);
+    let Some(mut b) = boot_host(file, release, "menu-band-game-px") else { return };
+    let mut tidy = 0u32;
+    for _ in 0..40 {
+        if host_answer(&mut b, &mut tidy, "").contains("magical resources") {
+            break;
+        }
+    }
+    assert_eq!(b.session.pending_input(), InputKind::Char, "{file} (r{release}): Journey's command menu is a CHAR read");
+
+    // The game's own coordinate for the row this test clicks.
+    const TARGET: (u16, u16) = (269, 361);
+
+    // The SAME frame's Menu-anchor composite, on a pane with real spare
+    // height — built from `b.state`, exactly as a host that opted into
+    // `bottom_anchor_menu` would build it (`V6FrameInputs::from_state`, not
+    // this file's bare hand-built inputs, so this is the REAL machine face
+    // and colours, not the DEFAULT cell the geometric test above uses).
+    let model = b.session.screen();
+    let WinNode::Layered(items) = &model.root else { panic!("a v6 frame has a Layered root") };
+    let native = v6::native_extent(items, &b.state.v6_text);
+    let cell = b.state.v6_text.cell();
+    let layout = v6::classify_windows(items, cell);
+    let want = RasterFrame::extended(native, TALL_PANE_DEV, cell, Some(2.0), true);
+    let extension = want.extension();
+    assert!(extension > 0, "{file} (r{release}): premise — this pane must actually extend");
+
+    let mut inputs = V6FrameInputs::from_state(&b.state, None, &empty_prose);
+    inputs.bottom_anchor_menu = true;
+    let frame = compose_v6_frame(&layout, want, &inputs);
+    assert!(frame.menu_band_shift.is_some(), "{file} (r{release}): premise — this frame must relocate the band");
+
+    // Where the relocated band actually painted `TARGET`: same x (never
+    // shifted), y moved down by `extension` (`bottom_anchor_menu_runs`).
+    let canvas_px = (u32::from(TARGET.0) - 1, u32::from(TARGET.1) - 1 + extension);
+
+    // The premise this quest reports: the plain rule drops this exact click.
+    assert_eq!(
+        frame.frame.game_px(canvas_px),
+        None,
+        "{file} (r{release}): premise — the plain rule must drop this click, or this test is not exercising the bug"
+    );
+
+    let got = frame.menu_band_game_px(canvas_px);
+    assert_eq!(got, Some(TARGET), "{file} (r{release}): the relocated band's inverse must recover the game's own coordinate");
+
+    let before = menu_snapshot(&*b.session);
+    let out = host_click(&mut b, &mut tidy, got.expect("just asserted Some")).expect("a char read always takes a click");
+    assert!(!out.quit, "{file} (r{release}): the game goes on");
+    let after = menu_snapshot(&*b.session);
+    assert_ne!(
+        after, before,
+        "{file} (r{release}): delivering the recovered pixel must change the menu, exactly as a click at the \
+         game's own coordinate does"
     );
 }

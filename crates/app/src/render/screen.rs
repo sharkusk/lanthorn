@@ -2971,6 +2971,75 @@ pub struct V6Frame {
     /// but [`V6TextMode::RecordOnly`](crate::render::v6_layout::V6TextMode::RecordOnly),
     /// which leaves it to the host (SQ-1567).
     pub caret: Option<crate::render::v6_layout::V6Caret>,
+    /// `Some((story_bottom, extension))` when THIS frame actually relocated
+    /// Journey's command band via [`bottom_anchor_menu_runs`] — the story window's
+    /// own bottom edge, native pixels, and how far down the band's runs moved —
+    /// `None` on every other frame, including a Menu-shaped one composed with
+    /// [`V6FrameInputs::bottom_anchor_menu`] left off or a pane with no slack to
+    /// give it (SQ-1588). Captured at the exact call site that builds `moved`, so
+    /// it cannot drift from whether the band actually moved the way a value
+    /// re-derived by a caller from a separately-computed [`V6HybridPlan`] could —
+    /// see [`Self::menu_band_game_px`], the reason this exists.
+    pub menu_band_shift: Option<(u32, u32)>,
+}
+
+impl V6Frame {
+    /// The canvas→game-pixel inverse for THIS frame, accounting for a relocated
+    /// Journey command band (SQ-1588, extending [`RasterFrame::game_px`]'s rule,
+    /// SQ-1568, to `V6FrameInputs::bottom_anchor_menu`'s composition change).
+    ///
+    /// `RasterFrame::game_px` alone is wrong on such a frame: it treats every
+    /// canvas row at or beyond `frame.native.1` as lanthorn's own scrollback and
+    /// drops it — right for a plain extended frame (SQ-1032), but Journey's Menu
+    /// plan physically MOVES its command band's own runs DOWN by the extension
+    /// (`bottom_anchor_menu_runs`), so the band is drawn INTO exactly the rows
+    /// that rule rejects. Without this, a click on "Start"/"Cast"/a character
+    /// name/"[cancel]" is silently dropped on every pane with spare height.
+    ///
+    /// Three canvas regions (0-based `canvas_px`), read off `self.menu_band_shift`
+    /// — `Some((story_bottom, extension))` only when THIS frame actually
+    /// relocated the band (see that field's doc: every other plan, or a Menu
+    /// frame composed with `bottom_anchor_menu` left off or with no slack to
+    /// extend into, leaves it `None`, and this falls straight through to
+    /// `self.frame.game_px` unchanged — Zork Zero, Shogun and Arthur's
+    /// Frame/Extend/Letterbox frames never set it):
+    ///
+    /// - `0..story_bottom`: the game's own screen above the band, unshifted.
+    /// - `story_bottom..story_bottom+extension`: the gap the extension opened.
+    ///   The story's OWN prose grew into it (`self.story`'s `h` includes the
+    ///   extension), so these rows are lanthorn's grown scrollback, not the
+    ///   game's — `None`, the same rule `game_px` already applies past a plain
+    ///   extended frame's screen.
+    /// - `story_bottom+extension..canvas_h`: where the band's runs actually
+    ///   landed; map back UP by the extension.
+    ///
+    /// Ported, not shared, from the TUI's own inverse for the SAME band —
+    /// [`crate::render::graphics::V6ClickMap::map_click`]'s
+    /// [`PackedText`](crate::render::graphics::PackedText) handling under
+    /// `frame.plan_is_menu` — because the two answer in different coordinate
+    /// systems (this one native raster pixels physically moved within one fixed
+    /// image; that one letterboxed terminal cells, where the band is drawn at a
+    /// SEPARATE "menu" scale rather than moved at all) and cannot literally call
+    /// one function. Both invert the same fact — a click is resolved the way the
+    /// pixel under it was actually drawn, and the pixel under Journey's menu band
+    /// was drawn somewhere other than the plain per-axis rule states — so a
+    /// change to the real mover (`bottom_anchor_menu_runs`) must be carried here
+    /// by hand; this doc comment is that cross-link.
+    pub fn menu_band_game_px(&self, canvas_px: (u32, u32)) -> Option<(u16, u16)> {
+        let Some((story_bottom, extension)) = self.menu_band_shift else {
+            return self.frame.game_px(canvas_px);
+        };
+        let gx = crate::render::v6_layout::canvas_to_game_axis(canvas_px.0, self.frame.native.0)?;
+        let cy = canvas_px.1;
+        let gy = if cy < story_bottom {
+            crate::render::v6_layout::canvas_to_game_axis(cy, self.frame.native.1)?
+        } else if cy < story_bottom + extension {
+            return None;
+        } else {
+            crate::render::v6_layout::canvas_to_game_axis(cy - extension, self.frame.native.1)?
+        };
+        Some((gx, gy))
+    }
 }
 
 /// The story prose box a v6 composite laid the transcript into (SQ-1567), in the
@@ -3225,12 +3294,21 @@ fn compose_v6_frame_into(
     // `screen` and drops anything below it — will not report a click on it. Arthur's
     // parser error is output and nothing else; a CLICKABLE band under a story window
     // is Journey's, and Journey declines the extension one test earlier.
+    // SQ-1588: `menu_band_shift` is `(story_bottom, extension)` exactly when the
+    // FIRST arm below actually runs — the run-level mover, not the plain
+    // whole-window `bottom_anchor` the second arm uses for every other title's
+    // band. Computed at this same site, from the same `story`, rather than left
+    // for a caller to re-derive from a separately-fetched `V6HybridPlan`: two
+    // facts stated once cannot drift the way two facts stated twice can (the
+    // refactoring policy in CLAUDE.md). See `V6Frame::menu_band_game_px`.
+    let mut menu_band_shift: Option<(u32, u32)> = None;
     let moved: Vec<crate::engine::PositionedWindow> = match &anchored {
         // SQ-1574: Journey's band moves as RUNS (`bottom_anchor_menu_runs`), not as
         // a whole window — see `bottom_anchored_menu_band`'s doc. Every other title
         // still moves as the whole window `bottom_anchor` always has.
         Some(ws) if extension > 0 && menu_case && inputs.bottom_anchor_menu => match layout.story {
             Some(story) => {
+                menu_band_shift = Some((story.y_px as u32 + story.h_px as u32, extension));
                 ws.iter().map(|&i| bottom_anchor_menu_runs(layout.chrome[i], story, extension, cell)).collect()
             }
             None => Vec::new(),
@@ -3373,7 +3451,7 @@ fn compose_v6_frame_into(
         // screen. See `story_window_is_a_canvas`: fmvpoker alone.
         if story_window_is_a_canvas(layout, native) {
             v6::draw_story_canvas_runs_into(&mut canvas, layout.story, ink, page, honor, inputs.colors, inputs.face, glyphs);
-            return finish_v6_raster_canvas(canvas, page, ink, raster_metrics, None, frame);
+            return finish_v6_raster_canvas(canvas, page, ink, raster_metrics, None, frame, None);
         }
         // **A `Grid` in the story slot contributes its RECT and nothing else**
         // (SQ-1026). With no primary `Buffer` on the frame, `classify_windows`
@@ -3394,7 +3472,7 @@ fn compose_v6_frame_into(
         // No prose box and no scroll metrics, exactly as when a plate owns the
         // screen — there is no transcript on this frame.
         if !matches!(layout.story.map(|s| &s.node), Some(WinNode::Buffer(_))) {
-            return finish_v6_raster_canvas(canvas, page, ink, raster_metrics, None, frame);
+            return finish_v6_raster_canvas(canvas, page, ink, raster_metrics, None, frame, None);
         }
         // Whether any prose belongs on THIS frame, and where (SQ-0707). An
         // absolutely-placed plate is drawn INSTEAD of prose, not under it: the
@@ -3402,7 +3480,7 @@ fn compose_v6_frame_into(
         // screen. `None` = the plate owns the screen, and rasterizing scrollback
         // onto it would paint the PREVIOUS screen's text across the art.
         let Some((tx, ty, tw, th)) = v6::story_prose_box((sx, sy, sw, sh), layout.story_gfx, cell) else {
-            return finish_v6_raster_canvas(canvas, page, ink, raster_metrics, None, frame);
+            return finish_v6_raster_canvas(canvas, page, ink, raster_metrics, None, frame, None);
         };
         // Window-0 inline pictures (drop-caps, room icons) arrive as
         // transcript-anchored floats (`transcript_images` sidecar):
@@ -3528,7 +3606,7 @@ fn compose_v6_frame_into(
     // identical on every protocol/terminal. Touches alpha==0 pixels
     // ONLY — art, status bands, glyphs and drop-caps are all opaque and
     // are left byte-for-byte alone. (SQ-0510)
-    finish_v6_raster_canvas(canvas, page, ink, raster_metrics, story_box, frame)
+    finish_v6_raster_canvas(canvas, page, ink, raster_metrics, story_box, frame, menu_band_shift)
 }
 
 /// Seal a v6 raster composite: resolve every still-transparent pixel to the story
@@ -3541,9 +3619,10 @@ fn finish_v6_raster_canvas(
     raster_metrics: Option<RasterMetrics>,
     story: Option<V6StoryBox>,
     frame: crate::render::v6_layout::RasterFrame,
+    menu_band_shift: Option<(u32, u32)>,
 ) -> V6Frame {
     crate::render::v6_layout::flatten_onto_page(&mut canvas, page);
-    V6Frame { canvas, metrics: raster_metrics, frame, text: Vec::new(), story, page, ink, caret: None }
+    V6Frame { canvas, metrics: raster_metrics, frame, text: Vec::new(), story, page, ink, caret: None, menu_band_shift }
 }
 
 /// SQ-1032: the same composite with more transparent native rows below it.
