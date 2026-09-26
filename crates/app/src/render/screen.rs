@@ -926,17 +926,17 @@ fn render_node(
                         // cost 3-8 ms per redraw on a 640x400 press and was paid per
                         // keystroke and per frame of any animation.
                         let hkey = v6_hybrid_gen(items, state, area, picker, story);
+                        let fs = picker.font_size();
+                        let cell_px = (fs.width, fs.height);
                         let cached = state.graphics_render.borrow_mut().hybrid.take().filter(|f| f.key == hkey);
                         let replayed = cached.is_some();
                         let frame = match cached {
                             Some(f) => f,
                             None => {
                                 state.graphics_render.borrow_mut().hybrid_builds += 1;
-                                build_hybrid_frame(hkey, &layout, story, native, area, picker, default_fg, default_bg, state)
+                                build_hybrid_frame(hkey, &layout, story, native, area, cell_px, picker, default_fg, default_bg, state)
                             }
                         };
-                        let fs = picker.font_size();
-                        let cell_px = (fs.width, fs.height);
                         let canvas = &frame.canvas;
                         let gfx = &frame.gfx;
                         let scale = frame.scale;
@@ -3844,17 +3844,67 @@ fn build_hybrid_frame(
     story: &crate::engine::PositionedWindow,
     native: (u16, u16),
     area: Rect,
+    cell_px: (u16, u16),
     picker: &ratatui_image::picker::Picker,
     default_fg: image::Rgba<u8>,
     default_bg: image::Rgba<u8>,
     state: &AppState,
 ) -> HybridFrame {
+    // SQ-0818: how finely a FULL-WIDTH art strip's upload is cut — see
+    // `build_hybrid_frame_with`'s own doc for the reasoning; only this side of
+    // the split knows a real `Picker`.
+    let tile_cols = match picker.protocol_type() {
+        ratatui_image::picker::ProtocolType::Kitty
+        | ratatui_image::picker::ProtocolType::Iterm2 => BAND_TILE_COLS,
+        ratatui_image::picker::ProtocolType::Sixel
+        | ratatui_image::picker::ProtocolType::Halfblocks => 0,
+    };
+    build_hybrid_frame_with(
+        hkey,
+        layout,
+        story,
+        native,
+        area,
+        cell_px,
+        crate::render::graphics::v6_pixel_lock_applies(picker),
+        backend_layers_glyphs_over_art(picker),
+        tile_cols,
+        default_fg,
+        default_bg,
+        state,
+    )
+}
+
+/// [`build_hybrid_frame`]'s picker-free core (SQ-1591): everything a v6 HYBRID
+/// chrome ring computes, split out from the three picker-derived facts a real
+/// `Picker` answers (its font cell size, whether the v6 pixel lock applies to
+/// its protocol, whether it can layer a glyph over an art placement) so a host
+/// with no terminal `Picker` at all — one drawing this chrome with its own fonts
+/// — can ask the SAME classification at ITS OWN cell size. `build_hybrid_frame`
+/// is now a thin wrapper answering those three from a real `Picker`;
+/// `hybrid_chrome_layout` is the other caller, answering them for a host (see
+/// that function's own doc for what it decides and why). Everything below this
+/// point is unchanged from before the split — a pure signature widening, no
+/// behaviour change for the TUI's own call.
+#[allow(clippy::too_many_arguments)]
+fn build_hybrid_frame_with(
+    hkey: u64,
+    layout: &crate::render::v6_layout::V6Layout<'_>,
+    story: &crate::engine::PositionedWindow,
+    native: (u16, u16),
+    area: Rect,
+    cell_px: (u16, u16),
+    lock_applies: bool,
+    layer_glyphs_over_art: bool,
+    tile_cols: u16,
+    default_fg: image::Rgba<u8>,
+    default_bg: image::Rgba<u8>,
+    state: &AppState,
+) -> HybridFrame {
     use crate::render::v6_layout as v6;
-    let fs = picker.font_size();
-    let cell_px = (fs.width, fs.height);
     let pane_dev = (
-        area.width as u32 * fs.width.max(1) as u32,
-        area.height as u32 * fs.height.max(1) as u32,
+        area.width as u32 * cell_px.0.max(1) as u32,
+        area.height as u32 * cell_px.1.max(1) as u32,
     );
     // SQ-0936: one global letterbox factor for the whole native
     // screen, quantized to the artwork's own ladder when the
@@ -3871,7 +3921,6 @@ fn build_hybrid_frame(
     // `crate::render::graphics::v6_pixel_lock_applies` for the
     // measurement. The lock is inert on that backend, reported as
     // inert, and never dressed up as a snap that happened.
-    let lock_applies = crate::render::graphics::v6_pixel_lock_applies(picker);
     let lock_inapplicable = state.config.v6_pixel_lock && !lock_applies;
     let (scale_center, lock_fallback) =
         v6::FrameGeometry::new(native, state.v6_art_scale, state.v6_text.cell())
@@ -4351,7 +4400,7 @@ fn build_hybrid_frame(
     // is the whole gate: everywhere else these runs stay pixels and
     // every line below this one behaves exactly as it did.
     let (mut strips, over_art_runs) = decompose_chrome_strips(&ring_bands, &row_oracle);
-    let over_art_runs: Vec<crate::engine::PxText> = if backend_layers_glyphs_over_art(picker) {
+    let over_art_runs: Vec<crate::engine::PxText> = if layer_glyphs_over_art {
         over_art_runs.into_iter().cloned().collect()
     } else {
         Vec::new()
@@ -4971,22 +5020,17 @@ fn build_hybrid_frame(
             })
             .collect()
     };
-    // SQ-0818: how finely a FULL-WIDTH art strip's upload is cut.
+    // SQ-0818: how finely a FULL-WIDTH art strip's upload is cut — `tile_cols`,
+    // a parameter since SQ-1591's picker-free split (see `build_hybrid_frame`,
+    // the only caller that answers it from a real `Picker`).
     //
-    // Granularity is backend-conditional, and only this side of the
-    // renderer knows the picker. Kitty and iterm2 tile: the extra cost
+    // Granularity is backend-conditional. Kitty and iterm2 tile: the extra cost
     // is one control block and a rounded-up last chunk per tile, and
     // the payload is byte for byte the same pixels. SIXEL DOES NOT —
     // every sixel image carries its own palette definition, so N tiles
     // would mean N palettes where the strip had one, a real first-frame
     // regression for no gain. Halfblocks does not care either way:
     // ratatui's own cell diff already sends it only the dirty cells.
-    let tile_cols = match picker.protocol_type() {
-        ratatui_image::picker::ProtocolType::Kitty
-        | ratatui_image::picker::ProtocolType::Iterm2 => BAND_TILE_COLS,
-        ratatui_image::picker::ProtocolType::Sixel
-        | ratatui_image::picker::ProtocolType::Halfblocks => 0,
-    };
     // …and only a strip that is NOT a flank, which is asked by role
     // rather than inferred from the draw: `flank_panels` and
     // `tiled_flanks` each compose their own source image from geometry
@@ -5200,6 +5244,238 @@ fn build_hybrid_frame(
         packed_text,
         over_art_runs,
     }
+}
+
+/// One chrome run inside a [`V6HybridChromeLayout`] (SQ-1591) — the CELL/hybrid
+/// path's sibling of
+/// [`V6TextRun`](crate::render::v6_layout::V6TextRun)'s `over_art`/`bar`
+/// (SQ-1592, the raster path). `over_art` reuses that field's exact name for the
+/// SAME question, "is this run over art?" — deliberately: the two types are
+/// built by entirely separate pipelines and share no code, but a host reading
+/// both should not have to learn two spellings of one idea. `bar` has no
+/// analogue here: it names a ROW property internal to this pipeline's own flank-
+/// ownership decision (`ChromeRowOracle`'s `bar_rows`, SQ-0515) that a host never
+/// needs to reproduce a chrome run's position or classification, so nothing
+/// carries that name across.
+#[derive(Debug, Clone)]
+pub struct V6HybridChromeRun {
+    /// The run as the game painted it — text, style, packed colours.
+    pub run: crate::engine::PxText,
+    /// Where the ring places this run's own glyph origin, in the HOST's terminal
+    /// cells — [`run_cell`]'s answer, or the SQ-0892 block-placement override, or
+    /// the SQ-0783 lone-edge-glyph alignment: whichever one the real terminal
+    /// draw would use for this exact run. May be negative or past the pane's
+    /// edge for a run that starts outside it (`draw_chrome_text_strip` clips
+    /// those at draw time; this reports the unclipped origin).
+    pub col: i32,
+    pub row: i32,
+    /// Whether this run stands over opaque frame art rather than a plain chrome
+    /// ground ([`ChromeRowOracle::over_art`]'s own predicate) — mirrors
+    /// [`V6TextRun::over_art`](crate::render::v6_layout::V6TextRun::over_art)'s
+    /// name. `true` means the run is legitimately part of the game's ARTWORK
+    /// (Zork Zero's banner labels): a host may draw it as a glyph layered over
+    /// its own picture (what kitty/iTerm2 virtual placements do today) or bake
+    /// it into the picture instead — this field says only which ground the run
+    /// stands on, not how to composite it. Always `false` for a run inside
+    /// [`V6HybridChromeLayout::menu_band`], which is never art.
+    pub over_art: bool,
+    /// Whether this run belongs to the bottom-anchored command strip (Journey's
+    /// menu, [`V6HybridChromeLayout::menu_band`]) rather than the main chrome
+    /// ring.
+    pub in_menu_band: bool,
+}
+
+/// The SAME cell layout the terminal Hybrid renderer uses for a v6 frame's
+/// chrome, published for a host that draws that chrome with its OWN fonts
+/// rather than the game's bitmap faces (SQ-1591) — the CELL/hybrid-path sibling
+/// of [`compose_v6_frame`]'s raster answer. Chrome text not on a picture is laid
+/// out in terminal cells at the host's own `cell_px`; only the picture scales.
+///
+/// Built through [`hybrid_chrome_layout`] from the exact classification and
+/// positioning machinery the real Hybrid draw uses
+/// ([`decompose_chrome_strips`], [`menu_band_strips`], [`ChromeRowOracle`],
+/// [`run_cell`], via [`build_hybrid_frame_with`] — the same core
+/// [`build_hybrid_frame`] itself calls for the terminal render) — so a host's
+/// answer cannot drift from what actually gets drawn for the SAME frame.
+///
+/// Deliberately scoped to a run's own ORIGIN, not `draw_chrome_text_strip`'s
+/// later neighbour-relative span adjustments (SQ-0747's rule-stretch, its
+/// claimed-word overwrite guard): both only ever move where a RULE fragment's
+/// edge sits relative to whatever else is on its row, which is a draw-time
+/// refinement of where a strip's own ground is painted, never of where a run's
+/// own first character lands — and it is that origin a host asks a `PxText`'s
+/// position for.
+pub struct V6HybridChromeLayout {
+    /// The story viewport — the region a host should leave to prose (its own or
+    /// the game's) rather than chrome — in the HOST's terminal cells.
+    pub viewport: Rect,
+    /// The same viewport in native v6 pixels (`vp_native`): the rect the story
+    /// text box was actually cut from, which is what a host's own picture
+    /// scaling must agree with.
+    pub viewport_native: (u32, u32, u32, u32),
+    /// The bottom-anchored command strip's own terminal-cell rect(s) — Journey's
+    /// menu band. Empty on every frame with no such band (most).
+    pub menu_band: Vec<Rect>,
+    /// Every chrome run the ring carries — the main ring's and the menu band's
+    /// alike — classified and positioned.
+    pub runs: Vec<V6HybridChromeRun>,
+    /// The click inverse for THIS SAME frame (SQ-1588's raster-path precedent,
+    /// [`V6Frame::menu_band_game_px`]): [`V6ClickMap::map_click`] maps a
+    /// terminal-cell click on whatever a host drew from `runs`/`viewport` back
+    /// to the game pixel the terminal renderer would resolve it to. Built
+    /// through [`crate::render::graphics::build_hybrid_click_map`] — the exact
+    /// mapping [`GraphicsRender::record_hybrid_click_map`] itself calls for the
+    /// TUI's own click handling, so the two cannot disagree.
+    pub click_map: crate::render::graphics::V6ClickMap,
+}
+
+/// A chrome run's terminal-cell origin within a hybrid TEXT strip, laid out the
+/// same way [`draw_chrome_text_strip`] positions it (SQ-1591): SQ-0543's
+/// consecutive-row packing (one game text row per terminal row, from the
+/// strip's own top), SQ-0509/SQ-0742's rule collapsing (reused via
+/// [`collapse_row_rules`] rather than restated — see that call's own doc for why
+/// a raw, uncollapsed run count would answer the SQ-0892 block-placement
+/// question wrong on exactly the screens that need it, Arthur's and Shogun's
+/// glyph-at-a-time status bars), SQ-0892's block placement
+/// ([`strip_native_origin`]), and SQ-1009/SQ-0783's lone box-glyph edge
+/// alignment ([`edge_glyph_col`]).
+fn strip_run_positions(
+    runs: &[crate::engine::PxText],
+    rect: Rect,
+    scale: &crate::render::v6_layout::Scale,
+    cell_px: (u16, u16),
+    pane: Rect,
+    native: (u16, u16),
+    cell: zvm::screen::V6Cell,
+) -> Vec<(crate::engine::PxText, i32, i32)> {
+    use std::collections::BTreeMap;
+    let font_h = i32::from(cell.h());
+    let game_row = |t: &crate::engine::PxText| (t.y.max(1) as i32 - 1) / font_h;
+    let first_row = runs.iter().map(game_row).min().unwrap_or(0);
+    let mut raw: BTreeMap<i32, Vec<&crate::engine::PxText>> = BTreeMap::new();
+    for t in runs {
+        raw.entry(rect.y as i32 + game_row(t) - first_row).or_default().push(t);
+    }
+    let mut by_row: BTreeMap<i32, Vec<(crate::engine::PxText, bool)>> = BTreeMap::new();
+    for (row, mut rr) in raw {
+        rr.sort_by_key(|t| t.x);
+        by_row.insert(row, collapse_row_rules(&rr, scale, cell_px, pane, cell));
+    }
+    let drawn: Vec<&crate::engine::PxText> = by_row.values().flat_map(|r| r.iter().map(|(t, _)| t)).collect();
+    let native_origin = strip_native_origin(&drawn, scale, cell_px, pane, cell);
+    let native_x0 = drawn.iter().map(|t| t.x.max(1) as i32 - 1).min().unwrap_or(0);
+    let mut out = Vec::new();
+    for (row, row_runs) in &by_row {
+        for (t, _rule) in row_runs {
+            let c = match native_origin {
+                Some(o) => o + ((t.x.max(1) as i32 - 1 - native_x0) as f32 / f32::from(cell.w())).round() as i32,
+                None => run_cell(t, scale, cell_px, pane, cell).0,
+            };
+            let c = match t.text.chars().next() {
+                Some(g) if t.text.chars().count() == 1 && is_box_glyph(g) => {
+                    edge_glyph_col(t.x.max(1) as u32 - 1, native.0 as u32, scale, cell_px, pane, cell).unwrap_or(c)
+                }
+                _ => c,
+            };
+            out.push((t.clone(), c, *row));
+        }
+    }
+    out
+}
+
+impl V6HybridChromeLayout {
+    fn from_frame(frame: &HybridFrame, pane: Rect, native: (u16, u16), cell_px: (u16, u16), cell: zvm::screen::V6Cell) -> Self {
+        let mut runs = Vec::new();
+        for s in &frame.strips {
+            if let ChromeStrip::Text(rect, text_runs) = s {
+                for (run, col, row) in strip_run_positions(text_runs, *rect, &frame.scale, cell_px, pane, native, cell) {
+                    runs.push(V6HybridChromeRun { run, col, row, over_art: false, in_menu_band: false });
+                }
+            }
+        }
+        let menu_band: Vec<Rect> = frame
+            .menu_strips
+            .iter()
+            .map(|s| match s {
+                ChromeStrip::Text(r, _) | ChromeStrip::Art(_, r) => *r,
+            })
+            .collect();
+        let menu_scale = frame.menu.as_ref().unwrap_or(&frame.scale);
+        for s in &frame.menu_strips {
+            if let ChromeStrip::Text(rect, text_runs) = s {
+                for (run, col, row) in strip_run_positions(text_runs, *rect, menu_scale, cell_px, pane, native, cell) {
+                    runs.push(V6HybridChromeRun { run, col, row, over_art: false, in_menu_band: true });
+                }
+            }
+        }
+        // SQ-0944: text the game printed ON its own artwork, positioned exactly
+        // like `stamp_runs_over_art` positions it — one `run_cell` per run, no
+        // strip bucketing (over-art runs are never grouped into a strip's own
+        // row layout, since the art strip they sit on carries no text band).
+        for t in &frame.over_art_runs {
+            let (col, row) = run_cell(t, &frame.scale, cell_px, pane, cell);
+            runs.push(V6HybridChromeRun { run: t.clone(), col, row, over_art: true, in_menu_band: false });
+        }
+        let click_scale = if frame.plan_is_menu { frame.menu.as_ref().unwrap_or(&frame.scale) } else { &frame.scale };
+        let click_map = crate::render::graphics::build_hybrid_click_map(pane, click_scale, native, cell_px, frame.packed_text.clone());
+        V6HybridChromeLayout { viewport: frame.viewport, viewport_native: frame.vp_native, menu_band, runs, click_map }
+    }
+}
+
+/// The Hybrid chrome layout for this frame, at the HOST's own text size
+/// (SQ-1591) — see [`V6HybridChromeLayout`] for the full shape and the raster
+/// sibling this answers for the hybrid path.
+///
+/// `cell_px` is the HOST's own font metrics, not lanthorn's picker's — that is
+/// the whole point of this function: a host drawing this chrome with its own
+/// font asks the ring to lay out at ITS cell size, and only the picture beneath
+/// it scales. `native` and `pane` match [`build_hybrid_frame`]'s own `native`
+/// and `area` — the v6 screen's native pixel extent and the story pane's cell
+/// rect (`render_story_pane`'s `area`).
+///
+/// `None` wherever the terminal Hybrid renderer itself would draw no chrome
+/// ring for this frame at all: no story window [`V6Layout::classify_windows`]
+/// could find, or a full-picture takeover
+/// ([`picture_takeover_reason`] — a host should fall back to its raster answer,
+/// [`compose_v6_frame`], on either).
+///
+/// Two picker-derived decisions [`build_hybrid_frame`] would otherwise ask a
+/// real `Picker` about have no host equivalent, so this decides them outright
+/// rather than asking one:
+/// - The v6 pixel lock is treated as APPLICABLE — `state.config.v6_pixel_lock`
+///   still gates whether it actually fires, but [`v6_pixel_lock_applies`]'s own
+///   `false` answer exists only for half-blocks, whose backend has no sub-cell
+///   resolution to snap. A host with its own scalable image renderer is never
+///   that backend, so it is never right to tell it the lock is inert.
+/// - Glyphs are treated as ALWAYS layerable over art, so every run gets a real
+///   `over_art` classification rather than [`backend_layers_glyphs_over_art`]'s
+///   gate silently emptying it (today's answer for kitty, sixel and iTerm2
+///   alike, because lanthorn's own placements are virtual and a glyph would
+///   erase one). A host composes its own text and its own picture in whatever
+///   order and however it likes — it is never virtual-placement-constrained the
+///   way a real terminal graphics protocol is — so the choice of whether to
+///   draw an over-art run as a glyph or bake it into the picture is the host's
+///   to make, not this function's to make for it by omission.
+///
+/// [`v6_pixel_lock_applies`]: crate::render::graphics::v6_pixel_lock_applies
+pub fn hybrid_chrome_layout(
+    layout: &crate::render::v6_layout::V6Layout<'_>,
+    native: (u16, u16),
+    pane: Rect,
+    cell_px: (u16, u16),
+    state: &AppState,
+) -> Option<V6HybridChromeLayout> {
+    let story = layout.story?;
+    if picture_takeover_reason(story, &layout.chrome, layout.story_gfx, native).is_some() {
+        return None;
+    }
+    let (default_fg, default_bg) = v6_host_pair(state);
+    // `hkey` is a cache key for the TUI's per-frame replay (`v6_hybrid_gen`) and
+    // plays no part in the computation itself — this call is pure and always
+    // recomputes, exactly like `compose_v6_frame` does for the raster path, so
+    // any value here is fine; 0 is simplest.
+    let frame = build_hybrid_frame_with(0, layout, story, native, pane, cell_px, true, true, 0, default_fg, default_bg, state);
+    Some(V6HybridChromeLayout::from_frame(&frame, pane, native, cell_px, state.v6_text.cell()))
 }
 
 /// A cheap change key for the whole v6 raster composite (SQ-0469). It folds

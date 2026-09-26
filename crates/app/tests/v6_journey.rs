@@ -19,6 +19,8 @@ mod v6_journey_boot_text;
 mod v6_journey_menu;
 #[path = "suites/v6_journey_menu_band.rs"]
 mod v6_journey_menu_band;
+#[path = "suites/v6_hybrid_chrome_layout.rs"]
+mod v6_hybrid_chrome_layout;
 #[path = "suites/v6_journey_prose_containment.rs"]
 mod v6_journey_prose_containment;
 #[path = "suites/sq1579_journey_no_map.rs"]

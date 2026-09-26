@@ -806,6 +806,37 @@ impl PackedText {
     }
 }
 
+/// The [`V6ClickMap`] the HYBRID draw path records (SQ-1591, extracted from
+/// [`GraphicsRender::record_hybrid_click_map`] so a host with no `GraphicsRender`
+/// of its own — [`crate::render::screen::hybrid_chrome_layout`] — can build the
+/// exact same map for the SAME frame rather than restating this field mapping.
+/// `record_hybrid_click_map` is now a thin wrapper storing what this returns.
+pub fn build_hybrid_click_map(
+    pane: Rect,
+    scale: &crate::render::v6_layout::Scale,
+    native: (u16, u16),
+    cell_px: (u16, u16),
+    packed_text: Vec<PackedText>,
+) -> V6ClickMap {
+    let (cw, ch) = (cell_px.0.max(1), cell_px.1.max(1));
+    V6ClickMap {
+        pane_x: pane.x,
+        pane_y: pane.y,
+        cell_w: cw,
+        cell_h: ch,
+        img_x: scale.off_x as f32,
+        img_y: scale.off_y as f32,
+        img_w: native.0 as f32 * scale.s,
+        img_h: native.1 as f32 * scale.s,
+        // The hybrid ring draws the game's screen and nothing below it — the
+        // SQ-1032 extension is the raster composite's alone — so the canvas IS
+        // the screen here and the bound in `map_click` is unreachable.
+        canvas: native,
+        screen: native,
+        packed_text,
+    }
+}
+
 impl V6ClickMap {
     /// Map a terminal cell click at `(col, row)` to a 1-based game pixel
     /// `(x, y)`, or `None` when the cell lies outside the drawn game image
@@ -2469,23 +2500,7 @@ impl GraphicsRender {
         cell_px: (u16, u16),
         packed_text: Vec<PackedText>,
     ) {
-        let (cw, ch) = (cell_px.0.max(1), cell_px.1.max(1));
-        self.last_v6_map = Some(V6ClickMap {
-            pane_x: pane.x,
-            pane_y: pane.y,
-            cell_w: cw,
-            cell_h: ch,
-            img_x: scale.off_x as f32,
-            img_y: scale.off_y as f32,
-            img_w: native.0 as f32 * scale.s,
-            img_h: native.1 as f32 * scale.s,
-            // The hybrid ring draws the game's screen and nothing below it — the
-            // SQ-1032 extension is the raster composite's alone — so the canvas IS
-            // the screen here and the bound in `map_click` is unreachable.
-            canvas: native,
-            screen: native,
-            packed_text,
-        });
+        self.last_v6_map = Some(build_hybrid_click_map(pane, scale, native, cell_px, packed_text));
     }
 
     /// Record the click map for the v6 CELL path — a terminal with no image
