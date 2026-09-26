@@ -89,15 +89,23 @@ pub fn resize_glulx(session: &mut dyn Engine, (cols, rows): (u16, u16)) -> bool 
 /// own font, or a window moved to a different display). Resizes every open
 /// graphics canvas to `(window cells) × char_px` and drives the game's own
 /// redraw the same way [`resize_glulx`] does for a terminal-size change —
-/// there is no separate mechanism. `false` for any other engine.
+/// there is no separate mechanism. `false` for any other engine, and
+/// `state.glk_cell_px` is left untouched on that branch.
 ///
 /// Fractional, matching `TerminalFacts::glk_cell_px` (SQ-1603) — each open
 /// canvas rounds its own `cells × char_px` independently rather than sharing
 /// one pre-rounded ratio; see `AppGlk::canvas_size`.
-pub fn set_glk_cell_px(session: &mut dyn Engine, char_px: (f64, f64)) -> bool {
+///
+/// Also carries `char_px` onto [`AppState::glk_cell_px`] (SQ-1601), the same
+/// field `host::boot::boot_story` seeds at launch — so a later `@restart`
+/// (`host::reset::reset_game`, which re-derives its own `char_px` from that
+/// field) re-boots at whatever this call most recently set live, rather than
+/// the stale value the session originally booted with.
+pub fn set_glk_cell_px(session: &mut dyn Engine, state: &mut AppState, char_px: (f64, f64)) -> bool {
     match session.as_any_mut().downcast_mut::<GlulxSession>() {
         Some(gs) => {
             gs.set_char_px(char_px);
+            state.glk_cell_px = Some(char_px);
             true
         }
         None => false,

@@ -331,11 +331,12 @@ fn set_glk_cell_px_resizes_open_graphics_canvases_live() {
     const FROM_PX: (u32, u32) = (8, 16);
     const TO_PX: (u32, u32) = (13, 29);
     let Some(mut sess) = into_gameplay((FROM_PX.0 as f64, FROM_PX.1 as f64)) else { return };
+    let mut state = app::state::AppState::default();
 
     let before = find_graphics(&sess, 19);
     assert_eq!(before.canvas.dimensions(), (54 * FROM_PX.0, FROM_PX.1));
 
-    let changed = app::host::screen::set_glk_cell_px(&mut sess, (TO_PX.0 as f64, TO_PX.1 as f64));
+    let changed = app::host::screen::set_glk_cell_px(&mut sess, &mut state, (TO_PX.0 as f64, TO_PX.1 as f64));
     assert!(changed, "a Glulx session accepts the cell-size change");
     assert_eq!(sess.char_pixels(), TO_PX);
     assert!(!Engine::has_quit(&sess), "resizing must not itself end the game");
@@ -352,11 +353,23 @@ fn set_glk_cell_px_resizes_open_graphics_canvases_live() {
     let rule = find_graphics(&sess, 29);
     assert_eq!(rule.canvas.width(), 2, "the game's own 2px request is unaffected by the host's cell size");
     assert_eq!(rule.canvas.height(), ROWS as u32 * TO_PX.1);
+
+    // SQ-1601: the live call must also carry the new size onto `AppState`, not
+    // just the engine's own `char_px` — otherwise a later `@restart` re-reads
+    // the stale boot-time value (see `restart_keeps_the_live_set_glk_cell_px`
+    // below for the end-to-end proof).
+    assert_eq!(
+        state.glk_cell_px,
+        Some((TO_PX.0 as f64, TO_PX.1 as f64)),
+        "a live cell-size change must also update AppState.glk_cell_px"
+    );
 }
 
 /// A cell-size change delivered while no engine other than Glulx is running
 /// is a no-op that reports `false`, the same contract `resize_glulx` has for
-/// a Z-machine session (`host::screen::resize_glulx`'s own doc).
+/// a Z-machine session (`host::screen::resize_glulx`'s own doc) — and must
+/// leave `state.glk_cell_px` completely untouched, so a failed/no-op call
+/// can never overwrite a previously-valid value.
 #[test]
 fn set_glk_cell_px_is_a_no_op_for_a_non_glulx_engine() {
     // A trivial v3 story: version byte + a QUIT opcode at the initial PC, just
@@ -372,7 +385,14 @@ fn set_glk_cell_px_is_a_no_op_for_a_non_glulx_engine() {
     buf[0x0E] = 0x00; // static memory
     buf[0x40] = 0xBA; // QUIT
     let mut sess = app::session::GameSession::new(buf, true, false, None).expect("a minimal v3 story boots");
-    assert!(!app::host::screen::set_glk_cell_px(&mut sess, (10.0, 23.0)), "not a Glulx engine");
+    let mut state = app::state::AppState::default();
+    state.glk_cell_px = Some((5.0, 6.0));
+    assert!(!app::host::screen::set_glk_cell_px(&mut sess, &mut state, (10.0, 23.0)), "not a Glulx engine");
+    assert_eq!(
+        state.glk_cell_px,
+        Some((5.0, 6.0)),
+        "a no-op call must leave a previously-valid state.glk_cell_px untouched"
+    );
 }
 
 // ── @restart parity: AppState::glk_cell_px survives reset_game ─────────────
@@ -409,6 +429,49 @@ fn restart_keeps_the_hosts_glk_cell_px_not_the_8x16_fallback() {
         gs.char_pixels(),
         (10, 23),
         "an @restart must agree with the launch's host-declared cell size, not the picker/8x16 fallback"
+    );
+    let _ = std::fs::remove_dir_all(&home);
+}
+
+/// SQ-1601: the actual reported bug, end to end. A host that later changes the
+/// Glk cell size LIVE via `host::screen::set_glk_cell_px` (e.g. a resize) must
+/// have an `@restart` re-boot at that NEW live value, not the stale value the
+/// session originally booted with — `set_glk_cell_px` has to carry its own
+/// change onto `AppState::glk_cell_px` for `reset_game`'s re-read of that
+/// field (see `restart_keeps_the_hosts_glk_cell_px_not_the_8x16_fallback`
+/// just above) to ever see it.
+#[test]
+fn restart_keeps_the_live_set_glk_cell_px_not_the_stale_boot_value() {
+    let Some(story) = story_path() else { return };
+    let home = app::scratch_dir("sq1601-restart-live");
+    let mut b = boot_via_terminal_facts(story, &home, Some((8.0, 16.0)));
+    {
+        let gs = b.session.as_any_mut().downcast_mut::<GlulxSession>().expect("Glulx story");
+        assert_eq!(gs.char_pixels(), (8, 16), "premise: the launch booted at the ORIGINAL boot-time value");
+    }
+
+    // Live cell-size change, distinct from the boot-time value above — this
+    // is the resize a host would drive after the initial boot.
+    let changed = app::host::screen::set_glk_cell_px(&mut *b.session, &mut b.state, (13.0, 29.0));
+    assert!(changed, "a Glulx session accepts the live cell-size change");
+    assert_eq!(b.state.glk_cell_px, Some((13.0, 29.0)), "the live call updates AppState.glk_cell_px");
+
+    app::host::reset::reset_game(
+        &mut *b.session,
+        &mut b.mapper,
+        &mut b.state,
+        &b.story_bytes,
+        &b.story_path,
+        &b.game_dir,
+        None,
+        app::host::reset::ResetOptions::default(),
+    );
+
+    let gs = b.session.as_any_mut().downcast_mut::<GlulxSession>().expect("still Glulx after @restart");
+    assert_eq!(
+        gs.char_pixels(),
+        (13, 29),
+        "an @restart must re-boot at the LIVE-set cell size, not the stale original boot-time value (8x16)"
     );
     let _ = std::fs::remove_dir_all(&home);
 }
