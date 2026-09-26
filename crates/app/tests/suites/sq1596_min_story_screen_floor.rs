@@ -52,7 +52,9 @@ use std::path::{Path, PathBuf};
 
 use app::config::Config;
 use app::engine_helpers::zvm_session_opt;
-use app::host::{boot_story, BootRequest, BootedStory, LaunchFlags, QuietBoot, TerminalFacts};
+use app::host::{
+    boot_story, story_screen_in, BootRequest, BootedStory, LaunchFlags, QuietBoot, TerminalFacts,
+};
 use app::launch_options::LaunchOverrides;
 
 const STORY: &str = "bureaucracy-r116-s870602.z4";
@@ -363,6 +365,61 @@ fn a_pin_wins_over_the_floor_after_restart_too() {
         declared_screen(&b),
         (8, 12),
         "the pin is what the story is told after @restart too, not the carried floor's value"
+    );
+    let _ = std::fs::remove_dir_all(&home);
+}
+
+// ── SQ-1606: the search itself must be reachable by a host directly ────────
+
+/// A host at a live resize wants the same search boot/`@restart` already use,
+/// not only through `TerminalFacts::min_story_screen`. This calls
+/// `app::host::boot::min_terminal_size_for_story_floor` directly, exactly as
+/// an embedding host would: pulling `cfg`/`cs`/`garglk_overlay`/`layout` off
+/// a booted session's own live `AppState`, at a real terminal size (`NARROW`)
+/// below `FLOOR`, then feeds the returned terminal size back through the
+/// same pane-derivation the boot path uses (`story_screen_in`) and confirms
+/// it actually clears the floor.
+///
+/// Before SQ-1606 widened `min_terminal_size_for_story_floor` from
+/// `pub(crate)` to `pub`, this integration test — compiled as a separate
+/// crate that sees only `app`'s public API — could not even COMPILE. That
+/// compile failure, confirmed before this fix and gone after it, is this
+/// test's own falsification.
+#[test]
+fn a_host_can_call_the_search_directly_at_a_live_resize() {
+    if !story_path().is_file() {
+        eprintln!("SKIP: {} absent", story_path().display());
+        return;
+    }
+    let home = app::scratch_dir("sq1606-host-direct-call");
+    // Boot with no floor set: this test drives the search FUNCTION directly,
+    // not the TerminalFacts::min_story_screen boot mechanism exercised above.
+    let (b, _) = boot_and_first_turn(
+        headless_config(&home),
+        TerminalFacts { size: Some(NARROW), ..TerminalFacts::default() },
+        &home,
+    );
+
+    let (cols, rows) = app::host::boot::min_terminal_size_for_story_floor(
+        &b.state.config,
+        &b.state.colors,
+        &b.state.garglk_overlay,
+        b.state.layout,
+        NARROW,
+        FLOOR,
+    );
+    assert!(
+        cols > NARROW.0 || rows > NARROW.1,
+        "NARROW misses FLOOR in at least one dimension (per this suite's own premise), \
+         so the search called directly must bump something: got {:?}",
+        (cols, rows)
+    );
+
+    let seeded = story_screen_in(&b.state, (cols, rows)).expect("a non-zero pane");
+    assert!(
+        seeded.0 >= FLOOR.1 && seeded.1 >= FLOOR.0,
+        "the terminal size returned by a direct host call must clear the floor once fed back \
+         through the same pane-derivation the boot path uses: seeded={seeded:?} floor={FLOOR:?}"
     );
     let _ = std::fs::remove_dir_all(&home);
 }

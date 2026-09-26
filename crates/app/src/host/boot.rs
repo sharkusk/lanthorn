@@ -364,7 +364,15 @@ pub fn story_screen_in(state: &AppState, (term_cols, term_rows): (u16, u16)) -> 
 /// with the pin. Explicit intent wins, exactly as it already does in
 /// [`crate::render::screen::story_screen_dims`] and
 /// [`crate::render::screen::declared_story_screen_dims`].
-pub(crate) fn min_terminal_size_for_story_floor(
+///
+/// **Public since SQ-1606** for an embedding host to reach directly at a live
+/// resize, not only through boot/`@restart`'s own calls above — the same
+/// search, with the same six plain values a host already holds off its own
+/// `AppState` (`state.config`, `state.colors`, `state.garglk_overlay`,
+/// `state.layout`), lets a host re-derive the smallest terminal size that
+/// clears `state.min_story_screen` before laying out a resize itself, rather
+/// than re-implementing this search against `story_screen_in` by hand.
+pub fn min_terminal_size_for_story_floor(
     cfg: &Config,
     cs: &crate::colors::ColorScheme,
     garglk_overlay: &Option<crate::garglk_ini::GarglkOverlay>,
