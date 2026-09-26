@@ -111,6 +111,21 @@ pub struct Pager {
     /// `AppState::default()` in the test suite; do not rename to a
     /// `baseline_valid` that would default the wrong way.
     pub baseline_stale: bool,
+    /// True when [`AppState::mark_screen_clear`](crate::state::AppState::
+    /// mark_screen_clear) ran during the turn now armed — set there, alongside
+    /// `pending_before_rows`'s own arm, and consumed (read AND reset) by
+    /// [`apply_frame`] so it can never leak into a later, unrelated frame.
+    ///
+    /// `AppState::clear_anchor` sounds like the same fact but isn't: it is a
+    /// persistent transcript-line index the renderer pins post-clear output to,
+    /// and it survives across turns — it can answer "where was the most recent
+    /// clear", never "did THIS turn clear". This field answers exactly that,
+    /// for exactly one consumer: `mark_screen_clear` unconditionally parks
+    /// `transcript_scroll` at 0, which otherwise makes `apply_frame`'s
+    /// `at_bottom` check true regardless of where the reader actually was,
+    /// arming a follow-EASE animation on a turn that should just snap to place
+    /// instantly (SQ-1607).
+    pub screen_cleared_this_turn: bool,
 }
 
 impl Pager {
@@ -341,6 +356,7 @@ pub fn apply_frame(
     }
     if state.pager.baseline_stale {
         state.pager.pending_before_rows = None;
+        state.pager.screen_cleared_this_turn = false;
         state.pager.active = false;
         state.transcript_scroll = 0;
         state.last_transcript_total_rows = total_rows;
@@ -348,13 +364,23 @@ pub fn apply_frame(
         return;
     }
     state.transcript_scroll = state.transcript_scroll.min(max_scroll);
+    // SQ-1607: consumed here, alongside `pending_before_rows`, regardless of
+    // whether an arm is pending — so a clear on a non-arming turn can never
+    // leak into a later, unrelated frame's decision.
+    let cleared_this_turn = std::mem::take(&mut state.pager.screen_cleared_this_turn);
     if let Some(before) = state.pager.pending_before_rows.take() {
         // SQ-1595: was the reader already at (or following) the bottom before
         // this turn's output arrived? Only then does the transition to
         // wherever it lands get an autoscroll-follow ease — a reader scrolled
         // into history is never dragged back down, by this or by anything
         // else, exactly today's behavior of leaving their view alone.
-        let at_bottom = state.transcript_scroll == 0;
+        //
+        // `mark_screen_clear` unconditionally parks `transcript_scroll` at 0,
+        // which makes `at_bottom` true here even when the reader had scrolled
+        // away before the clear — so a turn that cleared the screen (SQ-1607)
+        // is excluded from the follow-ease below and takes the instant-jump
+        // path instead, exactly as if the reader were not at the bottom.
+        let at_bottom = state.transcript_scroll == 0 && !cleared_this_turn;
         // The pre-turn bottom's equivalent offset now that the transcript has
         // grown by `added` rows: showing the same absolute rows the reader was
         // just looking at means sitting `added` rows back from the NEW bottom.
@@ -536,6 +562,56 @@ mod tests {
         let a = state.scroll_anim.as_ref().expect("a follow-ease must be armed");
         assert_eq!(a.from, 5, "display starts 5 rows back — where the old bottom now sits");
         assert_eq!(a.target(), 0);
+    }
+
+    /// SQ-1607: a turn that CLEARED the screen (e.g. Anchorhead's opening
+    /// `erase_window`) must snap to place instantly, never ease — even though
+    /// `mark_screen_clear` unconditionally parks `transcript_scroll` at 0,
+    /// which makes `apply_frame`'s `at_bottom` check true regardless of where
+    /// the reader actually was. Same shape as
+    /// `apply_frame_arms_a_follow_ease_when_at_bottom_and_output_fits` above
+    /// (5 rows added into a 10-row viewport, fits, no [more]) but going through
+    /// `mark_screen_clear` first — contrast the two: that one asserts a
+    /// follow-ease IS armed, this one asserts none is.
+    #[test]
+    fn apply_frame_skips_follow_ease_when_the_turn_cleared_the_screen() {
+        let mut state = crate::state::AppState::default();
+        state.mark_screen_clear();
+        assert_eq!(state.transcript_scroll, 0, "mark_screen_clear always parks at the bottom");
+        assert!(state.pager.screen_cleared_this_turn, "premise: the clear flag is set");
+        state.pager.arm(20); // before_rows = 20, as if armed for the clearing turn
+        // 5 rows added (25 - 20), viewport 10: fits, no [more].
+        apply_frame(&mut state, 15, 10, 0, 25, true);
+        assert!(!state.pager.active, "5 added rows fit in a 10-row viewport");
+        assert_eq!(state.transcript_scroll, 0, "already at the bottom from the clear");
+        assert!(
+            state.scroll_anim.is_none(),
+            "a clearing turn snaps instantly — no follow-ease, unlike the non-clearing case above"
+        );
+        assert!(!state.pager.screen_cleared_this_turn, "the flag must not leak into a later frame");
+    }
+
+    /// The same exclusion when the pager DOES engage (output overflows a
+    /// clearing turn's repaint): the reader still lands at the pager's park,
+    /// but via the ordinary instant-jump path (`scroll_transcript_to`), never
+    /// the Follow-kind ease `apply_frame_follow_ease_target_is_clamped_to_
+    /// the_pager_park` pins for the non-clearing case with identical numbers.
+    #[test]
+    fn apply_frame_jumps_instead_of_easing_when_the_pager_engages_on_a_clearing_turn() {
+        let mut state = crate::state::AppState::default();
+        state.mark_screen_clear();
+        state.pager.arm(2);
+        apply_frame(&mut state, 30, 10, 1, 27, true);
+        assert!(state.pager.active, "25 added rows overflow a 10-row viewport");
+        assert_eq!(state.transcript_scroll, 16, "parked exactly where the pager would park");
+        if let Some(a) = state.scroll_anim.as_ref() {
+            assert_ne!(
+                a.kind,
+                crate::state::ScrollAnimKind::Follow,
+                "a clearing turn must never arm a Follow ease"
+            );
+        }
+        assert!(!state.pager.screen_cleared_this_turn, "the flag must not leak into a later frame");
     }
 
     /// The reader scrolled into history before this output arrived: nothing

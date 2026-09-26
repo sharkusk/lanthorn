@@ -5208,10 +5208,18 @@ impl AppState {
     /// everything above the boundary stays reachable by scrolling up — a
     /// scrollback-preserving "clear" rather than a destructive wipe. Also snaps
     /// the view to the bottom so the cleared screen is what's shown.
+    ///
+    /// Also flags [`Pager::screen_cleared_this_turn`](crate::pager::Pager::
+    /// screen_cleared_this_turn) so the next `pager::apply_frame` — which the
+    /// caller arms for AFTER this runs — knows the `at_bottom` it's about to
+    /// observe (unconditionally true, from the snap above) came from a clear
+    /// rather than an organically-followed reader, and takes the instant-jump
+    /// path instead of arming a follow-ease (SQ-1607).
     pub fn mark_screen_clear(&mut self) {
         self.clear_anchor = Some(self.transcript.len());
         self.transcript_scroll = 0;
         self.scroll_anim = None;
+        self.pager.screen_cleared_this_turn = true;
     }
 
     /// Truncate the transcript — and every parallel sidecar vec — back to `len`,
