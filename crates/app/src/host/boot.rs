@@ -356,7 +356,7 @@ pub fn story_screen_in(state: &AppState, (term_cols, term_rows): (u16, u16)) -> 
 /// with the pin. Explicit intent wins, exactly as it already does in
 /// [`crate::render::screen::story_screen_dims`] and
 /// [`crate::render::screen::declared_story_screen_dims`].
-fn min_terminal_size_for_story_floor(
+pub(crate) fn min_terminal_size_for_story_floor(
     cfg: &Config,
     cs: &crate::colors::ColorScheme,
     garglk_overlay: &Option<crate::garglk_ini::GarglkOverlay>,
@@ -1394,6 +1394,7 @@ pub fn boot_story(req: BootRequest<'_>, hooks: &mut dyn BootHooks) -> Result<Boo
     state.game_picker = game_picker;
     state.game_picker_query_answered = game_picker_query_answered;
     state.glk_cell_px = glk_cell_px;
+    state.min_story_screen = min_story_screen;
     state.term_default_colors = term_default_colors;
     state.query_sweep = query_sweep;
     state.pane_sizes = crate::state::PaneSizes {

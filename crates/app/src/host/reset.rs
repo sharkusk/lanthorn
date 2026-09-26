@@ -235,7 +235,27 @@ pub fn reset_game(
                 // post-boot, which is exactly what SQ-0680 established is too
                 // late. The v6 arm never saw it, because that arm takes its
                 // screen from `boot.screen_px`.
-                terminal_size.and_then(|size| super::story_screen_in(state, size)),
+                // SQ-1602: the same floor the launch may have applied
+                // (`TerminalFacts::min_story_screen`, SQ-1596), carried onto
+                // `state.min_story_screen` and re-applied here exactly as
+                // `boot_story` applies it — else a restart of a story booted
+                // under a floor (Bureaucracy's 40x19) can hit its own
+                // `[Screen too small.]` refusal again, at the SAME real
+                // terminal size the launch already worked around.
+                terminal_size.and_then(|size| {
+                    let size = match state.min_story_screen {
+                        Some(floor) => super::boot::min_terminal_size_for_story_floor(
+                            &state.config,
+                            &state.colors,
+                            &state.garglk_overlay,
+                            state.layout,
+                            size,
+                            floor,
+                        ),
+                        None => size,
+                    };
+                    super::story_screen_in(state, size)
+                }),
                 // A restart re-draws the seed the same way the launch did
                 // (SQ-0811): a pinned `random_seed` replays the same game, and an
                 // unpinned one deals a fresh one — which is what restarting a

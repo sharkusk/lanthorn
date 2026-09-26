@@ -35,6 +35,18 @@
 //!
 //! `stories/` is gitignored (CLAUDE.md), so every case here skips vacuously
 //! without it.
+//!
+//! # SQ-1602: the floor must survive `@restart` too
+//!
+//! `TerminalFacts::min_story_screen` is read once, at boot, into
+//! [`app::state::AppState::min_story_screen`] — mirroring how SQ-1598 carries
+//! `glk_cell_px` forward the same way — so `host::reset::reset_game` (the
+//! engine behind `@restart`) can re-apply the SAME floor the launch used
+//! rather than silently reverting to the real (narrow) terminal size, which
+//! for a story booted under a floor would otherwise hit its own
+//! `[Screen too small.]` refusal again on restart. The tests below drive
+//! `reset_game` directly, the same call shape
+//! `sq1598_glk_cell_px.rs`'s own restart test uses.
 
 use std::path::{Path, PathBuf};
 
@@ -211,5 +223,146 @@ fn only_the_dimension_that_falls_short_gets_bumped() {
         FLOOR.0
     );
     assert!(!turn1.contains("[Screen too small.]"), "the bumped cols clear the refusal too; turn was {turn1:?}");
+    let _ = std::fs::remove_dir_all(&home);
+}
+
+// ── SQ-1602: @restart parity — the floor must survive reset_game too ───────
+
+/// The real repro: boot Bureaucracy narrow WITH a floor (as the first test
+/// above already proves clears the boot-time refusal), then `@restart`
+/// (`reset_game`) at the SAME narrow terminal size, and confirm the
+/// restarted session also does not hit `[Screen too small.]` — i.e. the
+/// floor carried from `TerminalFacts::min_story_screen` onto
+/// `AppState::min_story_screen` (SQ-1602) survives the restart.
+///
+/// Falsified by dropping `reset.rs`'s new floor-check back to the old bare
+/// `terminal_size.and_then(|size| super::story_screen_in(state, size))` —
+/// this test then fails, again showing the refusal on restart.
+#[test]
+fn restart_keeps_the_hosts_floor_not_the_narrow_real_pane() {
+    if !story_path().is_file() {
+        eprintln!("SKIP: {} absent", story_path().display());
+        return;
+    }
+    let home = app::scratch_dir("sq1602-restart-with-floor");
+    let (mut b, turn1) = boot_and_first_turn(
+        headless_config(&home),
+        TerminalFacts { size: Some(NARROW), min_story_screen: Some(FLOOR), ..TerminalFacts::default() },
+        &home,
+    );
+    assert!(
+        !turn1.contains("[Screen too small.]"),
+        "premise: the same narrow pane with a floor set must boot fine; turn was {turn1:?}"
+    );
+    assert_eq!(
+        b.state.min_story_screen,
+        Some(FLOOR),
+        "premise: the boot's floor is carried onto AppState for reset.rs to re-read"
+    );
+
+    app::host::reset::reset_game(
+        &mut *b.session,
+        &mut b.mapper,
+        &mut b.state,
+        &b.story_bytes,
+        &b.story_path,
+        &b.game_dir,
+        Some(NARROW),
+        app::host::reset::ResetOptions::default(),
+    );
+
+    let restart_turn1 = b.session.submit("").transcript;
+    assert!(
+        !restart_turn1.contains("[Screen too small.]"),
+        "an @restart at the SAME narrow terminal size must still clear Bureaucracy's refusal; turn was {restart_turn1:?}"
+    );
+    assert!(
+        restart_turn1.contains("licence") || restart_turn1.contains("Important"),
+        "past the refusal, the restarted turn reaches Bureaucracy's licence-form intro again; turn was {restart_turn1:?}"
+    );
+    let _ = std::fs::remove_dir_all(&home);
+}
+
+/// Negative control: the SAME restart scenario, but with
+/// `AppState::min_story_screen` cleared before the restart — proving the
+/// floor is what does the work above, not some other boot-vs-restart
+/// difference (e.g. the restarted session simply inheriting a wider screen
+/// some other way).
+#[test]
+fn restart_without_the_floor_hits_the_refusal_again() {
+    if !story_path().is_file() {
+        eprintln!("SKIP: {} absent", story_path().display());
+        return;
+    }
+    let home = app::scratch_dir("sq1602-restart-floor-cleared");
+    let (mut b, turn1) = boot_and_first_turn(
+        headless_config(&home),
+        TerminalFacts { size: Some(NARROW), min_story_screen: Some(FLOOR), ..TerminalFacts::default() },
+        &home,
+    );
+    assert!(!turn1.contains("[Screen too small.]"), "premise: boots fine with the floor; turn was {turn1:?}");
+
+    // Clear the carried floor before the restart — simulating a host state
+    // that never had one, without changing anything else about the scenario.
+    b.state.min_story_screen = None;
+
+    app::host::reset::reset_game(
+        &mut *b.session,
+        &mut b.mapper,
+        &mut b.state,
+        &b.story_bytes,
+        &b.story_path,
+        &b.game_dir,
+        Some(NARROW),
+        app::host::reset::ResetOptions::default(),
+    );
+
+    let restart_turn1 = b.session.submit("").transcript;
+    assert!(
+        restart_turn1.contains("[Screen too small.]"),
+        "with no floor carried, an @restart at the same narrow terminal size must hit the refusal again; turn was {restart_turn1:?}"
+    );
+    let _ = std::fs::remove_dir_all(&home);
+}
+
+/// Pin precedence on restart, mirroring `a_pin_wins_over_the_floor` above: a
+/// user-pinned `virtual_screen_cols`/`virtual_screen_rows` must still outrank
+/// the carried floor after `@restart`, not just at the original boot.
+#[test]
+fn a_pin_wins_over_the_floor_after_restart_too() {
+    if !story_path().is_file() {
+        eprintln!("SKIP: {} absent", story_path().display());
+        return;
+    }
+    let home = app::scratch_dir("sq1602-restart-pin-wins");
+    let mut cfg = headless_config(&home);
+    // Pinned NARROWER than the floor in both dimensions.
+    cfg.virtual_screen_cols = Some(12);
+    cfg.virtual_screen_rows = Some(8);
+    let terminal =
+        TerminalFacts { size: Some(NARROW), min_story_screen: Some(FLOOR), ..TerminalFacts::default() };
+    let (mut b, _) = boot_and_first_turn(cfg, terminal, &home);
+    assert_eq!(
+        declared_screen(&b),
+        (8, 12),
+        "premise: the pin wins over the floor at the original boot too"
+    );
+
+    app::host::reset::reset_game(
+        &mut *b.session,
+        &mut b.mapper,
+        &mut b.state,
+        &b.story_bytes,
+        &b.story_path,
+        &b.game_dir,
+        Some(NARROW),
+        app::host::reset::ResetOptions::default(),
+    );
+
+    assert_eq!(
+        declared_screen(&b),
+        (8, 12),
+        "the pin is what the story is told after @restart too, not the carried floor's value"
+    );
     let _ = std::fs::remove_dir_all(&home);
 }

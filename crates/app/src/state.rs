@@ -3645,6 +3645,15 @@ pub struct AppState {
     /// picker/8×16 fallback, mirroring why `game_picker` above is carried the
     /// same way.
     pub glk_cell_px: Option<(u32, u32)>,
+    /// The host's own stated floor on the pre-boot story pane, carried from
+    /// `TerminalFacts::min_story_screen` (SQ-1596) — `None` when the host left
+    /// no floor in force. Not itself read for anything past boot; kept so an
+    /// `@restart` (`host::reset`) re-applies the SAME floor the launch used
+    /// rather than silently reverting to the real terminal size, which for a
+    /// story below its own minimum (Bureaucracy's 40x19) means hitting
+    /// `[Screen too small.]` again on a restart the host already worked around
+    /// once (SQ-1602). Mirrors `glk_cell_px` just above.
+    pub min_story_screen: Option<(u16, u16)>,
     /// Bytes and frame flushes the ratatui backend has written to the terminal,
     /// for `/dump-terminal` (SQ-0994). `None` in every headless harness, which
     /// builds no terminal at all — and the report says "unavailable" rather than
@@ -3934,6 +3943,7 @@ impl Default for AppState {
             game_picker: None,
             game_picker_query_answered: false,
             glk_cell_px: None,
+            min_story_screen: None,
             term_traffic: None,
             term_default_colors: crate::term_colors::TermDefaultColors::default(),
             query_sweep: crate::query_sweep::QuerySweep::default(),
