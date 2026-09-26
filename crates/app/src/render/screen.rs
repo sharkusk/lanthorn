@@ -3585,7 +3585,7 @@ fn compose_v6_frame_into(
                 let adv = inputs.face.advance(ch);
                 glyphs.blit(
                     &mut canvas, ch, pen, sy + last_row * u32::from(cell.h()), adv, u32::from(cell.h()), prompt_ink, Some(block), 0, inputs.face,
-                    v6::V6RunSource::Pager,
+                    v6::V6RunSource::Pager, false, false,
                 );
                 pen += adv;
             }
@@ -7912,9 +7912,23 @@ fn fill_menu_flank_extension(
                 // other chrome run does.
                 match bg {
                     Some(block) => {
+                        // SQ-1592: `t` is the whole "row" this continuation
+                        // carries down, so its own reverse bit and text are
+                        // `row_is_reverse_bar`'s answer for it — which for a
+                        // lone reversed space (a rule/divider, the documented
+                        // "furniture" case above) is always `false`, matching
+                        // every other divider column. `over_art` is asked fresh
+                        // at each continuation row's own position: rows still
+                        // inside the original native canvas can sit on real
+                        // artwork the gap opened around, rows past it never can
+                        // (`region_has_opaque` reads no pixels past `gfx`'s own
+                        // bounds), so this can't be answered once for the whole
+                        // run the way the ink pair above was.
+                        let bar = row_is_reverse_bar(std::iter::once(*t));
                         let mut y = story_bottom;
                         while y < avail_h.min(canvas.height()) {
                             let h = cell_h.min(avail_h - y).min(canvas.height() - y);
+                            let opaque = v6::region_has_opaque(gfx, bx0, y, bx1 - bx0, h);
                             glyphs.blit(
                                 canvas,
                                 ' ',
@@ -7927,6 +7941,8 @@ fn fill_menu_flank_extension(
                                 t.style,
                                 face,
                                 v6::V6RunSource::Chrome,
+                                opaque,
+                                bar,
                             );
                             y += cell_h;
                         }
@@ -7972,10 +7988,17 @@ fn fill_menu_flank_extension(
                             // The stroke itself carries down as a repeat of
                             // the divider's own glyph, one chrome row at a
                             // time, through `glyphs` (SQ-1593) — see above.
+                            // SQ-1592: same reasoning as the `Some(block)` arm —
+                            // `bar` is `t`'s own answer (a plain, non-reversed
+                            // rule glyph like `│` fails `row_is_reverse_bar`'s
+                            // reverse-bit check immediately), `over_art` is
+                            // asked fresh per continuation row.
+                            let bar = row_is_reverse_bar(std::iter::once(*t));
                             let mut y = story_bottom;
                             while y < avail_h.min(canvas.height()) {
                                 let h = cell_h.min(avail_h - y).min(canvas.height() - y);
-                                glyphs.blit(canvas, glyph, gnx0, y, cw, h, fg, None, t.style, face, v6::V6RunSource::Chrome);
+                                let opaque = v6::region_has_opaque(gfx, gnx0, y, cw, h);
+                                glyphs.blit(canvas, glyph, gnx0, y, cw, h, fg, None, t.style, face, v6::V6RunSource::Chrome, opaque, bar);
                                 y += cell_h;
                             }
                         }

@@ -50,7 +50,7 @@
 
 use std::path::PathBuf;
 
-use app::engine::Engine;
+use app::engine::{Engine, WinNode};
 use app::graphics::PictSource;
 use app::session::GameSession;
 use ratatui::buffer::Buffer;
@@ -441,6 +441,87 @@ fn the_frames_outer_gutter_is_the_page_under_halfblocks() {
             "honor={honor}: the column outside the pillar is canvas hole and must resolve to the \
              page {page:?}, but reads {gutter:?} ({d} off) — the half-block encoder has picked \
              black for it"
+        );
+    }
+}
+
+// ── SQ-1592: the RASTER path's own `V6TextRun::over_art` must agree ─────────
+
+/// Compose the RASTER path's own text runs for `session`'s current frame — the
+/// public host route ([`app::render::screen::compose_v6_frame`]), at the SAME
+/// default v6 cell [`render_state`] leaves `AppState::v6_text` at (neither this
+/// suite nor `render_state` ever sets a machine face, so both sides read the
+/// story exactly the way a bare IbmPc boot does).
+fn raster_chrome_text() -> Option<Vec<app::render::v6_layout::V6TextRun>> {
+    use app::render::v6_layout as v6;
+    let session = zork0_in_play(true)?;
+    let tf = app::native_font::TextFace::cell_only(zvm::screen::V6Cell::DEFAULT);
+    let model = session.screen();
+    let WinNode::Layered(items) = &model.root else { panic!("a v6 frame has a Layered root") };
+    let native = v6::native_extent(items, &tf);
+    let layout = v6::classify_windows(items, tf.cell());
+    let colors = app::colors::ColorScheme::terminal_default();
+    let empty_prose = |_cols: u16, rows: u16| {
+        (
+            v6::MainText {
+                lines: Vec::new(),
+                styles: Vec::new(),
+                input: String::new(),
+                cursor_col: 0,
+                awaiting: false,
+                floats: Vec::new(),
+            },
+            app::render::screen::RasterMetrics { total_rows: 0, viewport_rows: rows, max_scroll: 0, first_visible_row: 0 },
+        )
+    };
+    let host_pair = (image::Rgba([220, 220, 220, 255]), image::Rgba([0, 0, 0, 255]));
+    let inputs = app::render::screen::V6FrameInputs {
+        host_pair,
+        honor_game_colours: true,
+        colors: &colors,
+        face: &tf,
+        paint: None,
+        panel_input: None,
+        input: None,
+        prose: &empty_prose,
+        reveal: None,
+        pager_active: false,
+        more_prompt_pair: host_pair,
+        text: v6::V6TextMode::RasteriseAndRecord,
+        bottom_anchor_menu: false,
+    };
+    let f = app::render::screen::compose_v6_frame(&layout, v6::RasterFrame::native(native), &inputs);
+    Some(f.text)
+}
+
+/// **Cross-path agreement (SQ-1592).** The hybrid ring draws Zork0's banner
+/// labels as real glyphs on the ribbon's own colour — this suite's own
+/// [`halfblocks_draw_the_banner_labels_as_real_glyphs`] and
+/// [`a_banner_glyph_sits_in_the_picture_not_in_a_box`] are exactly that
+/// evidence, and both hold ONLY because the hybrid ring's own
+/// `ChromeRowOracle::over_art` (`region_has_opaque` over the frame's art-only
+/// canvas) answered `true` for every one of them — the module doc's own
+/// specimen note: "all 29 chrome runs sit on the banner ribbon". The RASTER
+/// path answers the identical question through the identical primitive,
+/// independently, in `build_chrome_canvas_into`. This asserts the two answers
+/// agree for the SAME frame: every CHROME run the raster path records here
+/// carries `over_art: true`.
+#[test]
+fn raster_over_art_agrees_with_the_hybrid_rings_own_classification() {
+    use app::render::v6_layout::V6RunSource;
+    let Some(runs) = raster_chrome_text() else { return };
+    let chrome: Vec<_> = runs.iter().filter(|r| r.source == V6RunSource::Chrome).collect();
+    assert!(!chrome.is_empty(), "non-vacuity: the raster path recorded no chrome runs at all");
+    let all_text: String = chrome.iter().map(|r| r.text.as_str()).collect::<Vec<_>>().join("|");
+    for word in BANNER_WORDS {
+        assert!(all_text.contains(word), "non-vacuity: banner word {word:?} missing from raster runs: {all_text}");
+    }
+    for r in &chrome {
+        assert!(
+            r.over_art,
+            "raster over_art disagrees with the hybrid ring: run {:?}@{} should be over_art like every \
+             other chrome run on this frame (hybrid draws it as a glyph on the ribbon, not in a box)",
+            r.text, r.y
         );
     }
 }

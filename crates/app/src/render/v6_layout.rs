@@ -1305,6 +1305,19 @@ fn fill_reverse_row_gaps(
     }
 }
 
+/// Per native-row-top answer to [`crate::render::screen::row_is_reverse_bar`],
+/// for every row `texts` touches (SQ-1592) — bucketed by the exact key
+/// [`fill_reverse_row_gaps`] groups by (`t.y.max(1) - 1`), so a caller
+/// classifying a glyph by its own `py` cannot land on a different row than the
+/// fill logic did for the same pixel.
+fn row_bar_tops(texts: &[&PxText]) -> std::collections::BTreeMap<u32, bool> {
+    let mut rows: std::collections::BTreeMap<u32, Vec<&PxText>> = std::collections::BTreeMap::new();
+    for t in texts {
+        rows.entry(t.y.max(1) as u32 - 1).or_default().push(t);
+    }
+    rows.into_iter().map(|(top, runs)| (top, crate::render::screen::row_is_reverse_bar(runs))).collect()
+}
+
 /// SQ-0519: the window-wide background-flood colour for a chrome grid row, or
 /// `None` when the row must not flood. Mirrors SQ-0512's hybrid per-row flood at
 /// the raster canvas level: a NON-reverse row that names an explicit background
@@ -1740,6 +1753,18 @@ pub struct V6TextRun {
     /// Which part of the composite drew it (SQ-1567). Runs of different sources
     /// never join.
     pub source: V6RunSource,
+    /// Whether this run sits over opaque frame ARTWORK rather than a bare page
+    /// (SQ-1592) — the raster path's own answer to
+    /// [`crate::render::screen::region_has_opaque`], asked the same way the
+    /// hybrid ring's `ChromeRowOracle::over_art` asks it. Only a
+    /// [`V6RunSource::Chrome`] run can be `true`; every other source carries
+    /// `false`, since none of them is ever asked this question today.
+    pub over_art: bool,
+    /// Whether this run's ROW is a reverse-video BAR the game drew edge to edge,
+    /// as opposed to furniture built out of reversed spaces (SQ-1592) —
+    /// [`crate::render::screen::row_is_reverse_bar`]'s answer for the row this
+    /// run belongs to. Only a [`V6RunSource::Chrome`] run can be `true`.
+    pub bar: bool,
 }
 
 /// Where a composite's glyphs go: into the canvas, into a [`V6TextRun`] list, or
@@ -1789,6 +1814,11 @@ impl GlyphSink {
     }
 
     /// [`crate::render::bitfont::blit_glyph_styled`], recorded per the mode.
+    ///
+    /// `over_art`/`bar` are the pushed [`V6TextRun`]'s SQ-1592 classification —
+    /// only a [`V6RunSource::Chrome`] caller has a real answer for either; every
+    /// other source passes `false, false`.
+    #[allow(clippy::too_many_arguments)]
     pub(crate) fn blit(
         &mut self,
         canvas: &mut RgbaImage,
@@ -1802,6 +1832,8 @@ impl GlyphSink {
         style: u8,
         tf: &crate::native_font::TextFace,
         source: V6RunSource,
+        over_art: bool,
+        bar: bool,
     ) {
         if self.mode != V6TextMode::RecordOnly {
             crate::render::bitfont::blit_glyph_styled(canvas, glyph, px, py, cw, ch, fg, bg, style, Some(tf));
@@ -1810,10 +1842,12 @@ impl GlyphSink {
             return;
         }
         // Continue the last run when this glyph shares its row, box height,
-        // colours and style and starts where the last one's pen left off — by
-        // its box (a grid cell, the `[more]` prompt) or by the face's advance (a
-        // pen-stepped run). A gap starts a new run, so two labels the game put on
-        // one row stay two runs.
+        // colours, style and SQ-1592 classification and starts where the last
+        // one's pen left off — by its box (a grid cell, the `[more]` prompt) or
+        // by the face's advance (a pen-stepped run). A gap starts a new run, so
+        // two labels the game put on one row stay two runs — and so does a glyph
+        // whose over-art/bar answer differs from its neighbour's, or the joined
+        // run would report one classification for pixels that disagree.
         if let Some(run) = self.runs.last_mut() {
             let contiguous = match (run.boxes.last(), run.text.chars().last()) {
                 (Some(&(x, w)), Some(last)) => px == x + w || px == x + tf.advance_styled(last, style),
@@ -1825,6 +1859,8 @@ impl GlyphSink {
                 && run.bg == bg
                 && run.style == style
                 && run.source == source
+                && run.over_art == over_art
+                && run.bar == bar
                 && contiguous;
             if joins {
                 run.text.push(glyph);
@@ -1832,7 +1868,18 @@ impl GlyphSink {
                 return;
             }
         }
-        self.runs.push(V6TextRun { y: py, h: ch, fg, bg, style, text: glyph.to_string(), boxes: vec![(px, cw)], source });
+        self.runs.push(V6TextRun {
+            y: py,
+            h: ch,
+            fg,
+            bg,
+            style,
+            text: glyph.to_string(),
+            boxes: vec![(px, cw)],
+            source,
+            over_art,
+            bar,
+        });
     }
 
     pub(crate) fn into_runs(self) -> Vec<V6TextRun> {
@@ -1964,6 +2011,11 @@ pub(crate) fn build_chrome_canvas_into(
                 if (it.w_px as i16) >= 0 {
                     fill_explicit_bg_rows(&mut canvas, &px_texts, ox, it.w_px as u32, default_bg, colors, tf);
                 }
+                // SQ-1592: this window's own per-row bar answer, bucketed by the
+                // same native-row-top key `fill_reverse_row_gaps` groups by, so
+                // the raster path's `V6TextRun::bar` field cannot drift from the
+                // fill/flood logic's own idea of which rows are bars.
+                let bar_rows = row_bar_tops(&px_texts);
                 for t in &px_texts {
                     let px0 = t.x.max(1) as u32 - 1;
                     let py = t.y.max(1) as u32 - 1;
@@ -2026,10 +2078,14 @@ pub(crate) fn build_chrome_canvas_into(
                         // narrower than the declared cell, so a proportional face
                         // probes at least the rectangle the game laid out.
                         let span_w = adv.max(font_w);
-                        let (fg, bg) = chrome_run_ink(t, default_fg, default_bg, colors, || {
-                            region_has_opaque(&art, pen, py, span_w, font_h)
-                        });
-                        glyphs.blit(&mut canvas, ch, pen, py, font_w, font_h, fg, bg, t.style, tf, V6RunSource::Chrome);
+                        // Asked unconditionally now (SQ-1592), not only when
+                        // `chrome_run_ink` needs it: a host reading `over_art`
+                        // off the pushed [`V6TextRun`] wants the same per-glyph
+                        // answer whether or not the ink rule itself consulted it.
+                        let opaque = region_has_opaque(&art, pen, py, span_w, font_h);
+                        let (fg, bg) = chrome_run_ink(t, default_fg, default_bg, colors, || opaque);
+                        let bar = bar_rows.get(&py).copied().unwrap_or(false);
+                        glyphs.blit(&mut canvas, ch, pen, py, font_w, font_h, fg, bg, t.style, tf, V6RunSource::Chrome, opaque, bar);
                         pen += adv;
                     }
                 }
@@ -2059,7 +2115,9 @@ pub(crate) fn build_chrome_canvas_into(
                     // A grid CELL is addressed by column and stays on the grid —
                     // the game's own `set_cursor` counted these columns, so a pen
                     // here would place a character where nothing asked for it.
-                    glyphs.blit(&mut canvas, cell.ch, px, py, font_w, font_h, fg, cellbg, cell.style, tf, V6RunSource::GridCell);
+                    // A grid CELL never asks the SQ-1592 questions today (only
+                    // the pixel-run path above does) — false, false.
+                    glyphs.blit(&mut canvas, cell.ch, px, py, font_w, font_h, fg, cellbg, cell.style, tf, V6RunSource::GridCell, false, false);
                 }
             }
         }
@@ -2135,7 +2193,8 @@ pub(crate) fn draw_secondary_prose_into(
                 if pen + adv > right {
                     break;
                 }
-                glyphs.blit(canvas, ch, pen, *y0, font_w, font_h, fg, None, 0, tf, V6RunSource::Panel);
+                // A Panel run is never asked SQ-1592's questions today — false, false.
+                glyphs.blit(canvas, ch, pen, *y0, font_w, font_h, fg, None, 0, tf, V6RunSource::Panel, false, false);
                 pen += adv;
             }
         }
@@ -2166,7 +2225,7 @@ pub(crate) fn draw_secondary_prose_into(
             if i == input.chars().count() {
                 glyphs.caret(canvas, pen, y0, font_w, font_h, fg, true);
             } else {
-                glyphs.blit(canvas, ch, pen, y0, font_w, font_h, fg, None, 0, tf, V6RunSource::Panel);
+                glyphs.blit(canvas, ch, pen, y0, font_w, font_h, fg, None, 0, tf, V6RunSource::Panel, false, false);
             }
             pen += adv;
         }
@@ -2249,7 +2308,8 @@ pub(crate) fn draw_story_canvas_runs_into(
                     break;
                 }
             }
-            glyphs.blit(canvas, ch, pen, py, font_w, font_h, fg, bg, t.style, tf, V6RunSource::StoryCanvas);
+            // A StoryCanvas run is never asked SQ-1592's questions today — false, false.
+            glyphs.blit(canvas, ch, pen, py, font_w, font_h, fg, bg, t.style, tf, V6RunSource::StoryCanvas, false, false);
             pen += tf.advance_styled(ch, t.style);
         }
     }
@@ -3118,7 +3178,8 @@ pub(crate) fn draw_story_text_into(canvas: &mut RgbaImage, main: &MainText, ox: 
             }
             let hit = reveal.filter(|_| lit.iter().any(|&(s, e)| col >= s && col < e));
             if !blocked(pen, py) {
-                glyphs.blit(canvas, glyph, pen, py, font_w, font_h, hit.map_or(fg, |r| r.ink), None, style, tf, V6RunSource::StoryProse);
+                // A StoryProse run is never asked SQ-1592's questions today — false, false.
+                glyphs.blit(canvas, glyph, pen, py, font_w, font_h, hit.map_or(fg, |r| r.ink), None, style, tf, V6RunSource::StoryProse, false, false);
                 // …and the rule under it, AFTER the glyph so it reads as one line
                 // rather than as a row the descenders punch holes in — the same
                 // order `blit_metric_glyph` draws SQ-1028's in. Spanning the whole
@@ -3150,7 +3211,7 @@ pub(crate) fn draw_story_text_into(canvas: &mut RgbaImage, main: &MainText, ox: 
                     break;
                 }
                 if !blocked(ox + pen, py) {
-                    glyphs.blit(canvas, glyph, ox + pen, py, font_w, font_h, fg, None, 0, tf, V6RunSource::StoryProse);
+                    glyphs.blit(canvas, glyph, ox + pen, py, font_w, font_h, fg, None, 0, tf, V6RunSource::StoryProse, false, false);
                 }
                 pen += adv;
             }
@@ -4158,6 +4219,46 @@ mod tests {
         assert_eq!(xs, (0..8).map(|i| 4 + i * FONT_W).collect::<Vec<_>>(), "each glyph at its own pen");
         assert!(runs.iter().all(|r| r.fg == ink && r.bg.is_none() && r.h == FONT_H));
         assert!(runs.iter().all(|r| r.source == V6RunSource::StoryProse), "the transcript is story prose");
+    }
+
+    /// SQ-1592: two glyphs that are otherwise perfectly contiguous — same row, box
+    /// height, colours, style and source — must NOT join into one `V6TextRun` when
+    /// their `over_art`/`bar` classification differs, or the joined run would
+    /// report one answer for pixels that actually disagree.
+    #[test]
+    fn glyph_sink_does_not_join_glyphs_whose_over_art_or_bar_answer_differs() {
+        let tf = crate::native_font::TextFace::cell_only(zvm::screen::V6Cell::DEFAULT);
+        let fg = Rgba([255, 255, 255, 255]);
+
+        // Differing `over_art`.
+        let mut canvas = RgbaImage::new(4 * FONT_W, FONT_H);
+        let mut sink = GlyphSink::new(V6TextMode::RasteriseAndRecord);
+        sink.blit(&mut canvas, 'A', 0, 0, FONT_W, FONT_H, fg, None, 0, &tf, V6RunSource::Chrome, true, false);
+        sink.blit(&mut canvas, 'B', FONT_W, 0, FONT_W, FONT_H, fg, None, 0, &tf, V6RunSource::Chrome, false, false);
+        let runs = sink.into_runs();
+        assert_eq!(runs.len(), 2, "differing over_art must start a new run: {runs:?}");
+        assert_eq!((runs[0].text.as_str(), runs[0].over_art), ("A", true));
+        assert_eq!((runs[1].text.as_str(), runs[1].over_art), ("B", false));
+
+        // Differing `bar`.
+        let mut canvas = RgbaImage::new(4 * FONT_W, FONT_H);
+        let mut sink = GlyphSink::new(V6TextMode::RasteriseAndRecord);
+        sink.blit(&mut canvas, 'A', 0, 0, FONT_W, FONT_H, fg, None, 0, &tf, V6RunSource::Chrome, false, true);
+        sink.blit(&mut canvas, 'B', FONT_W, 0, FONT_W, FONT_H, fg, None, 0, &tf, V6RunSource::Chrome, false, false);
+        let runs = sink.into_runs();
+        assert_eq!(runs.len(), 2, "differing bar must start a new run: {runs:?}");
+        assert_eq!((runs[0].text.as_str(), runs[0].bar), ("A", true));
+        assert_eq!((runs[1].text.as_str(), runs[1].bar), ("B", false));
+
+        // Non-vacuity: an IDENTICAL pair (same over_art, same bar) still joins —
+        // this is the fast path staying intact, not merely never taken.
+        let mut canvas = RgbaImage::new(4 * FONT_W, FONT_H);
+        let mut sink = GlyphSink::new(V6TextMode::RasteriseAndRecord);
+        sink.blit(&mut canvas, 'A', 0, 0, FONT_W, FONT_H, fg, None, 0, &tf, V6RunSource::Chrome, true, true);
+        sink.blit(&mut canvas, 'B', FONT_W, 0, FONT_W, FONT_H, fg, None, 0, &tf, V6RunSource::Chrome, true, true);
+        let runs = sink.into_runs();
+        assert_eq!(runs.len(), 1, "identical over_art/bar must still join: {runs:?}");
+        assert_eq!(runs[0].text, "AB");
     }
 
     /// SQ-1567: the input caret is reported in every mode and painted in every mode

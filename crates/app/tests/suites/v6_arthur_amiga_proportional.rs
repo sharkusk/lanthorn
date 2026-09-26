@@ -1371,6 +1371,77 @@ fn the_raster_inventory_page_keeps_its_rules_and_loses_the_flood() {
     }
 }
 
+// ── SQ-1592: the RASTER path's own `V6TextRun::bar` must agree ──────────────
+
+/// [`raster`], recording the frame's text runs through the public host route
+/// ([`app::render::screen::compose_v6_frame`]) instead of discarding them —
+/// the same inputs `build_v6_raster_frame` builds internally, with `text`
+/// overridden to keep the runs (public on `V6FrameInputs`, the same override
+/// `v6_headless_compose.rs::for_model_compose_with_text` uses).
+fn raster_runs(session: &GameSession, state: &app::state::AppState) -> Vec<v6::V6TextRun> {
+    let model = Engine::screen(session);
+    let WinNode::Layered(items) = &model.root else { panic!("{FIXTURE}: a v6 frame is Layered") };
+    let native = v6::native_extent(items, &state.v6_text);
+    let layout = v6::classify_windows(items, state.v6_text.cell());
+    let paint = state.v6_paint.borrow();
+    let prose = |cols: u16, rows: u16| app::render::screen::build_main_text(state, cols, rows);
+    let mut inputs = app::render::screen::V6FrameInputs::from_state(state, paint.as_deref(), &prose);
+    inputs.text = v6::V6TextMode::RasteriseAndRecord;
+    app::render::screen::compose_v6_frame(&layout, v6::RasterFrame::native(native), &inputs).text
+}
+
+/// **Cross-path agreement.** [`reversed_spaces_rule_the_inventory_page_instead_of_flooding_it`]
+/// (above) is the HYBRID ring's own evidence: the status row carrying
+/// "Churchyard" floods edge to edge (`row_is_reverse_bar` answers `true` for
+/// it), while the two column-rule rows one line up do not (every run on one of
+/// THOSE rows is a lone reversed space, which fails `row_is_reverse_bar`'s
+/// "must carry text" clause — SQ-1035's whole point: a reversed space is
+/// furniture, not a bar). The RASTER path asks the identical question through
+/// the identical primitive, independently, in `build_chrome_canvas_into`'s own
+/// per-row bucketing. This asserts the two paths agree, for the SAME frame:
+/// the status bar's own run is `bar: true`, and every lone reversed-space rule
+/// run is `bar: false`.
+#[test]
+fn raster_bar_agrees_with_the_hybrid_rings_own_classification() {
+    let Some((mut session, state)) = in_the_churchyard() else { return };
+    let _ = session.submit_char(135); // F3 — the inventory screen
+    let runs = raster_runs(&session, &state);
+    let chrome: Vec<&v6::V6TextRun> = runs.iter().filter(|r| r.source == v6::V6RunSource::Chrome).collect();
+    assert!(!chrome.is_empty(), "non-vacuity: no chrome runs recorded on the inventory frame");
+
+    let bar_run = chrome.iter().find(|r| r.text.contains("Churchyard")).unwrap_or_else(|| {
+        panic!(
+            "non-vacuity: no chrome run carries \"Churchyard\": {:?}",
+            chrome.iter().map(|r| &r.text).collect::<Vec<_>>()
+        )
+    });
+    assert!(
+        bar_run.bar,
+        "raster bar disagrees with the hybrid ring: the status row carrying {:?} should be a \
+         reverse bar (the hybrid ring floods it edge to edge)",
+        bar_run.text
+    );
+
+    // Excludes `bar_run`'s own ROW deliberately: the status bar's padding
+    // between "Churchyard" and the date field is ALSO a lone reversed space
+    // (SQ-1052's "eighty-eight padding spaces"), and it correctly IS part of
+    // the bar — `bar` classifies the whole row, not each run on it in
+    // isolation. Only the inventory page's own two divider columns (a
+    // DIFFERENT window, rows the bar never reaches) are the furniture case.
+    let rule_runs: Vec<&&v6::V6TextRun> = chrome
+        .iter()
+        .filter(|r| r.y != bar_run.y && r.text.trim().is_empty() && r.style & 1 != 0)
+        .collect();
+    assert!(!rule_runs.is_empty(), "non-vacuity: no reversed-space rule run recorded on the inventory frame");
+    for r in rule_runs {
+        assert!(
+            !r.bar,
+            "raster bar disagrees with the hybrid ring: a lone reversed space (a rule) must not \
+             be classified a bar: {r:?}"
+        );
+    }
+}
+
 /// SQ-1156: the declared cell is a HOST DECLARATION, and an in-game `@restart`
 /// must re-state it.
 ///
