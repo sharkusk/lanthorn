@@ -1224,3 +1224,129 @@ fn menu_band_game_px_recovers_the_relocated_click_and_delivering_it_changes_the_
          game's own coordinate does"
     );
 }
+
+// ── (g) SQ-1593: the flank's own chrome-run continuation is TEXT, not pixels ──
+//
+// `fill_menu_flank_extension`'s `nearest_run` arm carries a real chrome run's
+// own ink or reverse block down through the gap the extension opened — a
+// divider's `│` stroke (release 30, Amiga: `bg == None`, the
+// `glyph_ink_columns` sub-case) or a reverse-video header bar (release 83,
+// IBM PC: `bg == Some`, the block sub-case). Both used to reach the canvas
+// through a bare, unconditional `canvas.put_pixel` loop with no way to
+// record anything, so a host asking to draw its own chrome text
+// (`V6TextMode::RecordOnly`) got the border rows ABOVE the gap as recorded
+// `V6TextRun`s but this continuation as pixels always painted at lanthorn's
+// own stroke width underneath them — a visible seam. The other sub-case (no
+// `nearest_run`: a window's own uniform page fill, SQ-1578's canvas-scan
+// fallback) is deliberately untouched — it is a page colour, not text, and
+// stays a bare canvas paint in every mode; `menu_anchor_compose_pc_right_bar_
+// has_no_notch_before_the_gap` above already pins that it still is.
+
+/// SQ-1593's acceptance case, on BOTH releases and BOTH `nearest_run`
+/// sub-cases: every pixel the gap's flank carries under `Rasterise` that is
+/// ABSENT under `RecordOnly` is one this quest's fix gates on `V6TextMode`,
+/// and every such pixel is accounted for by a recorded [`v6::V6TextRun`] of
+/// the very same colour covering that exact native pixel — the run a host
+/// would draw itself to reproduce the seamless continuation.
+///
+/// FALSIFY by reverting `fill_menu_flank_extension`'s `nearest_run` arm back
+/// to a bare `canvas.put_pixel` loop (this quest's own fix): every pane below
+/// fails the "premise" assertion — `RecordOnly` and `Rasterise` come back
+/// byte-identical in the gap (the continuation paints in every mode again,
+/// exactly as `menu_anchor_compose_record_only_matches_rasterise_everywhere_
+/// but_the_glyphs` used to accept before this quest), so the loop never finds
+/// a single differing pixel to check a run against.
+#[test]
+fn menu_anchor_compose_record_only_carries_the_dividers_continuation_as_text_not_pixels() {
+    for (file, release) in RELEASES {
+        let Some(session) = boot(file) else { return };
+        let model = session.screen();
+        let WinNode::Layered(items) = &model.root else { panic!("a v6 frame has a Layered root") };
+        let tf = app::native_font::TextFace::cell_only(zvm::screen::V6Cell::DEFAULT);
+        let native = v6::native_extent(items, &tf);
+        let cell = tf.cell();
+        let layout = v6::classify_windows(items, cell);
+        let story = layout.story.expect("Journey has a story window on this frame");
+        let story_bottom = story.y_px as u32 + story.h_px as u32;
+
+        let want = RasterFrame::extended(native, TALL_PANE_DEV, cell, Some(2.0), true);
+        let extension = want.extension();
+        assert!(extension > 0, "{file} (r{release}): premise — this pane must actually extend");
+        let avail_h = story_bottom + extension;
+
+        let raster = menu_anchor_compose(&session, want, V6TextMode::Rasterise, true);
+        let record = menu_anchor_compose(&session, want, V6TextMode::RecordOnly, true);
+
+        // Deep in the gap, one row above the relocated band's own top — well
+        // clear of the recentred picture (SQ-1577, flooded identically in
+        // both modes) and of the canvas-scan page-fill fallback (SQ-1578,
+        // also identical in both modes, per the suite above). Any column
+        // that still differs here is exactly the `nearest_run` continuation
+        // this quest gates.
+        let probe_y = avail_h - 1;
+        let mut found = 0usize;
+        for x in 0..u32::from(native.0) {
+            let r = *raster.canvas.get_pixel(x, probe_y);
+            let c = *record.canvas.get_pixel(x, probe_y);
+            if r == c {
+                continue;
+            }
+            found += 1;
+            let covers = record.text.iter().any(|run| {
+                run.y <= probe_y
+                    && probe_y < run.y + run.h
+                    && run.boxes.iter().any(|&(rx, rw)| rx <= x && x < rx + rw)
+                    && (run.fg == r || run.bg == Some(r))
+            });
+            assert!(
+                covers,
+                "{file} (r{release}): pixel ({x},{probe_y}) is {r:?} under Rasterise but {c:?} under \
+                 RecordOnly, with no recorded run of colour {r:?} covering it — a host drawing its own \
+                 chrome text has nothing to paint this seam with"
+            );
+        }
+        assert!(
+            found > 0,
+            "{file} (r{release}): premise — the gap must carry at least one divider/border continuation \
+             pixel that differs between Rasterise and RecordOnly, or this test exercises nothing"
+        );
+    }
+}
+
+/// SQ-1593's `Rasterise` regression pin: the continuation now imaged through
+/// `GlyphSink::blit` still paints byte-identical pixels to before this quest
+/// — the two behaviours this quest's fix must not disturb, each already
+/// covered above and re-asserted here on the SAME frame this section's other
+/// test uses, so a change that broke either would be caught beside the new
+/// behaviour rather than only in a separate file section.
+///
+/// FALSIFY: not applicable on its own — this pin is the same one
+/// `menu_anchor_compose_keeps_the_dividers_real_stroke_width_in_the_extension`
+/// and `menu_anchor_compose_pc_right_bar_has_no_notch_before_the_gap` already
+/// falsify; this test exists so a change to THIS quest's own code path is
+/// checked against them on the identical extended frame.
+#[test]
+fn menu_anchor_compose_rasterise_and_rasterise_and_record_still_agree_pixel_for_pixel() {
+    for (file, release) in RELEASES {
+        let Some(session) = boot(file) else { return };
+        let model = session.screen();
+        let WinNode::Layered(items) = &model.root else { panic!("a v6 frame has a Layered root") };
+        let tf = app::native_font::TextFace::cell_only(zvm::screen::V6Cell::DEFAULT);
+        let native = v6::native_extent(items, &tf);
+        let cell = tf.cell();
+        let layout = v6::classify_windows(items, cell);
+        assert!(layout.story.is_some(), "{file} (r{release}): premise — Journey has a story window");
+
+        let want = RasterFrame::extended(native, TALL_PANE_DEV, cell, Some(2.0), true);
+        assert!(want.extension() > 0, "{file} (r{release}): premise — this pane must actually extend");
+
+        let raster = menu_anchor_compose(&session, want, V6TextMode::Rasterise, true);
+        let full = menu_anchor_compose(&session, want, V6TextMode::RasteriseAndRecord, true);
+        assert_eq!(
+            raster.canvas.as_raw(),
+            full.canvas.as_raw(),
+            "{file} (r{release}): Rasterise and RasteriseAndRecord must still paint byte-identical canvases — \
+             recording alongside painting must never change what is painted"
+        );
+    }
+}

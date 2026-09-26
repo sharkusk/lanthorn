@@ -3410,6 +3410,7 @@ fn compose_v6_frame_into(
                 default_fg,
                 default_bg,
                 inputs.colors,
+                glyphs,
             );
         }
     }
@@ -7729,6 +7730,17 @@ fn glyph_ink_columns(face: &crate::native_font::TextFace, ch: char, style: u8) -
 ///     to the run's own resolved colour in that case — the block that WOULD
 ///     have been painted, read off the model rather than off pixels the mode
 ///     declined to draw.
+///
+///     **SQ-1593**: only the sub-case with a `nearest_run` to continue is
+///     text, and only that sub-case is imaged through `glyphs` — one chrome
+///     row at a time, through [`crate::render::v6_layout::GlyphSink::blit`],
+///     exactly like every real border row above the gap — so a host drawing
+///     its own chrome text gets this continuation as a run too, instead of
+///     always-painted pixels at lanthorn's own stroke width. The OTHER
+///     sub-case (no `nearest_run`, the canvas-scan fallback picking up a
+///     window's own uniform page fill) stays a bare, unconditional canvas
+///     paint in every mode — it is a page colour reaching down, not text —
+///     and so does the ink sub-case's own under-the-stroke ground fill.
 #[allow(clippy::too_many_arguments)]
 fn fill_menu_flank_extension(
     canvas: &mut image::RgbaImage,
@@ -7741,9 +7753,11 @@ fn fill_menu_flank_extension(
     default_fg: image::Rgba<u8>,
     default_bg: image::Rgba<u8>,
     colors: &ColorScheme,
+    glyphs: &mut crate::render::v6_layout::GlyphSink,
 ) {
     use crate::render::v6_layout as v6;
     let cell = face.cell();
+    let cell_h = u32::from(cell.h().max(1));
     let story_bottom = story.y_px as u32 + story.h_px as u32;
     if canvas_h <= story_bottom || story_bottom == 0 {
         return;
@@ -7868,12 +7882,7 @@ fn fill_menu_flank_extension(
                     tx0 < bx1 && tx0 + tw > bx0 && ty0 + u32::from(cell.h()) >= story_bottom
                 })
                 .max_by_key(|t| t.y);
-            // `(x0, x1, colour, last_row)`: the columns to paint, the colour
-            // to paint them, and the last row ABOVE the gap that this
-            // column's own real content already reaches — the fill starts
-            // one row below that, not unconditionally at `story_bottom`
-            // (SQ-1578).
-            let block: Option<(u32, u32, image::Rgba<u8>, u32)> = if let Some(t) = nearest_run {
+            if let Some(t) = nearest_run {
                 let px0 = t.x.max(1) as u32 - 1;
                 let py = t.y.max(1) as u32 - 1;
                 let tw = face.run_px_styled(&t.text, t.style);
@@ -7892,8 +7901,36 @@ fn fill_menu_flank_extension(
                 // the old fallback thickened it to. Either way this run
                 // reaches within one cell of `story_bottom` by construction
                 // (SQ-1576), so the fill keeps starting exactly there.
+                //
+                // SQ-1593: this continuation is CHROME TEXT, not a page fill,
+                // so it goes through `glyphs.blit` one chrome row (`cell_h`
+                // native pixels) at a time — the exact call every real
+                // border row above the gap already makes. That gates the
+                // paint on `V6TextMode` (nothing reaches the canvas under
+                // `RecordOnly`) and records a `V6TextRun` a host can draw
+                // itself, joining with its neighbours by the same rule any
+                // other chrome run does.
                 match bg {
-                    Some(block) => Some((bx0, bx1, block, story_bottom.saturating_sub(1))),
+                    Some(block) => {
+                        let mut y = story_bottom;
+                        while y < avail_h.min(canvas.height()) {
+                            let h = cell_h.min(avail_h - y).min(canvas.height() - y);
+                            glyphs.blit(
+                                canvas,
+                                ' ',
+                                bx0,
+                                y,
+                                bx1 - bx0,
+                                h,
+                                fg,
+                                Some(block),
+                                t.style,
+                                face,
+                                v6::V6RunSource::Chrome,
+                            );
+                            y += cell_h;
+                        }
+                    }
                     None => {
                         let idx = ((bx0.max(px0) - px0) / cw.max(1)) as usize;
                         let glyph = t.text.chars().nth(idx).unwrap_or(' ');
@@ -7911,7 +7948,10 @@ fn fill_menu_flank_extension(
                         // agrees between `RecordOnly` and `Rasterise` — the
                         // page fill is never gated on [`V6TextMode`], only
                         // the glyph blit is, so a pixel the glyph cannot
-                        // reach reads the same in both.
+                        // reach reads the same in both. This part stays a
+                        // bare, unconditional canvas paint in EVERY mode
+                        // (SQ-1593 leaves it untouched): it is a page/ground
+                        // colour reaching down, not a chrome run's own text.
                         if let Some((ix0, ix1)) = ink {
                             let (ax0, ax1) = (gnx0 + ix0, gnx0 + ix1);
                             let probe_y = story_bottom.saturating_sub(1).min(canvas.height().saturating_sub(1));
@@ -7929,8 +7969,16 @@ fn fill_menu_flank_extension(
                                     }
                                 }
                             }
+                            // The stroke itself carries down as a repeat of
+                            // the divider's own glyph, one chrome row at a
+                            // time, through `glyphs` (SQ-1593) — see above.
+                            let mut y = story_bottom;
+                            while y < avail_h.min(canvas.height()) {
+                                let h = cell_h.min(avail_h - y).min(canvas.height() - y);
+                                glyphs.blit(canvas, glyph, gnx0, y, cw, h, fg, None, t.style, face, v6::V6RunSource::Chrome);
+                                y += cell_h;
+                            }
                         }
-                        ink.map(|(ix0, ix1)| (gnx0 + ix0, gnx0 + ix1, fg, story_bottom.saturating_sub(1)))
                     }
                 }
             } else {
@@ -7941,24 +7989,24 @@ fn fill_menu_flank_extension(
                 // several rows above the story's own foot) used to leave a
                 // NOTCH between there and the gap this loop started filling
                 // from unconditionally.
-                (0..above).rev().find_map(|y| {
+                //
+                // SQ-1593 leaves this branch untouched: it is a window's own
+                // PAGE colour reaching down, never a chrome run's text, and
+                // `V6TextMode::RecordOnly`'s own contract says the canvas
+                // still carries the page in every mode. Unconditional, not
+                // gated on transparency: `avail_h` is exactly where the
+                // relocated band's own real pixels begin, so nothing below
+                // this bound is ever real content to protect.
+                let block = (0..above).rev().find_map(|y| {
                     let mut px = (bx0..bx1).map(|x| *canvas.get_pixel(x, y));
                     let first = px.next()?;
                     (first[3] > 0 && px.all(|p| p == first)).then_some((bx0, bx1, first, y))
-                })
-            };
-            // Unconditional, not gated on transparency: `avail_h` is exactly
-            // where the relocated band's own real pixels begin, so nothing
-            // below this bound is ever real content to protect — the
-            // divider's own resolved colour is authoritative over whatever
-            // the panel flood above put there as this flank's baseline.
-            // Filling from `last_row + 1` rather than `story_bottom`
-            // unconditionally closes that same notch instead of stepping
-            // over it (SQ-1578).
-            if let Some((fx0, fx1, block, last_row)) = block {
-                for y in (last_row + 1)..avail_h.min(canvas.height()) {
-                    for x in fx0..fx1.min(canvas.width()) {
-                        canvas.put_pixel(x, y, block);
+                });
+                if let Some((fx0, fx1, block, last_row)) = block {
+                    for y in (last_row + 1)..avail_h.min(canvas.height()) {
+                        for x in fx0..fx1.min(canvas.width()) {
+                            canvas.put_pixel(x, y, block);
+                        }
                     }
                 }
             }
