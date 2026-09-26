@@ -29,6 +29,8 @@ mod sq1564_command_bar_prompt;
 mod host_turn;
 #[path = "suites/sq1586_host_hints_open.rs"]
 mod sq1586_host_hints_open;
+#[path = "suites/sq1596_min_story_screen_floor.rs"]
+mod sq1596_min_story_screen_floor;
 
 #[path = "suites/adf_disk_image.rs"]
 mod adf_disk_image;

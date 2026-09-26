@@ -121,6 +121,26 @@ pub struct TerminalFacts {
     /// the constructor's 80x24 fallback — a host that is not a terminal can also
     /// pass the cell grid it intends to draw the whole frame on.
     pub size: Option<(u16, u16)>,
+    /// The smallest `(cols, rows)` the pre-boot story pane must come out to,
+    /// independently in each dimension — SQ-1596. Some v4+ stories read header
+    /// bytes $20/$21 once, at boot, and refuse to run below their own minimum
+    /// (*Bureaucracy* prints its own `[Screen too small.]` on the first turn and
+    /// a later resize of `size` above does not help, because the story never
+    /// looks at $20/$21 again). A host that can draw the game's grid windows at
+    /// a SMALLER cell size than its terminal's own — more, smaller cells in the
+    /// same physical space — can meet a story's floor this way even when `size`
+    /// itself is smaller than it, by having lanthorn seed an EFFECTIVE cell
+    /// count that clears the floor for the host to then render at whatever
+    /// per-cell pixel size actually fits. `None` (the default) applies no floor,
+    /// which is the honest answer for a host whose cells are physical terminal
+    /// cells it cannot subdivide. A dimension already at or above its floor in
+    /// `size` is left exactly alone — see `min_terminal_size_for_story_floor`.
+    /// A user-pinned `virtual_screen_cols`/`virtual_screen_rows` always wins
+    /// over this floor in that dimension, exactly as it wins in
+    /// [`crate::render::screen::story_screen_dims`] and
+    /// [`crate::render::screen::declared_story_screen_dims`] — explicit intent
+    /// outranks a floor lanthorn computed on the host's behalf.
+    pub min_story_screen: Option<(u16, u16)>,
 }
 
 /// The per-story result of [`boot_story`]: the running engine, its map, the
@@ -286,6 +306,84 @@ pub fn story_screen_in(state: &AppState, (term_cols, term_rows): (u16, u16)) -> 
     crate::render::screen::story_screen_dims(pane_layout.story, state)
 }
 
+/// The smallest terminal `(cols, rows)` — at or above `real`, each dimension
+/// bumped independently — whose pre-boot story pane meets `floor` in that
+/// dimension (SQ-1596; see [`TerminalFacts::min_story_screen`]).
+///
+/// **Search, not algebra.** `story_screen_dims`' width side folds in the text
+/// margin, the upper-window border and the transcript gutter, and
+/// `compute_pane_layout` folds in `split_story_map`'s own ratatui `Percentage`
+/// rounding on top of that — the same shape `split_pct_for_story_width`
+/// (`crate::layout`) already inverts by search rather than by re-deriving
+/// ratatui's rounding by hand, and this is that precedent applied to boot's
+/// pre-session pane instead of a live drag. The row side has no ratio to
+/// invert (fixed additive rows only — the help bar, and zero-height bands at
+/// boot), but is swept the same way for one code path instead of two.
+///
+/// Cols and rows are independent inputs to this pane: `split_story_map` only
+/// ever divides the WIDTH, and the vertical reservations (help bar, command
+/// band, inventory dock) only ever consume ROWS — so sweeping one dimension
+/// with the other pinned at `real`'s own value for the probe is exact, not an
+/// approximation.
+///
+/// A dimension whose `floor` is `0`, or that the config has pinned via
+/// `virtual_screen_cols`/`virtual_screen_rows`, is left at `real` untouched —
+/// a pin already makes `story_screen_dims` ignore the pane's measured size in
+/// that dimension outright, so searching for a terminal size that moves a
+/// pinned answer would either loop uselessly or (worse) quietly try to argue
+/// with the pin. Explicit intent wins, exactly as it already does in
+/// [`crate::render::screen::story_screen_dims`] and
+/// [`crate::render::screen::declared_story_screen_dims`].
+fn min_terminal_size_for_story_floor(
+    cfg: &Config,
+    cs: &crate::colors::ColorScheme,
+    garglk_overlay: &Option<crate::garglk_ini::GarglkOverlay>,
+    layout: crate::state::Layout,
+    real: (u16, u16),
+    floor: (u16, u16),
+) -> (u16, u16) {
+    let (real_cols, real_rows) = real;
+    let (floor_cols, floor_rows) = floor;
+    let probe = |size: (u16, u16)| pre_boot_host_screen(cfg, cs, garglk_overlay, layout, size);
+
+    let cols = if floor_cols == 0 || cfg.virtual_screen_cols.is_some() {
+        real_cols
+    } else {
+        bump_dim_for_floor(real_cols, floor_cols, |candidate| {
+            probe((candidate, real_rows.max(1))).map(|(_, cols)| cols)
+        })
+    };
+    let rows = if floor_rows == 0 || cfg.virtual_screen_rows.is_some() {
+        real_rows
+    } else {
+        bump_dim_for_floor(real_rows, floor_rows, |candidate| {
+            probe((real_cols.max(1), candidate)).map(|(rows, _)| rows)
+        })
+    };
+    (cols, rows)
+}
+
+/// The smallest `dim >= current.max(1)` for which `probe(dim)` reports a story
+/// dimension at or above `floor`, searched upward one cell at a time.
+///
+/// Widening (or heightening) the terminal never shrinks the pane this feeds —
+/// `story_screen_dims` subtracts only FIXED chrome from the measured area, and
+/// `split_story_map`'s percentage split is monotonic non-decreasing in the
+/// total it divides — so the first candidate that clears the floor is the
+/// smallest one; nothing here needs to check further once it does. The 512
+/// cap is well past any terminal on offer (and past the 255 the header fields
+/// themselves clamp to downstream, `BootConfig::apply`); if nothing in range
+/// clears the floor, `current` is returned unchanged and the story boots
+/// under its own floor exactly as it would with no `min_story_screen` set —
+/// this function only ever WIDENS the seeded terminal size, never narrows it
+/// or fails the boot outright.
+fn bump_dim_for_floor(current: u16, floor: u16, probe: impl Fn(u16) -> Option<u16>) -> u16 {
+    if probe(current).is_some_and(|v| v >= floor) {
+        return current;
+    }
+    (current.max(1)..=512).find(|&candidate| probe(candidate).is_some_and(|v| v >= floor)).unwrap_or(current)
+}
+
 /// Build the per-story engine + mapper + UI state for `req.story_path`, up to the
 /// point where a terminal would be set up (see the module docs).
 ///
@@ -304,6 +402,7 @@ pub fn boot_story(req: BootRequest<'_>, hooks: &mut dyn BootHooks) -> Result<Boo
         term_default_colors,
         query_sweep,
         size: terminal_size,
+        min_story_screen,
     } = terminal;
 
     // `disk_entry` is which story on the image the browser row stood for
@@ -703,8 +802,27 @@ pub fn boot_story(req: BootRequest<'_>, hooks: &mut dyn BootHooks) -> Result<Boo
     } else {
         crate::state::Layout::Split
     };
-    let host_screen = terminal_size
-        .and_then(|size| pre_boot_host_screen(&cfg, &cs, &garglk_overlay, boot_layout, size));
+    // SQ-1596: a host willing to draw the story's grid windows at a smaller
+    // cell size than its own terminal's may ask for an EFFECTIVE pane no
+    // smaller than `min_story_screen` in each dimension, so a story that reads
+    // $20/$21 once at boot and refuses below its own minimum still starts —
+    // the host then renders that (possibly larger) cell count at whatever
+    // per-cell pixel size actually fits its real screen. A no-op for a host
+    // that left `min_story_screen` unset, and for v1-3/v6 stories: below v4
+    // `write_screen_dims` never writes $20/$21 at all, and a v6 boot below
+    // never reads `host_screen` in the first place (it seeds windows 0/1 from
+    // `screen_px` instead, see `BootConfig::apply`) — so seeding a bumped
+    // grid neither of them looks at is harmless, and needs no special case
+    // here beyond the search itself declining to run for a pinned dimension.
+    let host_screen = terminal_size.and_then(|size| {
+        let size = match min_story_screen {
+            Some(floor) => {
+                min_terminal_size_for_story_floor(&cfg, &cs, &garglk_overlay, boot_layout, size, floor)
+            }
+            None => size,
+        };
+        pre_boot_host_screen(&cfg, &cs, &garglk_overlay, boot_layout, size)
+    });
 
     // SQ-0811: the seed every engine's PRNG starts from, drawn ONCE here and
     // handed to whichever engine builds below, so the console line further down
@@ -1658,4 +1776,92 @@ pub fn boot_story(req: BootRequest<'_>, hooks: &mut dyn BootHooks) -> Result<Boo
         data_base,
         resumed,
     })
+}
+
+// ── SQ-1596: min_story_screen's pure inversion, independent of a real boot ──
+
+#[cfg(all(test, feature = "t-session"))]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn bump_dim_for_floor_returns_current_when_already_at_floor() {
+        assert_eq!(bump_dim_for_floor(50, 40, Some), 50);
+    }
+
+    #[test]
+    fn bump_dim_for_floor_searches_upward_for_the_smallest_dim_that_clears_the_floor() {
+        // A toy probe modelling "half the candidate" — the same shape
+        // `story_screen_dims`' width side has under a 50/50 split.
+        let probe = |c: u16| Some(c / 2);
+        assert_eq!(bump_dim_for_floor(10, 40, probe), 80, "the smallest candidate whose half clears 40");
+    }
+
+    #[test]
+    fn bump_dim_for_floor_leaves_current_untouched_when_nothing_in_range_clears_it() {
+        // A probe that never reaches the floor: the search must not spin
+        // forever or panic, and gives back `current` unchanged.
+        assert_eq!(bump_dim_for_floor(5, 1000, |_| Some(0)), 5);
+    }
+
+    #[test]
+    fn bump_dim_for_floor_skips_a_none_probe_rather_than_stopping_on_it() {
+        // Candidate 6 answers `None` (as a zero-height pane would) but 7
+        // clears the floor — the search must not treat `None` as failure.
+        let probe = |c: u16| if c == 6 { None } else { Some(c) };
+        assert_eq!(bump_dim_for_floor(5, 7, probe), 7);
+    }
+
+    #[test]
+    fn min_terminal_size_for_story_floor_bumps_only_the_short_dimension() {
+        let cfg = Config::default();
+        let cs = crate::colors::ColorScheme::terminal_default();
+        let (cols, rows) = min_terminal_size_for_story_floor(
+            &cfg,
+            &cs,
+            &None,
+            crate::state::Layout::Split,
+            (80, 24),
+            (40, 19),
+        );
+        // 80 cols split 50/50 (the default `split_ratio`) falls short of the
+        // 40-col floor; 24 rows already clears the 19-row one.
+        assert!(cols > 80, "cols must be bumped past the real terminal width: got {cols}");
+        assert_eq!(rows, 24, "rows already cleared the floor and must be left exactly alone: got {rows}");
+
+        // And the bumped size really does clear the floor, round-tripped
+        // through the same measurement a boot uses.
+        let mut state = AppState::default();
+        state.config = cfg.clone();
+        state.colors = cs.clone();
+        let seeded = story_screen_in(&state, (cols, rows)).expect("a non-zero pane");
+        assert!(seeded.1 >= 40 && seeded.0 >= 19, "the bumped size clears the floor: {seeded:?}");
+    }
+
+    #[test]
+    fn min_terminal_size_for_story_floor_respects_a_pin() {
+        let mut cfg = Config::default();
+        cfg.virtual_screen_cols = Some(10);
+        let cs = crate::colors::ColorScheme::terminal_default();
+        let (cols, _rows) = min_terminal_size_for_story_floor(
+            &cfg,
+            &cs,
+            &None,
+            crate::state::Layout::Split,
+            (80, 24),
+            (40, 19),
+        );
+        assert_eq!(cols, 80, "a pinned virtual_screen_cols must leave the real terminal cols untouched");
+    }
+
+    #[test]
+    fn min_terminal_size_for_story_floor_is_a_noop_for_a_zero_floor() {
+        let cfg = Config::default();
+        let cs = crate::colors::ColorScheme::terminal_default();
+        let real = (30, 10);
+        assert_eq!(
+            min_terminal_size_for_story_floor(&cfg, &cs, &None, crate::state::Layout::Split, real, (0, 0)),
+            real
+        );
+    }
 }

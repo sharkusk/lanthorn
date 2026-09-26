@@ -902,6 +902,10 @@ pub(crate) fn boot_story(
         // The pane the story is BOOTED with is measured from this (SQ-0679/0680);
         // `None` on a non-terminal stdout keeps the 80x24 fallback.
         size: crossterm::terminal::size().ok(),
+        // SQ-1596: the TUI draws one terminal cell per physical cell — it has
+        // no smaller cell to subdivide into, so it applies no floor and a
+        // story below its own minimum reads exactly as it always has.
+        min_story_screen: None,
     };
     let req = app::host::BootRequest {
         story_path,
