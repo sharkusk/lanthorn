@@ -40,6 +40,8 @@ mod sq1410_restore_degradation_notice;
 mod sq1411_splash_resume_pager;
 #[path = "suites/sq1434_glulx_opening_pager.rs"]
 mod sq1434_glulx_opening_pager;
+#[path = "suites/transcript_follow_ease.rs"]
+mod transcript_follow_ease;
 #[path = "suites/transparent_backdrop_audit.rs"]
 mod transparent_backdrop_audit;
 #[path = "suites/upper_grid_resize.rs"]

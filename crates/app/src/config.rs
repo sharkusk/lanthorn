@@ -1306,6 +1306,7 @@ where
 // ── Animation config ──────────────────────────────────────────────────────────
 
 fn default_scroll_ms() -> u64 { 120 }
+fn default_follow_ms() -> u64 { 200 }
 fn default_scrollbar_hide_ms() -> u64 { 1500 }
 fn default_scrollbar_fade_ms() -> u64 { 300 }
 fn default_easing() -> Easing { Easing::EaseOut }
@@ -1334,6 +1335,21 @@ pub struct AnimationConfig {
     /// Smooth-scroll duration in milliseconds (default 120). Zero = instant.
     #[serde(default = "default_scroll_ms")]
     pub scroll_ms: u64,
+    /// SQ-1595: how long the story pane eases toward NEW output arriving at the
+    /// bottom, in milliseconds (default 200). Zero — or `enabled = false` —
+    /// makes it the pre-SQ-1595 instant jump.
+    ///
+    /// This applies only when the reader was already at (or following) the
+    /// bottom the moment a turn's output arrived — scrolling into history and
+    /// leaving it there is never dragged back down by this or by anything
+    /// else. When the new output overflows the pane and the `[more]` pager
+    /// engages, the ease runs only up to wherever the pager parks; paging
+    /// further with a keypress is a reader action and always uses `scroll_ms`,
+    /// not this. Any key press or mouse event ends an in-flight follow-ease
+    /// immediately (the player outranks paced output, same principle as the
+    /// v6 picture pacer) rather than fighting the reader's own scroll.
+    #[serde(default = "default_follow_ms")]
+    pub follow_ms: u64,
     /// SQ-0782: how long the STORY PANE's scrollbar stays up after a scroll,
     /// in milliseconds (default 1500). Zero keeps it up permanently — the
     /// pre-auto-hide behaviour. Only the story pane auto-hides: a modal's bar
@@ -1353,6 +1369,7 @@ impl Default for AnimationConfig {
             enabled: true,
             easing: Easing::EaseOut,
             scroll_ms: 120,
+            follow_ms: default_follow_ms(),
             scrollbar_hide_ms: default_scrollbar_hide_ms(),
             scrollbar_fade_ms: default_scrollbar_fade_ms(),
         }
@@ -2941,6 +2958,7 @@ pub fn write_config_at(config_path: &std::path::Path, cfg: &Config) -> std::io::
         || cfg.animation.enabled != def.animation.enabled
         || cfg.animation.easing != def.animation.easing
         || cfg.animation.scroll_ms != def.animation.scroll_ms
+        || cfg.animation.follow_ms != def.animation.follow_ms
         || cfg.animation.scrollbar_hide_ms != def.animation.scrollbar_hide_ms
         || cfg.animation.scrollbar_fade_ms != def.animation.scrollbar_fade_ms
     {
@@ -2948,6 +2966,7 @@ pub fn write_config_at(config_path: &std::path::Path, cfg: &Config) -> std::io::
         put_in(tbl, "enabled", cfg.animation.enabled.into(), cfg.animation.enabled == def.animation.enabled);
         put_in(tbl, "easing", crate::anim::easing_token(cfg.animation.easing).into(), cfg.animation.easing == def.animation.easing);
         put_in(tbl, "scroll_ms", (cfg.animation.scroll_ms as i64).into(), cfg.animation.scroll_ms == def.animation.scroll_ms);
+        put_in(tbl, "follow_ms", (cfg.animation.follow_ms as i64).into(), cfg.animation.follow_ms == def.animation.follow_ms);
         put_in(tbl, "scrollbar_hide_ms", (cfg.animation.scrollbar_hide_ms as i64).into(), cfg.animation.scrollbar_hide_ms == def.animation.scrollbar_hide_ms);
         put_in(tbl, "scrollbar_fade_ms", (cfg.animation.scrollbar_fade_ms as i64).into(), cfg.animation.scrollbar_fade_ms == def.animation.scrollbar_fade_ms);
     }
@@ -4219,6 +4238,7 @@ use_defaults = false
         assert!(c.animation.enabled);
         assert_eq!(c.animation.easing, Easing::EaseOut);
         assert_eq!(c.animation.scroll_ms, 120);
+        assert_eq!(c.animation.follow_ms, 200);
     }
 
     #[test]
@@ -4227,8 +4247,28 @@ use_defaults = false
         assert!(cfg.animation.enabled);
         assert_eq!(cfg.animation.easing, Easing::EaseOut);
         assert_eq!(cfg.animation.scroll_ms, 120);
+        assert_eq!(cfg.animation.follow_ms, 200);
         assert_eq!(cfg.animation.scrollbar_hide_ms, 1500);
         assert_eq!(cfg.animation.scrollbar_fade_ms, 300);
+    }
+
+    /// SQ-1595: `follow_ms` parses on its own, independent of `scroll_ms`.
+    #[test]
+    fn follow_ms_parses_and_round_trips() {
+        let cfg: Config = toml::from_str("[animation]\nfollow_ms = 350\n").unwrap();
+        assert_eq!(cfg.animation.follow_ms, 350);
+        assert_eq!(cfg.animation.scroll_ms, 120, "unrelated to scroll_ms");
+
+        let dir = std::env::temp_dir().join(format!("lanthorn_follow_ms_{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        let mut written = Config::default();
+        written.animation.follow_ms = 350;
+        write_config(&dir, &written).unwrap();
+        let text = std::fs::read_to_string(dir.join("config.toml")).unwrap();
+        let doc: toml_edit::DocumentMut = text.parse().unwrap();
+        assert_eq!(doc["animation"]["follow_ms"].as_integer(), Some(350));
+        let _ = std::fs::remove_dir_all(&dir);
     }
 
     /// SQ-0782: the story-pane scrollbar's hide delay and fade are config keys,

@@ -349,6 +349,16 @@ pub fn apply_frame(
     }
     state.transcript_scroll = state.transcript_scroll.min(max_scroll);
     if let Some(before) = state.pager.pending_before_rows.take() {
+        // SQ-1595: was the reader already at (or following) the bottom before
+        // this turn's output arrived? Only then does the transition to
+        // wherever it lands get an autoscroll-follow ease — a reader scrolled
+        // into history is never dragged back down, by this or by anything
+        // else, exactly today's behavior of leaving their view alone.
+        let at_bottom = state.transcript_scroll == 0;
+        // The pre-turn bottom's equivalent offset now that the transcript has
+        // grown by `added` rows: showing the same absolute rows the reader was
+        // just looking at means sitting `added` rows back from the NEW bottom.
+        let added = total_rows.saturating_sub(before);
         match activation_target(before, total_rows, viewport_rows, prompt_rows) {
             Some(target) => {
                 // `max_scroll` came from THIS frame, which has no prompt bar on it;
@@ -358,10 +368,23 @@ pub fn apply_frame(
                 // banner, `before == 0`) one row short and drop its first line —
                 // exactly the row this quest is about, on the one turn where the
                 // clamp binds (SQ-0823).
-                state.scroll_transcript_to(target.min(max_scroll.saturating_add(prompt_rows)));
+                let clamped = target.min(max_scroll.saturating_add(prompt_rows));
+                // The ease runs UP TO the pager's own park and no further — paging
+                // past it afterward is a reader action (`Action::PagerAdvance`)
+                // and always uses `scroll_ms`, never this.
+                if at_bottom {
+                    state.arm_transcript_follow_ease(added, clamped);
+                } else {
+                    state.scroll_transcript_to(clamped);
+                }
                 state.pager.active = true;
             }
-            None => state.pager.active = false,
+            None => {
+                if at_bottom && added > 0 {
+                    state.arm_transcript_follow_ease(added, 0);
+                }
+                state.pager.active = false;
+            }
         }
     }
     state.last_transcript_total_rows = total_rows;
@@ -493,6 +516,57 @@ mod tests {
         // still one row and the park still lands on the shared row.
         let target = activation_target(baseline_before(20, true), 60, 10, 1).unwrap();
         assert_eq!(60 - target - (10 - 1), 19);
+    }
+
+    // ── Transcript follow-ease (SQ-1595) ─────────────────────────────────────
+
+    /// Output that fits in one screen (no pager) while the reader was at the
+    /// bottom still gets a follow-ease: the display starts from the pre-growth
+    /// equivalent offset (`added` rows back from the new bottom) and eases down
+    /// to 0, rather than jumping there with no animation at all.
+    #[test]
+    fn apply_frame_arms_a_follow_ease_when_at_bottom_and_output_fits() {
+        let mut state = crate::state::AppState::default();
+        assert_eq!(state.transcript_scroll, 0, "premise: reader is at the bottom");
+        state.pager.arm(20); // before_rows = 20
+        // 5 rows added (25 - 20), viewport 10: fits, no [more].
+        apply_frame(&mut state, 15, 10, 0, 25, true);
+        assert!(!state.pager.active, "5 added rows fit in a 10-row viewport");
+        assert_eq!(state.transcript_scroll, 0, "logical target is still the bottom");
+        let a = state.scroll_anim.as_ref().expect("a follow-ease must be armed");
+        assert_eq!(a.from, 5, "display starts 5 rows back — where the old bottom now sits");
+        assert_eq!(a.target(), 0);
+    }
+
+    /// The reader scrolled into history before this output arrived: nothing
+    /// drags their view — no follow-ease, no change to `transcript_scroll` at
+    /// all, exactly today's (correct) behavior for a turn that fits on screen.
+    #[test]
+    fn apply_frame_arms_no_follow_ease_when_reader_scrolled_away() {
+        let mut state = crate::state::AppState::default();
+        state.transcript_scroll = 7; // reader scrolled up into history
+        state.pager.arm(20);
+        apply_frame(&mut state, 50, 10, 0, 25, true);
+        assert!(!state.pager.active);
+        assert_eq!(state.transcript_scroll, 7, "the reader's position must not move");
+        assert!(state.scroll_anim.is_none(), "no follow-ease for a reader who scrolled away");
+    }
+
+    /// When the pager DOES engage (output overflows), the follow-ease runs only
+    /// up to wherever it parks — never past it, and never all the way back to
+    /// the pre-growth offset. Same numbers as `the_prompt_row_comes_out_of_
+    /// the_parked_screenful` above: `activation_target(2, 27, 10, 1) == Some(16)`.
+    #[test]
+    fn apply_frame_follow_ease_target_is_clamped_to_the_pager_park() {
+        let mut state = crate::state::AppState::default();
+        assert_eq!(state.transcript_scroll, 0, "premise: reader is at the bottom");
+        state.pager.arm(2);
+        apply_frame(&mut state, 30, 10, 1, 27, true);
+        assert!(state.pager.active, "25 added rows overflow a 10-row viewport");
+        assert_eq!(state.transcript_scroll, 16, "parked exactly where the pager would park");
+        let a = state.scroll_anim.as_ref().expect("a follow-ease must be armed");
+        assert_eq!(a.from, 25, "display starts at the pre-growth equivalent offset (27 - 2)");
+        assert_eq!(a.target(), 16, "…and eases only down to the park, not past it");
     }
 
     #[test]

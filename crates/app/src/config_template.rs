@@ -522,6 +522,17 @@ const ANIMATION: &[Row] = &[
     ),
     d("scroll_ms", "120", &["Smooth-scroll duration in milliseconds. 0 is instant."]),
     d(
+        "follow_ms",
+        "200",
+        &[
+            "How long the story pane eases toward new output arriving at the",
+            "bottom, in milliseconds. 0 is instant. Only applies while you were",
+            "already following the bottom - scrolled into history, nothing",
+            "drags your view back. Any keypress or mouse action ends an",
+            "in-flight ease at once, same as it does for paced pictures.",
+        ],
+    ),
+    d(
         "scrollbar_hide_ms",
         "1500",
         &[

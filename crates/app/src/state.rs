@@ -1688,14 +1688,18 @@ impl ScrollAnim {
     /// `scroll_ms == 0` (the caller should jump instantly and clear any anim) —
     /// the byte-for-byte instant path.
     pub fn to(from: usize, to: usize, cfg: &crate::config::AnimationConfig) -> Option<Self> {
-        if !cfg.enabled || cfg.scroll_ms == 0 {
+        Self::over(from, to, cfg.enabled, cfg.scroll_ms, cfg.easing)
+    }
+
+    /// Same as [`Self::to`], but with an explicit duration instead of always
+    /// reading `cfg.scroll_ms` — used by the transcript follow-ease (SQ-1595),
+    /// which times off `cfg.follow_ms` while still honoring the master switch
+    /// and the shared easing curve.
+    pub fn over(from: usize, to: usize, enabled: bool, ms: u64, easing: crate::anim::Easing) -> Option<Self> {
+        if !enabled || ms == 0 {
             return None;
         }
-        Some(Self {
-            from,
-            to,
-            tween: crate::anim::Tween::new(Duration::from_millis(cfg.scroll_ms), cfg.easing),
-        })
+        Some(Self { from, to, tween: crate::anim::Tween::new(Duration::from_millis(ms), easing) })
     }
 
     /// The current displayed offset: `lerp(from, to, tween.progress())`.
@@ -4287,6 +4291,39 @@ impl AppState {
         // Same funnel, for the sixel scroll-settle debounce (SQ-1198): every real
         // scroll motion — wheel, page, drag-autoscroll — restarts the window.
         self.sixel_scroll_motion_at = Some(Instant::now());
+    }
+
+    /// Arm (or replace) the transcript's smooth-scroll animation for new output
+    /// arriving while the reader was already at the bottom (SQ-1595), easing
+    /// over `config.animation.follow_ms` rather than `scroll_ms`. Sets the
+    /// logical target immediately, exactly like [`Self::scroll_transcript_to`],
+    /// but the displayed offset starts from `from` — the pre-turn bottom's
+    /// equivalent offset now that the transcript has grown — rather than from
+    /// the current display, and this deliberately does NOT touch
+    /// `scrollbar_shown_at` / `sixel_scroll_motion_at`: this is autoscroll
+    /// follow, not a reader-initiated scroll, and the scrollbar must not flash
+    /// on every turn of new text (see `scrollbar_shown_at`'s own docs).
+    pub fn arm_transcript_follow_ease(&mut self, from: u16, target: u16) {
+        self.transcript_scroll = target;
+        let anim = &self.config.animation;
+        self.scroll_anim = ScrollAnim::over(from as usize, target as usize, anim.enabled, anim.follow_ms, anim.easing);
+    }
+
+    /// Snap the transcript's displayed scroll offset to its animation's target
+    /// and drop the animation, right now — regardless of whether its tween has
+    /// finished. No-op if none is in flight. Returns `true` iff one was.
+    ///
+    /// Used two ways: the run loop's own natural finish still checks `done()`
+    /// itself before calling this (so a still-tweening anim is left alone), and
+    /// the cancellation hook that ends an in-flight follow-ease the moment the
+    /// player acts calls it unconditionally (SQ-1595) — a keypress or mouse
+    /// event outranks paced output, the same principle `settle_picture_pacing`
+    /// applies to the v6 picture pacer. Both share this one finalize path
+    /// rather than forking a second copy of it.
+    pub fn finalize_transcript_scroll_anim_now(&mut self) -> bool {
+        let Some(a) = self.scroll_anim.take() else { return false };
+        self.transcript_scroll = a.target() as u16;
+        true
     }
 
     /// How long the transcript viewport is considered "in motion" after the last
@@ -7021,6 +7058,71 @@ mod tests {
         let a = s.scroll_anim.as_ref().expect("animation armed when enabled");
         assert_eq!(a.from, 3, "from = previous displayed offset");
         assert_eq!(a.target(), 8, "to = new target");
+    }
+
+    // ── Transcript follow-ease (SQ-1595) ─────────────────────────────────────
+
+    /// `ScrollAnim::over` is what the follow-ease uses instead of `to` — same
+    /// enabled/zero-duration instant-path rules, but the caller supplies its own
+    /// duration rather than reading `cfg.scroll_ms`.
+    #[test]
+    fn scroll_anim_over_honors_enabled_and_zero_duration() {
+        use crate::anim::Easing;
+        assert!(ScrollAnim::over(0, 10, false, 200, Easing::EaseOut).is_none(), "disabled arms nothing");
+        assert!(ScrollAnim::over(0, 10, true, 0, Easing::EaseOut).is_none(), "0ms arms nothing");
+        let a = ScrollAnim::over(5, 10, true, 200, Easing::EaseOut).expect("armed");
+        assert_eq!(a.from, 5);
+        assert_eq!(a.target(), 10);
+    }
+
+    /// `arm_transcript_follow_ease` sets the logical target immediately (same
+    /// contract as `scroll_transcript_to`) but starts the display from the
+    /// caller's `from`, not from the current displayed offset, and it must use
+    /// `follow_ms` — a value nothing else on `AppState` reads — not `scroll_ms`.
+    #[test]
+    fn arm_transcript_follow_ease_uses_follow_ms_not_scroll_ms() {
+        let mut s = AppState::default();
+        s.config.animation.scroll_ms = 999_000; // if this were used, done() would never be true
+        s.config.animation.follow_ms = 1; // 1ms: settles almost immediately
+        s.transcript_scroll = 0;
+        s.arm_transcript_follow_ease(30, 12);
+        assert_eq!(s.transcript_scroll, 12, "logical target set immediately");
+        let a = s.scroll_anim.as_ref().expect("follow-ease armed");
+        assert_eq!(a.from, 30, "display starts from the pre-growth equivalent offset, not 0");
+        assert_eq!(a.target(), 12);
+        std::thread::sleep(Duration::from_millis(5));
+        assert!(a.done(), "a 1ms follow_ms tween must have settled by now — proves follow_ms drove it, not the 999s scroll_ms");
+    }
+
+    /// `enabled = false` makes the follow-ease instant too, exactly like
+    /// `scroll_transcript_to`.
+    #[test]
+    fn arm_transcript_follow_ease_instant_when_disabled() {
+        let mut s = AppState::default();
+        s.config.animation.enabled = false;
+        s.arm_transcript_follow_ease(30, 12);
+        assert_eq!(s.transcript_scroll, 12);
+        assert!(s.scroll_anim.is_none(), "disabled = instant, no animation");
+    }
+
+    /// The cancellation hook's underlying finalize: it must work regardless of
+    /// whether the tween has finished — that is the whole point (ending one
+    /// EARLY) — and it is the same path the run loop's natural on-`done()`
+    /// finalize reuses (see `main.rs`'s run loop, SQ-1595).
+    #[test]
+    fn finalize_transcript_scroll_anim_now_ends_an_in_flight_tween_early() {
+        let mut s = AppState::default();
+        s.config.animation.follow_ms = 999_000; // long enough that it is still mid-flight
+        s.arm_transcript_follow_ease(30, 12);
+        assert!(!s.scroll_anim.as_ref().unwrap().done(), "premise: still mid-tween");
+        assert_ne!(s.effective_transcript_scroll(), 12, "premise: display has not caught up yet");
+
+        assert!(s.finalize_transcript_scroll_anim_now(), "an animation was in flight to finalize");
+        assert!(s.scroll_anim.is_none(), "the animation is cleared");
+        assert_eq!(s.transcript_scroll, 12, "snapped straight to the target, not reverted");
+        assert_eq!(s.effective_transcript_scroll(), 12, "the display reads settled immediately");
+
+        assert!(!s.finalize_transcript_scroll_anim_now(), "nothing left to finalize");
     }
 
     // ── Story-pane scrollbar auto-hide (SQ-0782) ─────────────────────────────

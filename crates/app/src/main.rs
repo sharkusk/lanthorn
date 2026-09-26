@@ -2317,15 +2317,11 @@ fn run_event_loop(boot: startup::BootResult, launched_from_library: bool) -> Run
                 }
             }
             // Finalize a completed smooth-scroll: snap the logical offset to the
-            // target and drop the animation. The next iteration redraws.
-            let done_to = state
-                .scroll_anim
-                .as_ref()
-                .filter(|a| a.done())
-                .map(|a| a.target());
-            if let Some(to) = done_to {
-                state.transcript_scroll = to as u16;
-                state.scroll_anim = None;
+            // target and drop the animation. The next iteration redraws. Shares
+            // the finalize path the SQ-1595 cancellation hook below uses to end
+            // one early, rather than forking a second copy of it.
+            if state.scroll_anim.as_ref().is_some_and(|a| a.done()) {
+                state.finalize_transcript_scroll_anim_now();
             }
             // Finalize each open scrollable surface's animation likewise. Each
             // finalize reports whether it just cleared a running anim; OR that
@@ -2424,6 +2420,16 @@ fn run_event_loop(boot: startup::BootResult, launched_from_library: bool) -> Run
             || matches!(&event, Event::Resize(_, _))
         {
             app::host::clock::settle_picture_pacing(&mut state, &mut *session);
+        }
+
+        // SQ-1595: the player outranks an in-flight transcript follow-ease too —
+        // any key press or mouse event (a wheel scroll counts same as a
+        // keystroke) finalizes it immediately rather than fighting whatever the
+        // reader is about to do. Non-consuming, same shape as the picture-pacing
+        // settle above: if the event itself is a scroll action, it arms its own
+        // fresh animation in its own handler, AFTER this, untouched.
+        if matches!(&event, Event::Key(k) if k.kind == KeyEventKind::Press) || matches!(&event, Event::Mouse(_)) {
+            state.finalize_transcript_scroll_anim_now();
         }
 
         // SQ-1511: a resize may have changed the CELL, not only the grid — mark
