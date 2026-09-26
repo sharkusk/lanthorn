@@ -1248,16 +1248,49 @@ impl V6Windows {
         // name ("Banquet Hall") with such runs before repainting the shorter
         // "Great Hall" — those blanks must erase the covered glyphs, or the old
         // tail survives as "Great Hall" + a stale "ll" ("Great Hallll", SQ-0498).
-        // A space WITHIN a mixed run stays non-erasing: those are field-padding
-        // gaps (Shogun pads its status fields with spaces) and erasing under
-        // them would eat a neighbouring label painted in the same row.
+        // A space WITHIN a mixed run stays non-erasing by default: those are
+        // field-padding gaps (Shogun pads its status fields with spaces) and
+        // erasing under them would eat a neighbouring label painted in the
+        // same row. `overwrites_same_slot` below is the one exception.
         let clearing = run.text.chars().all(|c| c == ' ');
         // Segment bounds come from the PEN, not from `i * cell.w`: the glyphs of
         // a proportional run are not the same width, so the pixels an erasing
         // segment covers are the pen's cumulative offsets (SQ-1009).
         let edges = glyph_edges(&run, metric);
         let chars: Vec<char> = run.text.chars().collect();
-        let erases = |i: usize| bg_opaque || clearing || chars[i] != ' ';
+        // Per glyph: does this glyph's pixel span, BEFORE this call touches
+        // anything, already carry a run that started at or before THIS run's
+        // own x? That is a re-print of the SAME field slot with a SHORTER
+        // word — Journey's combat-menu party column prints "Tag       " over
+        // the old "Esher     " at the same x (SQ-1589) — and a space there was
+        // printed FOR THE PURPOSE of blanking the old tail, unlike a gap
+        // between two glyphs of an unrelated NEIGHBOUR field that merely
+        // starts further right (Shogun's "A A" status padding, SQ-1054): that
+        // neighbour's own x is always AFTER this run's x, never at-or-before
+        // it, so it stays out of this set. Computed once, from the pre-call
+        // state, precisely because the segment loop below mutates the very
+        // runs a LATER segment in this same call would otherwise have to ask
+        // about — an ink segment erased earlier in this call turns "Esher"
+        // into a trimmed remnant whose OWN x has moved past this run's x, so
+        // asking the live state at that point would wrongly read as "a
+        // neighbour" and reproduce the bug.
+        let top = run.y as i32;
+        let rx = run.x as i32;
+        let overwrites_same_slot: Vec<bool> = (0..chars.len())
+            .map(|i| {
+                let (seg_l, seg_r) = (rx + edges[i], rx + edges[i + 1]);
+                self.windows.iter().any(|w| {
+                    [&w.texts, &w.retired, &w.streamed].iter().any(|layer| {
+                        layer.iter().any(|t| {
+                            let ty = t.y as i32;
+                            let (tl, tr) = (t.x as i32, t.x as i32 + t.px_w(metric) as i32);
+                            ty + cell.h() as i32 > top && ty < top + cell.h() as i32 && tl < seg_r && tr > seg_l && tl <= rx
+                        })
+                    })
+                })
+            })
+            .collect();
+        let erases = |i: usize| bg_opaque || clearing || chars[i] != ' ' || overwrites_same_slot[i];
         // Walk the run in segments of equal opacity. An OPAQUE segment erases
         // everything under it; a transparent one — a padding space — erases only
         // the BLANK cells under it (SQ-1054), which is the whole of the
@@ -3662,6 +3695,68 @@ mod tests {
             w3.windows[0].texts.iter().any(|t| t.x == 8 && t.text == " "),
             "a reversed spacer under a REVERSED label survives — it is the bar: {:?}",
             w3.windows[0].texts.iter().map(|t| (t.x, t.style, &t.text)).collect::<Vec<_>>(),
+        );
+    }
+
+    /// **A shorter word reprinted at the SAME slot erases the longer word's
+    /// tail — "Tag       " over "Esher     " must not leave a stray "er"
+    /// behind ("Tager", SQ-1589).**
+    ///
+    /// Journey's combat-menu party column paints one run per slot, word plus
+    /// right-padding, at a fixed x every turn. When the new name is shorter
+    /// than the old one, the first few glyphs of the new run erase the old
+    /// run's matching ink glyphs (unconditionally — non-space chars always
+    /// erased, even before this fix), which TRIMS the old run into a remnant
+    /// that starts further right than either run's own x — and it is that
+    /// remnant, not the original "Esher", that the new run's trailing
+    /// padding then has to clear. `overwrites_same_slot` in `paint_run` is
+    /// computed from the pre-call state for exactly this reason: asking the
+    /// live (already-trimmed) state would see the remnant's moved x and
+    /// misread it as an unrelated neighbour, which is the bug this pins.
+    ///
+    /// FALSIFY by reverting `overwrites_same_slot` to a constant `false`
+    /// (restoring the pre-fix rule): the second assertion fails, holding a
+    /// stray "er" fragment.
+    #[test]
+    fn a_shorter_reprint_of_the_same_slot_erases_the_longer_words_tail() {
+        let metric = V6Metric::fixed(V6Cell::new(7, 15));
+        let mut w = V6Windows::default();
+        w.paint_run(0, run_at(10, 1, "Esher     ", 0), &metric);
+        w.paint_run(0, run_at(10, 1, "Tag       ", 0), &metric);
+        let texts: Vec<&V6Text> = w.windows[0].texts.iter().collect();
+        assert!(
+            texts.iter().any(|t| t.text.trim() == "Tag"),
+            "the new word is on the screen: {:?}",
+            texts.iter().map(|t| (t.x, &t.text)).collect::<Vec<_>>(),
+        );
+        assert!(
+            !texts.iter().any(|t| t.text.contains("er") || t.text.contains('h') || t.text.contains('s')),
+            "no fragment of the old, longer word survives: {:?}",
+            texts.iter().map(|t| (t.x, &t.text)).collect::<Vec<_>>(),
+        );
+    }
+
+    /// **…and a genuine NEIGHBOUR — a separate field whose own x is AFTER this
+    /// run's x — stays spared even when it sits under this run's trailing
+    /// padding**, not just under an interior gap (SQ-1054's own shape, pinned
+    /// above). The two cases are discriminated purely by the covered run's
+    /// own start x relative to the printing run's start x, not by whether the
+    /// gap is interior or trailing.
+    #[test]
+    fn a_later_starting_neighbour_is_spared_even_under_trailing_padding() {
+        let metric = V6Metric::fixed(V6Cell::new(7, 15));
+        let mut w = V6Windows::default();
+        // A neighbour field's label, starting well to the right of where the
+        // printing run begins — inside what will become that run's trailing
+        // padding, but never overwritten because its own x (50) is AFTER the
+        // new run's x (10).
+        w.paint_run(0, run_at(50, 1, "L", 0), &metric);
+        w.paint_run(0, run_at(10, 1, "Tag       ", 0), &metric);
+        let texts: Vec<&V6Text> = w.windows[0].texts.iter().collect();
+        assert!(
+            texts.iter().any(|t| t.text.contains('L')),
+            "a later-starting neighbour survives under trailing padding: {:?}",
+            texts.iter().map(|t| (t.x, &t.text)).collect::<Vec<_>>(),
         );
     }
 

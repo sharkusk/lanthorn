@@ -23,3 +23,5 @@ mod v6_journey_menu_band;
 mod v6_journey_prose_containment;
 #[path = "suites/sq1579_journey_no_map.rs"]
 mod sq1579_journey_no_map;
+#[path = "suites/sq1589_journey_combat_party.rs"]
+mod sq1589_journey_combat_party;
