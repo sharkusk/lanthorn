@@ -166,6 +166,16 @@ pub struct GlulxSession {
     /// the corpus), 3 ms on `The_Wizard_Sniffer.gblorb`, 23 ms for Kerkerkruip's
     /// refusal, 0.2 ms for the Anchorhead demo's.
     i7_world: std::cell::OnceCell<Option<gvm::i7map::I7World>>,
+    /// The story's grammar/dictionary snapshot ([`Engine::story_vocabulary`]),
+    /// cached here (SQ-1655) because [`Self::learn_player_from_pickups`] asks
+    /// for it every turn a command was typed and rebuilding it from the
+    /// grammar table on every ask — which is what `story_vocabulary` itself
+    /// does, and what the host's OWN separate cache (`AppState::vocab`) exists
+    /// to avoid at that layer — would undo the point of caching at this one.
+    /// Static story data, exactly like `i7_world`/`parse_names` above: never
+    /// invalidated, because the dictionary a game compiled with does not
+    /// change at runtime.
+    vocab_cache: std::cell::OnceCell<Option<crate::vocab::StoryVocabulary>>,
     /// Reverse map from a room's [`mapper::graph::RoomId`] (SQ-0526's
     /// `crate::roomid::glulx_room_id` HASH of the object address) back to that
     /// address (SQ-1264).
@@ -230,6 +240,26 @@ pub struct GlulxSession {
     /// Learns which RAM word holds the game's `location` global, so same-named
     /// rooms get distinct ids (SQ-0526). See [`crate::glulx_roomlock`].
     room_lock: crate::glulx_roomlock::RoomLock,
+    /// Learns which RAM word holds the game's `player` global, for a story
+    /// [`gvm::objects::ParseNames::find_player`]'s static scan cannot find at
+    /// all — Counterfeit Monkey's compiled `parse_name` routine avatar being the
+    /// motivating case (SQ-1655). See [`crate::glulx_playerlock`]. Consulted
+    /// only as a FALLBACK, from [`Self::player_addr`], after the static scan has
+    /// already answered `None` — never an override.
+    player_lock: crate::glulx_playerlock::PlayerLock,
+    /// The room [`Self::learn_player_from_pickups`] last compared against, and
+    /// what stood in it: `(room address, its live children's addresses)`,
+    /// refreshed every turn. `None` when the current room has no resolvable
+    /// address yet — see that method's own doc.
+    pickup_watch: Option<(u32, Vec<u32>)>,
+    /// The command line [`Self::submit`] is about to drive, held here only
+    /// until [`Self::finish_turn`] consumes it (SQ-1655) — the caller,
+    /// `learn_player_from_pickups`'s gate on whether THIS turn is worth
+    /// reading as a pickup at all. `None` on every OTHER path into
+    /// `finish_turn` (`submit_key`, a resume, a resize, …), which is exactly
+    /// right: none of those is a player-typed command, so none of them should
+    /// ever be read as one.
+    pending_command: Option<String>,
     /// Consecutive silent `look`s that came back with no room heading, capped by
     /// [`NAMING_LOOK_REFUSALS`]: a story that will not name its rooms that way must
     /// stop being asked. Reset by any answer. See [`GlulxSession::silent_look`]
@@ -697,6 +727,7 @@ impl GlulxSession {
             parse_names: std::cell::OnceCell::new(),
             world_model: std::cell::OnceCell::new(),
             i7_world: std::cell::OnceCell::new(),
+            vocab_cache: std::cell::OnceCell::new(),
             room_addrs: std::cell::RefCell::new(std::collections::HashMap::new()),
             object_word_set: std::cell::RefCell::new(None),
             player_addr: std::cell::RefCell::new(None),
@@ -706,6 +737,9 @@ impl GlulxSession {
             last_room: None,
             boot_description: None,
             room_lock: crate::glulx_roomlock::RoomLock::new(0, 0),
+            player_lock: crate::glulx_playerlock::PlayerLock::new(0),
+            pickup_watch: None,
+            pending_command: None,
             naming_look_refusals: 0,
             saw_buffer_heading: false,
             strip_prompt: true,
@@ -725,6 +759,12 @@ impl GlulxSession {
                 session.machine.mem().ramstart(),
                 session.scan_words(),
             ),
+        };
+        session.player_lock = match session.remembered_player_global() {
+            Some(addr) if session.player_sidecar_plausible(addr) => {
+                crate::glulx_playerlock::PlayerLock::locked_at(session.machine.mem().ramstart(), addr)
+            }
+            _ => crate::glulx_playerlock::PlayerLock::new(session.machine.mem().ramstart()),
         };
         // SQ-1303: read this story's compiled Inform 7 world model NOW, before the
         // opening room is resolved below — that resolution is the first thing it
@@ -751,6 +791,16 @@ impl GlulxSession {
         session.boot_description = session.appglk().take_room_description();
         let heading = session.name_this_room(heading, awaiting_line_input);
         session.last_room = heading.map(|n| session.room_for(&n, &ram));
+        // SQ-1655: seed the pickup-watch baseline from the opening room, the same
+        // reason `last_room` is seeded here rather than left for the first turn —
+        // a story whose opening command is itself a take (Counterfeit Monkey's
+        // own "take all") needs a baseline to compare against on that very first
+        // turn, not one turn later. See `learn_player_from_pickups`'s own doc.
+        session.pickup_watch = session
+            .last_room
+            .as_ref()
+            .and_then(|r| session.room_addrs.borrow().get(&r.number).copied())
+            .map(|addr| (addr, session.room_children_snapshot(addr)));
         Ok(session)
     }
 
@@ -978,6 +1028,12 @@ impl GlulxSession {
             .as_ref()
     }
 
+    /// This story's grammar/dictionary, cached — see the [`vocab_cache`](Self::vocab_cache)
+    /// field's own doc for why.
+    fn cached_vocabulary(&self) -> Option<&crate::vocab::StoryVocabulary> {
+        self.vocab_cache.get_or_init(|| Engine::story_vocabulary(self)).as_ref()
+    }
+
     /// What the STORY calls the room at `addr`, where its compiled world model
     /// says so (SQ-1303).
     ///
@@ -1139,6 +1195,21 @@ impl GlulxSession {
         }
     }
 
+    /// The `player-global` sidecar's own boot-only cross-check (SQ-1655),
+    /// mirroring [`Self::sidecar_addr_plausible`] for the same reason: a value
+    /// that is neither `0` nor one of this story's OBJECTS is not a plausible
+    /// `player` global at boot, whatever a stale sidecar remembers. `true` when
+    /// there is no object list to check against at all, which leaves the
+    /// sidecar exactly as trusted as it was before this existed.
+    fn player_sidecar_plausible(&self, addr: u32) -> bool {
+        let Some(names) = self.parse_names() else { return true };
+        match self.machine.mem().read32(addr) {
+            Some(0) => true,
+            Some(v) => names.is_object(self.machine.mem(), v),
+            None => false,
+        }
+    }
+
     /// The address the game's `location` global currently holds — the room the
     /// player is in, as the STORY sees it (SQ-1241).
     ///
@@ -1159,6 +1230,12 @@ impl GlulxSession {
     /// [`location_addr`](Self::location_addr) where that is known — see
     /// [`gvm::objects::ParseNames::find_player`].
     ///
+    /// SQ-1655: where the static scan refuses outright (Counterfeit Monkey's
+    /// compiled `parse_name`-routine avatar — see [`crate::glulx_playerlock`]'s
+    /// module doc), falls back to [`Self::player_global_addr`] — the fallback
+    /// this learner exists for, and never consulted when the static scan
+    /// already has an answer.
+    ///
     /// Cached for the turn, refusal included: see the
     /// [`player_addr`](Self::player_addr) field.
     fn player_addr(&self) -> Option<u32> {
@@ -1167,9 +1244,121 @@ impl GlulxSession {
         }
         let found = self
             .parse_names()
-            .and_then(|n| n.find_player(self.machine.mem(), self.player_room_hint()));
+            .and_then(|n| n.find_player(self.machine.mem(), self.player_room_hint()))
+            .or_else(|| self.player_global_addr());
         *self.player_addr.borrow_mut() = Some(found);
         found
+    }
+
+    /// The avatar address [`crate::glulx_playerlock::PlayerLock`] currently
+    /// names, dereferencing the locked GLOBAL the same way
+    /// [`Self::location_addr`] dereferences [`crate::glulx_roomlock::RoomLock`]'s
+    /// — `None` while the learner hasn't locked, and for a lock whose word
+    /// currently reads zero (the game may legitimately park it there
+    /// momentarily, exactly as [`crate::glulx_roomlock::RoomLock::room_id`]
+    /// already tolerates for `location`).
+    fn player_global_addr(&self) -> Option<u32> {
+        let global = self.player_lock.locked()?;
+        self.machine.mem().read32(global).filter(|&v| v != 0)
+    }
+
+    /// The live top-level children of the object at `addr` — what a room
+    /// "contains" right now, from [`Self::parse_names`]'s object tree. `Vec::new()`
+    /// for a story with no readable object list. Shared by
+    /// [`Self::new_with_store`] (the opening room's baseline) and
+    /// [`Self::learn_player_from_pickups`] (every turn's baseline for the next).
+    fn room_children_snapshot(&self, addr: u32) -> Vec<u32> {
+        match self.parse_names() {
+            Some(names) => names.children(self.machine.mem(), addr),
+            None => Vec::new(),
+        }
+    }
+
+    /// Feed [`crate::glulx_playerlock::PlayerLock`] one turn's worth of evidence
+    /// (SQ-1655): an item that stood in the SAME room a moment ago and does not
+    /// any more, whose new container looks like an avatar, is exactly what a
+    /// successful `take` (or `take all`, `get X`, …) leaves behind.
+    ///
+    /// Compares [`Self::pickup_watch`](the field) — this SAME room's children as
+    /// of the moment this method last ran — against the room's children RIGHT
+    /// NOW. An item present before and absent now left the room somehow; its
+    /// live [`gvm::objects::ParseNames::parent`] says where. Four things rule
+    /// out a false reading before the evidence ever reaches the learner:
+    ///
+    /// * **the turn must be a genuine take-shaped command.** Measured directly
+    ///   against `stories/Anchorhead.gblorb`: without this gate, `climb on
+    ///   garbage can` reads as a pickup, because the PLAYER's own address stops
+    ///   being a direct child of the room (they are now standing ON the can) and
+    ///   the can itself passes every remaining check — an avatar-plausible
+    ///   object, situated, holding something that "left the room". The garbage
+    ///   can then locks as "the avatar". `enter window`, `up`/`down` and every
+    ///   other containment-shuffling command do the same for a different
+    ///   scenery object each time, which is what produced a DIFFERENT wrong
+    ///   `player_object()` handle on nearly every one of Anchorhead's first
+    ///   dozen turns before this gate existed. [`crate::session::take_command_target`]
+    ///   — the same lexical take-or-not test `classify_take_attempt` already
+    ///   trusts for the identical "is this worth reading as a pickup" question
+    ///   — is cheap enough to run every turn and precise enough to rule the
+    ///   whole class out: none of those commands names "take" or one of its
+    ///   story-recognised synonyms, so none of them reaches the object-tree
+    ///   diff below at all;
+    /// * the room must be the SAME room both times — a room change explains an
+    ///   item's disappearance on its own (the player simply isn't standing
+    ///   there to see it any more), and is not evidence of anything;
+    /// * an item removed from play entirely (`parent` now `None`) or still a
+    ///   direct child of the room (moved but not taken) teaches nothing;
+    /// * the new parent must pass the SAME avatar-plausibility test
+    ///   [`gvm::objects::ParseNames::find_player`] itself applies to its own
+    ///   candidates — a real object of this story, standing somewhere
+    ///   (`parent(mem, new_parent).is_some()`) — never "whatever happened to be
+    ///   holding it", which could as easily be an NPC.
+    ///
+    /// This is allowed to UNDER-report (a genuine pickup that happens through a
+    /// verb this story's grammar does not resolve to "take" teaches nothing) —
+    /// the same "never guess, record nothing instead" discipline
+    /// [`crate::session::classify_take_attempt`]'s own doc holds itself to, and
+    /// for the identical reason: a missed turn of evidence costs nothing here,
+    /// where a false one corrupts the very address every later turn trusts.
+    ///
+    /// Runs every turn a command was typed, win or lose, and always refreshes
+    /// the watch for next turn: a room the player has just left is never worth
+    /// comparing against once they are gone, and a turn that taught nothing
+    /// must not leave a stale baseline for the next one to misread as
+    /// "everything vanished".
+    fn learn_player_from_pickups(&mut self, location: Option<&LocationInfo>, ram: &[u32]) {
+        let room_addr = location.and_then(|l| self.room_addrs.borrow().get(&l.number).copied());
+        let cmd = self.pending_command.take();
+        let take_shaped = cmd
+            .as_deref()
+            .is_some_and(|c| crate::session::take_command_target(c, self.cached_vocabulary()).is_some());
+
+        let mut evidence: Vec<u32> = Vec::new();
+        if take_shaped {
+            if let (Some(room_addr), Some((prev_room, prev_children))) = (room_addr, self.pickup_watch.clone()) {
+                if prev_room == room_addr {
+                    if let Some(names) = self.parse_names() {
+                        let mem = self.machine.mem();
+                        let current = names.children(mem, room_addr);
+                        for item in prev_children {
+                            if current.contains(&item) {
+                                continue; // still there; no evidence either way
+                            }
+                            let Some(new_parent) = names.parent(mem, item) else { continue }; // removed from play
+                            if new_parent == room_addr {
+                                continue; // moved, but stayed a direct child of the room
+                            }
+                            if names.is_object(mem, new_parent) && names.parent(mem, new_parent).is_some() {
+                                evidence.push(new_parent);
+                            }
+                        }
+                    }
+                }
+            }
+        }
+        for avatar in evidence {
+            self.player_lock.observe_pickup(ram, avatar);
+        }
+        self.pickup_watch = room_addr.map(|addr| (addr, self.room_children_snapshot(addr)));
     }
 
     /// The room to judge avatar candidates by — the *only* thing it is used
@@ -1477,6 +1666,17 @@ impl GlulxSession {
         self.check_room_lock_against_story(&ram, movement, story_named.as_deref());
         let location = self.last_room.clone();
         let location_method = location.as_ref().map(|_| LocationMethod::RoomHeading);
+        // SQ-1655: before computing this turn's items — a confirmed pickup this turn
+        // may just have identified the avatar for the very first time, and that fresh
+        // lock must be visible to the `glulx_item_observations` call right below, not
+        // one turn late. See `learn_player_from_pickups`'s own doc.
+        let was_player_locked = self.player_lock.locked();
+        self.learn_player_from_pickups(location.as_ref(), &ram);
+        match (was_player_locked, self.player_lock.locked()) {
+            (None, Some(addr)) => self.remember_player_global(addr),
+            (Some(_), None) => self.forget_player_global(),
+            _ => {}
+        }
         // SQ-1627: a direct `Introspect` query, not a transcript heuristic — no v6-style gate
         // needed. See the helper's own doc for why Glulx needs only one room query (unlike the
         // Z-machine): this format has no way to tell an OPEN container from a closed one at all.
@@ -2174,6 +2374,62 @@ impl GlulxSession {
         }
     }
 
+    // ── SQ-1655: the `player-global` sidecar, mirroring `room-global` above ──
+    //
+    // Same shape, same reasoning, same on-disk format (`"<addr> <checksum>:<extstart>"`,
+    // keyed by `image_identity` exactly like `room-global` — see that field's own
+    // docs for why a bare-decimal legacy format doesn't apply here: this sidecar
+    // never had one). A separate file, not a second line in `room-global`, so
+    // either learner's sidecar can be inspected, deleted or go stale independently
+    // of the other's.
+
+    /// Where the learned `player` address is remembered for this story.
+    fn player_global_path(&self) -> Option<std::path::PathBuf> {
+        (!self.store.absent()).then(|| self.store.dir().join("player-global"))
+    }
+
+    /// The address learned in an earlier run of THIS BUILD of this story, if
+    /// any — `None` for a sidecar stamped by a different one (see
+    /// [`Self::image_identity`]), treated exactly like an absent sidecar.
+    fn remembered_player_global(&self) -> Option<u32> {
+        let raw = std::fs::read_to_string(self.player_global_path()?).ok()?;
+        let (addr, token) = raw.trim().split_once(' ')?;
+        let addr = addr.parse::<u32>().ok().filter(|&a| a != 0)?;
+        let (checksum, extstart) = token.split_once(':')?;
+        let checksum = u32::from_str_radix(checksum, 16).ok()?;
+        let extstart = u32::from_str_radix(extstart, 16).ok()?;
+        (self.image_identity() == (checksum, extstart)).then_some(addr)
+    }
+
+    /// Remember a freshly learned address for later runs, stamped with this
+    /// build's [`Self::image_identity`]. Best-effort: a story with no writable
+    /// directory simply re-learns next time.
+    fn remember_player_global(&self, addr: u32) {
+        if !self.store.may_write() {
+            return;
+        }
+        if let Some(p) = self.player_global_path() {
+            if let Some(dir) = p.parent() {
+                let _ = std::fs::create_dir_all(dir);
+            }
+            let (checksum, extstart) = self.image_identity();
+            let _ = std::fs::write(p, format!("{addr} {checksum:x}:{extstart:x}"));
+        }
+    }
+
+    /// Delete the remembered address. Called where the story has just
+    /// contradicted the lock, mirroring [`Self::forget_room_global`]'s own
+    /// reasoning: without this a stale sidecar would hand the very word the
+    /// story caught out straight back at the next launch.
+    fn forget_player_global(&self) {
+        if !self.store.may_write() {
+            return;
+        }
+        if let Some(p) = self.player_global_path() {
+            let _ = std::fs::remove_file(p);
+        }
+    }
+
     /// The learned `location` address, for persisting across runs.
     pub fn locked_room_global(&self) -> Option<u32> {
         self.room_lock.locked()
@@ -2586,6 +2842,12 @@ impl Engine for GlulxSession {
         // the Z-machine engine's per-turn clear chokepoint.
         if self.machine.trace_exec() {
             self.machine.clear_executed_pcs();
+        }
+        // SQ-1655: only a genuine LINE command is a candidate take — when `pending`
+        // is `Char` below, `command` is coerced into a single keypress instead (a
+        // menu, a "press any key"), which is never a player-typed command.
+        if !self.quit && self.pending != InputKind::Char {
+            self.pending_command = Some(command.to_string());
         }
         if !self.quit {
             if self.pending == InputKind::Char {
@@ -5042,6 +5304,72 @@ mod tests {
         // And round-trips: a second boot against the same story and dir honours it.
         let s2 = boot_for_sidecar(&dir);
         assert_eq!(s2.locked_room_global(), Some(2048), "what was written is what gets read back");
+    }
+
+    // ── SQ-1655: `player-global`'s own sidecar, mirroring `room-global`'s above ──
+
+    #[test]
+    fn a_player_sidecar_stamped_with_this_images_token_is_honoured() {
+        let dir = crate::scratch_dir("sq1655-token-match");
+        let (checksum, extstart) = sidecar_test_token();
+        std::fs::write(dir.join("player-global"), format!("4096 {checksum:x}:{extstart:x}"))
+            .expect("write sidecar");
+
+        let s = boot_for_sidecar(&dir);
+        assert_eq!(
+            s.player_lock.locked(),
+            Some(4096),
+            "a sidecar whose token matches the running image is trusted at boot"
+        );
+    }
+
+    #[test]
+    fn a_player_sidecar_stamped_with_a_different_images_token_is_ignored() {
+        let dir = crate::scratch_dir("sq1655-token-mismatch");
+        let (checksum, extstart) = sidecar_test_token();
+        std::fs::write(dir.join("player-global"), format!("4096 {:x}:{extstart:x}", checksum ^ 1))
+            .expect("write sidecar");
+
+        let s = boot_for_sidecar(&dir);
+        assert_eq!(
+            s.player_lock.locked(),
+            None,
+            "a sidecar stamped for a DIFFERENT image (a rebuilt story) is treated as absent"
+        );
+    }
+
+    #[test]
+    fn remember_player_global_stamps_the_running_images_token_and_round_trips() {
+        let dir = crate::scratch_dir("sq1655-stamp-roundtrip");
+        {
+            let s = boot_for_sidecar(&dir);
+            s.remember_player_global(8192);
+        }
+        let raw = std::fs::read_to_string(dir.join("player-global")).expect("sidecar written");
+        let (checksum, extstart) = sidecar_test_token();
+        assert_eq!(
+            raw.trim(),
+            format!("8192 {checksum:x}:{extstart:x}"),
+            "the written line carries the address and this image's checksum:extstart token"
+        );
+        // And round-trips: a second boot against the same story and dir honours it, and it
+        // persists independently of the room-global sidecar (the same boot never wrote one,
+        // since the tiny `enc(0x120, &[])` test image has no object list at all to search).
+        let s2 = boot_for_sidecar(&dir);
+        assert_eq!(s2.player_lock.locked(), Some(8192), "what was written is what gets read back");
+        assert_eq!(s2.locked_room_global(), None, "the two sidecars are independent files");
+    }
+
+    #[test]
+    fn forget_player_global_removes_only_the_player_sidecar() {
+        let dir = crate::scratch_dir("sq1655-forget");
+        let s = boot_for_sidecar(&dir);
+        s.remember_player_global(4096);
+        s.remember_room_global(2048);
+        assert!(dir.join("player-global").is_file());
+        s.forget_player_global();
+        assert!(!dir.join("player-global").is_file(), "the player sidecar is gone");
+        assert!(dir.join("room-global").is_file(), "the room sidecar is untouched");
     }
 
     /// SQ-1640: a genuinely `static`-but-not-`scenery`/`door` object must still reach

@@ -81,6 +81,7 @@ pub mod native_font;
 pub mod garglk_ini;
 pub mod glk_backend;
 pub mod glulx_debug;
+pub mod glulx_playerlock;
 pub mod glulx_roomlock;
 pub mod glulx_session;
 pub mod host;

@@ -81,6 +81,11 @@ while any such tag, or this Unreleased section, still exists.*
   printed a bolded page title over a bolded list entry, which looked exactly
   like a real room heading over its description. Checking your own in-game
   status screens no longer moves your marker on the map.
+- Fixed carried items never showing up in the tracker for some Inform games
+  whose player character can't be spotted by name alone — *Counterfeit
+  Monkey* and the full commercial release of *Anchorhead* were affected this
+  way for their whole length, with everything you picked up going untracked
+  even though the game's own replies confirmed you were carrying it.
 
 ## v0.8.1 — 2026-09-29
 

@@ -4684,7 +4684,13 @@ pub fn apply_item_observations(mapper: &mut Mapper, turn: u32, result: &TurnResu
 ///
 /// Tokenises with [`crate::vocab::words_of`], not a bare `split_whitespace`, so trailing
 /// punctuation a player actually types ("take lamp.") does not stay glued to the noun.
-fn take_command_target(cmd: &str, vocab: Option<&crate::vocab::StoryVocabulary>) -> Option<String> {
+///
+/// `pub(crate)` since SQ-1655: [`crate::glulx_session::GlulxSession::learn_player_from_pickups`]
+/// reuses it (the NOUN it returns is not the point there — only whether the command is
+/// take-shaped at all) to gate its player-lock fallback's evidence to commands that look like a
+/// deliberate pickup, which is what keeps an ordinary `climb on garbage can` or `enter window`
+/// from being read as one (see that method's own doc for the false-positive it was fixing).
+pub(crate) fn take_command_target(cmd: &str, vocab: Option<&crate::vocab::StoryVocabulary>) -> Option<String> {
     let tokens = crate::vocab::words_of(cmd);
     let (first, rest) = tokens.split_first()?;
     if first == "pick" {

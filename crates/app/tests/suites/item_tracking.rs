@@ -930,3 +930,216 @@ fn examining_the_umbrella_never_relabels_the_unrelated_clothes_item() {
         umbrella_after
     );
 }
+
+// ── SQ-1655: Counterfeit Monkey's avatar, found by the player-lock fallback ──
+//
+// `gvm::objects::ParseNames::find_player`'s static scan refuses CM outright (see that
+// function's own doc): its Inform 7 `Understand` grammar for the player compiles to a
+// `parse_name` ROUTINE, not the static word array the scan can read, and none of its
+// 2,494 objects has a hardware short name either. `GlulxSession::player_addr` used to stop
+// there, so `result.items` never reported a single carried object for the whole session —
+// confirmed directly (`counterfeit_monkey_refuses_an_avatar_it_cannot_identify`,
+// `glulx_inventory.rs`, still pinned above and still passing: neither of its two cases ever
+// takes anything, so the new fallback below never has evidence to fire on).
+//
+// `crate::glulx_playerlock::PlayerLock` closes the gap from the OTHER side: once a
+// take-shaped command visibly moves an object out of the room and into something that
+// looks like an avatar, that address is strong enough evidence to lock onto the `player`
+// global directly, no name or grammar involved in IDENTIFYING the avatar at all — only in
+// deciding which commands are worth reading that way (see `learn_player_from_pickups`'s own
+// doc for why that gate exists).
+
+/// [`ROUTE`] is the first 17 inputs of `stories/CounterfeitMonkey-10.gblorb`'s own `test me`
+/// script (`tools/command scripts/test_me.txt` in the i7/counterfeit-monkey repository) —
+/// the same verified prefix `sq1294_glulx_silent_vehicle_move.rs`'s own `ROUTE` constant
+/// documents at length, reused rather than invented, since a route through this specific
+/// commercial game is not guessable and this one is already known to play cleanly from a
+/// cold boot — plus one substitution: the script's own 18th input is `get heel`, and CM's
+/// grammar keeps `get` as its OWN verb table entry, distinct from `take`/`carry`/`hold`
+/// (confirmed directly: `vocab.verb_named("get")` and `vocab.verb_named("take")` are two
+/// different `Verb`s here), so it does not resolve as take-shaped and this test substitutes
+/// the equivalent `take heel` instead — the same action, the same real success text, just
+/// the spelling `crate::session::take_command_target` actually recognises.
+/// `release 10 / serial 210312` (the IF Archive's current copy; SQ-1454).
+const ROUTE: &[&str] = &[
+    "y", "andra", "", "tutorial off", "random-seed 1234", "pauses off", "n",
+    "wave u-remover at mourning dress", "score", "e", "wave x-remover at codex", "x code",
+    "unlock barrier", "set barrier to 305", "go to fair", "x wheel", "wave w-remover at wheel",
+    "take heel",
+];
+
+#[test]
+fn counterfeit_monkey_carried_items_are_tracked_once_a_confirmed_pickup_locks_the_avatar() {
+    let Some(bytes) = std::fs::read(fixture_path("CounterfeitMonkey-10.gblorb")).ok() else {
+        eprintln!("SKIP: gitignored stories/CounterfeitMonkey-10.gblorb missing");
+        return;
+    };
+    let Ok(b) = blorb::Blorb::parse(bytes) else {
+        eprintln!("SKIP: CounterfeitMonkey-10.gblorb did not parse as a Blorb");
+        return;
+    };
+    let Ok((blorb::ExecKind::Glulx, image)) = b.executable() else {
+        eprintln!("SKIP: CounterfeitMonkey-10.gblorb carries no Glulx executable");
+        return;
+    };
+    let mut s = GlulxSession::new(image.to_vec(), 80, 30, true, false, false, (8.0, 16.0), None, &[])
+        .expect("Counterfeit Monkey boots");
+
+    for &cmd in &ROUTE[..ROUTE.len() - 1] {
+        let r = if s.pending_input() == app::session::InputKind::Char {
+            s.submit_key(KeyInput::Enter).expect("Glulx takes keys")
+        } else {
+            s.submit(cmd)
+        };
+        // Premise, checked on every step up to (but not including) the take: the static
+        // scan really does refuse this story's avatar throughout, exactly like the
+        // already-pinned `counterfeit_monkey_refuses_an_avatar_it_cannot_identify`.
+        assert!(
+            s.introspect().expect("CM's object list reads perfectly").player_object().is_none(),
+            "premise: no pickup has happened yet, so the fallback has no evidence to lock on: {cmd:?}"
+        );
+        assert!(
+            !r.items.iter().any(|i| i.location == app::session::ObservedItemLocation::Carried),
+            "premise: nothing is reported Carried before the avatar is identified: {:?}",
+            r.items
+        );
+    }
+
+    // The last step: `get heel`, a genuine, unambiguous, successful take — the confirmed
+    // pickup [`crate::glulx_playerlock`]'s whole mechanism is built on.
+    let taken = s.submit(ROUTE[ROUTE.len() - 1]);
+    assert!(taken.transcript.contains("We take the heel"), "the real success text: {:?}", taken.transcript);
+
+    // THE regression: the avatar is now identifiable, where a moment ago it was refused.
+    assert!(
+        s.introspect().expect("CM's object list still reads perfectly").player_object().is_some(),
+        "SQ-1655: a confirmed pickup must lock the player-global fallback"
+    );
+
+    // And `result.items` now reports the heel as genuinely Carried — the defect this quest
+    // opened on: "TurnResult.items stays empty on every single turn despite the game's own
+    // prose confirming the player is carrying it."
+    let heel = taken
+        .items
+        .iter()
+        .find(|i| i.words.refers_to("heel"))
+        .expect("the heel is observed the moment it is carried");
+    assert_eq!(
+        heel.location,
+        app::session::ObservedItemLocation::Carried,
+        "the heel must read Carried now that the avatar is known: {:?}",
+        taken.items
+    );
+
+    // A second, independent confirmation: the letter-remover device the player has been
+    // holding since the very first `wave` command (step 7) was invisible to every turn
+    // before this one for the exact same reason — no known avatar to read `contents()`
+    // from — and becomes visible on the SAME turn the lock resolves, with no pickup of
+    // its own needed. This is not a second bug fixed; it is the same fix, applied
+    // retroactively to everything already in hand the moment the avatar is known.
+    let remover = taken
+        .items
+        .iter()
+        .find(|i| i.words.refers_to("remover"))
+        .expect("the letter-remover device, held since step 7, is now visible too");
+    assert_eq!(remover.location, app::session::ObservedItemLocation::Carried);
+}
+
+/// Anchorhead (Michael Gentry, Illustrated Edition, Inform 7): the SECOND real commercial
+/// story this quest resolves, found only after filing SQ-1655 against Counterfeit Monkey
+/// alone — `stories/Anchorhead.gblorb`'s avatar carries the identical structural gap
+/// `find_player`'s own doc describes for CM (an empty hardware short name, no static word
+/// array `find_player` can read), confirmed directly: `player_object()` is `None` from boot
+/// through the whole opening sequence below, even though the game's own "take" replies
+/// ("Taken.") confirm every one of these items really did end up in the player's hands.
+///
+/// **This is also where the false-positive the vocab gate exists for was actually found.**
+/// Before `learn_player_from_pickups` required a take-shaped command
+/// (`crate::session::take_command_target`), replaying this exact walkthrough's first fifty
+/// commands locked onto a DIFFERENT wrong object on nearly every turn: `climb on garbage
+/// can` (the player becomes a child of the can, not the room, which reads exactly like an
+/// item leaving the room) locked the can itself as "the avatar"; `enter window`, `up`,
+/// `down` and several others each relocked onto whatever scenery happened to explain an
+/// address leaving the room's direct children that turn. Asserting the premise —
+/// `player_object()` stays `None` through every one of those non-take commands — is this
+/// test's non-regression half; the walkthrough steps chosen are the exact ones that broke it.
+#[test]
+fn anchorhead_carried_items_are_tracked_once_a_confirmed_pickup_locks_the_avatar() {
+    let Some(mut s) = boot_anchorhead() else {
+        eprintln!("SKIP: gitignored stories/Anchorhead.gblorb missing");
+        return;
+    };
+    let script = anchorhead_script();
+    assert!(script.len() >= 53, "premise: the committed walkthrough reaches the keyring/umbrella/trenchcoat takes");
+
+    // The first 50 commands: knocking, climbing the fire escape, searching the file room,
+    // talking to Michael, walking the whole loop back — real commands, but none of them
+    // take-shaped, and several of them the exact false-positive shapes above. The avatar
+    // must stay unidentified throughout, exactly like the already-pinned CM refusal case.
+    for (i, cmd) in script.iter().enumerate().take(50) {
+        let r = match s.pending_input() {
+            app::session::InputKind::Event => s.submit(""),
+            _ => s.submit(cmd),
+        };
+        assert!(
+            s.introspect().expect("Anchorhead's object list reads perfectly").player_object().is_none(),
+            "premise: no take-shaped command has run yet, so the fallback has no evidence to lock on \
+             (step {}, {cmd:?})",
+            i + 1
+        );
+        assert!(
+            !r.items.iter().any(|it| it.location == app::session::ObservedItemLocation::Carried),
+            "premise: nothing is reported Carried before the avatar is identified (step {}, {cmd:?}): {:?}",
+            i + 1,
+            r.items
+        );
+    }
+
+    // Step 51: "take keyring" — a genuine, unambiguous, successful take.
+    assert_eq!(script[50], "take keyring", "premise: this is the walkthrough's first real take");
+    let taken = s.submit(&script[50]);
+    assert_eq!(taken.transcript, "Taken.", "the real success text: {:?}", taken.transcript);
+
+    // THE regression: the avatar is now identifiable, where a moment ago it was refused —
+    // the identical defect shape CM's own `counterfeit_monkey_refuses_an_avatar_it_cannot_identify`
+    // pins as a refusal, resolved here by the same fallback.
+    assert!(
+        s.introspect().expect("Anchorhead's object list still reads perfectly").player_object().is_some(),
+        "SQ-1655: a confirmed pickup must lock the player-global fallback"
+    );
+    let keyring = taken
+        .items
+        .iter()
+        .find(|i| i.words.refers_to("keyring"))
+        .expect("the keyring is observed the moment it is carried");
+    assert_eq!(keyring.location, app::session::ObservedItemLocation::Carried);
+
+    // Two more takes, back to back, prove the lock holds rather than re-deriving by luck
+    // each time: "take umbrella" and "take trenchcoat" (steps 52/53).
+    assert_eq!(script[51], "take umbrella");
+    let r = s.submit(&script[51]);
+    assert_eq!(r.transcript, "Taken.");
+    let umbrella =
+        r.items.iter().find(|i| i.words.refers_to("umbrella")).expect("the umbrella is carried");
+    assert_eq!(umbrella.location, app::session::ObservedItemLocation::Carried);
+
+    assert_eq!(script[52], "take trenchcoat");
+    let r = s.submit(&script[52]);
+    assert_eq!(r.transcript, "Taken.");
+    let trenchcoat = r
+        .items
+        .iter()
+        .find(|i| i.words.refers_to("trenchcoat") || i.words.refers_to("trenchcoa"))
+        .expect("the trenchcoat is carried");
+    assert_eq!(trenchcoat.location, app::session::ObservedItemLocation::Carried);
+
+    // And what the coordinator's own direct check on this story found: the wedding ring and
+    // clothes, worn/held since the opening sequence and never picked up by any command in
+    // this test, become visible on the SAME turn the lock resolves — the same
+    // apply-retroactively-to-everything-already-in-hand shape CM's own "letter-remover"
+    // demonstrates, not a second mechanism.
+    let wedding = r.items.iter().find(|i| i.words.refers_to("wedding")).expect("the wedding ring is carried");
+    assert_eq!(wedding.location, app::session::ObservedItemLocation::Carried);
+    let clothes = r.items.iter().find(|i| i.words.refers_to("clothes")).expect("clothes are carried");
+    assert_eq!(clothes.location, app::session::ObservedItemLocation::Carried);
+}
