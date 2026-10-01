@@ -468,7 +468,7 @@ fn glulx_item_observations_prefers_the_set_player_hint_over_the_unidentifiable_r
 // directly sighted, and this one never was until it is taken.
 
 /// Cragne Manor: **another unidentifiable-avatar refusal** (SQ-1639 finding,
-/// same shape `glulx_inventory.rs`'s `counterfeit_monkey_refuses_an_avatar_it_cannot_identify`
+/// same shape `glulx_inventory.rs`'s `counterfeit_monkey_refuses_an_avatar_it_cannot_identify_by_name_alone`
 /// already pins for CM) — `Introspect::player_object()` answers `None` here too
 /// (checked directly before writing this test), so `glulx_item_observations`'s
 /// `Carried` loop never runs at all: while the watch is actually held, the
@@ -938,7 +938,7 @@ fn examining_the_umbrella_never_relabels_the_unrelated_clothes_item() {
 // `parse_name` ROUTINE, not the static word array the scan can read, and none of its
 // 2,494 objects has a hardware short name either. `GlulxSession::player_addr` used to stop
 // there, so `result.items` never reported a single carried object for the whole session —
-// confirmed directly (`counterfeit_monkey_refuses_an_avatar_it_cannot_identify`,
+// confirmed directly (`counterfeit_monkey_refuses_an_avatar_it_cannot_identify_by_name_alone`,
 // `glulx_inventory.rs`, still pinned above and still passing: neither of its two cases ever
 // takes anything, so the new fallback below never has evidence to fire on).
 //
@@ -993,7 +993,7 @@ fn counterfeit_monkey_carried_items_are_tracked_once_a_confirmed_pickup_locks_th
         };
         // Premise, checked on every step up to (but not including) the take: the static
         // scan really does refuse this story's avatar throughout, exactly like the
-        // already-pinned `counterfeit_monkey_refuses_an_avatar_it_cannot_identify`.
+        // already-pinned `counterfeit_monkey_refuses_an_avatar_it_cannot_identify_by_name_alone`.
         assert!(
             s.introspect().expect("CM's object list reads perfectly").player_object().is_none(),
             "premise: no pickup has happened yet, so the fallback has no evidence to lock on: {cmd:?}"
@@ -1101,7 +1101,7 @@ fn anchorhead_carried_items_are_tracked_once_a_confirmed_pickup_locks_the_avatar
     assert_eq!(taken.transcript, "Taken.", "the real success text: {:?}", taken.transcript);
 
     // THE regression: the avatar is now identifiable, where a moment ago it was refused —
-    // the identical defect shape CM's own `counterfeit_monkey_refuses_an_avatar_it_cannot_identify`
+    // the identical defect shape CM's own `counterfeit_monkey_refuses_an_avatar_it_cannot_identify_by_name_alone`
     // pins as a refusal, resolved here by the same fallback.
     assert!(
         s.introspect().expect("Anchorhead's object list still reads perfectly").player_object().is_some(),

@@ -167,15 +167,17 @@ fn king_of_shreds_and_patches_reads_the_items_it_starts_you_with() {
 
 // ── Counterfeit Monkey (Inform 7 6M62) — the refusal ─────────────────────────
 
-/// **The story that must be refused**, and the reason `find_player` has no
-/// "first plausible candidate" fallback.
+/// **The story the STATIC scan must refuse**, and the reason `find_player` has
+/// no "first plausible candidate" fallback — updated for SQ-1657, which gave
+/// this refusal a real fallback of its own. See that quest and SQ-1655 for the
+/// mechanism; this case now pins the FULL shape, before and after.
 ///
 /// Counterfeit Monkey's object list reads perfectly (release 11 measured 2,494
 /// objects, all 1,916 containment links consistent) — but nothing in it
-/// identifies the avatar. Not one of those objects answers to `yourself`,
-/// `myself` or `self`, and none carries an avatar-ish printed name, because
-/// Inform 7 objects have no hardware short name at all. A conditional or
-/// multi-word `Understand` compiles to a `parse_name` ROUTINE rather than to
+/// identifies the avatar BY NAME. Not one of those objects answers to
+/// `yourself`, `myself` or `self`, and none carries an avatar-ish printed name,
+/// because Inform 7 objects have no hardware short name at all. A conditional
+/// or multi-word `Understand` compiles to a `parse_name` ROUTINE rather than to
 /// the static `name` array, and machine code is not enumerable from the image
 /// in any Inform version — a fact about how Inform 7 compiles, not about one
 /// release, which is why this runs against the IF Archive's release 10
@@ -184,14 +186,20 @@ fn king_of_shreds_and_patches_reads_the_items_it_starts_you_with() {
 /// The only objects whose word arrays hold anything avatar-ish are conversation
 /// quips ("what he thinks of you", "what he kens about me"), parked together in
 /// a topics container. An earlier draft of the rule answered with the first of
-/// those and would have told the player they were carrying its contents.
+/// those and would have told the player they were carrying its contents — so
+/// the static scan is still right to refuse by name alone, and this is still
+/// pinned, below.
 ///
-/// So the avatar is `None` here, the panels keep the transcript scrape, and CM
-/// keeps answering `i` in its own prose that the scrape cannot parse. That is
-/// the honest outcome, and this case pins it: the day CM's avatar becomes
-/// identifiable, this fails and says so rather than going quietly stale.
+/// What changed: the avatar is no longer UNREACHABLE, only unnameable by the
+/// static scan. `GlulxSession::learn_player_from_inventory` (SQ-1657) reads the
+/// R-remover's name straight off CM's own `i` reply — prose the transcript
+/// scrape (`parse_inventory_output`) still cannot parse, which is why that
+/// fallback is pinned as still blind, separately, right below — and that one
+/// confirmed match is enough to identify the avatar from its CONTAINMENT, never
+/// its name. The day that ALSO regresses, this fails and says so rather than
+/// going quietly stale.
 #[test]
-fn counterfeit_monkey_refuses_an_avatar_it_cannot_identify() {
+fn counterfeit_monkey_refuses_an_avatar_it_cannot_identify_by_name_alone() {
     let Some(mut s) = boot("CounterfeitMonkey-10.gblorb") else { return };
     // CM asks "Can you hear me?" three times, then reads a bare keypress, then
     // prints its own instructions.
@@ -206,20 +214,38 @@ fn counterfeit_monkey_refuses_an_avatar_it_cannot_identify() {
     let intro = s.introspect().expect("CM's object list reads perfectly — that is not the problem");
     assert!(
         intro.player_object().is_none(),
-        "CM's avatar is not identifiable from the image, and a guess would be worse than \
-         nothing: {}",
+        "CM's avatar is not identifiable BY NAME from the image, before any pickup or \
+         inventory evidence has had a turn to confirm it: {}",
         describe(&s)
     );
-    assert!(carried(&s).is_empty(), "so the carried column is empty rather than wrong");
+    assert!(carried(&s).is_empty(), "so the carried column is empty rather than wrong, so far");
 
-    // The fallback is unchanged and still cannot read CM's custom `i` reply —
-    // pinned so a change to either side is caught rather than drifting.
+    // The transcript-scrape fallback is unchanged and still cannot read CM's
+    // custom `i` reply — pinned so a change to either side is caught rather
+    // than drifting.
     let reply = s.submit("i").transcript;
     let fallback = app::inventory::parse_inventory_output(&reply);
     assert!(
-        inventory_items(None, &fallback, s.introspect()).is_empty(),
+        fallback.is_empty(),
         "CM answers `i` in its own prose, which `parse_inventory_output`'s \"carrying\" \
          header heuristic does not match: {reply:?}"
+    );
+
+    // But that same `i` is exactly the inventory evidence SQ-1657 reads
+    // independently of the fallback above: the avatar is now identified by
+    // CONTAINMENT (the R-remover's live parent), not by name, and the real
+    // object-tree walk — not the blind transcript scrape — answers correctly.
+    assert!(
+        s.introspect().and_then(|i| i.player_object()).is_some(),
+        "SQ-1657: the `i` reply just submitted should have identified the avatar by \
+         containment: {}",
+        describe(&s)
+    );
+    let items = carried(&s);
+    assert!(
+        lower(&items).contains("remover"),
+        "the R-remover should now read as carried, via the object tree rather than the \
+         unparseable transcript reply: {items:?}"
     );
 }
 
