@@ -237,6 +237,66 @@ fn glulx_counterfeit_monkey_captures_a_multi_paragraph_description_intact() {
     assert!(desc3.contains("two and three stories"), "Sigil Street's real body text: {desc3:?}");
 }
 
+/// SQ-1663: Counterfeit Monkey's opening Q&A ("Can you hear me? >>" / "Do you
+/// remember our name? >") closes and reopens its own windows (ids 1-3) the
+/// instant the FIRST answer completes — it is rebuilding its intro overlay
+/// into the real game's split-screen layout, a one-time transition. Our drain
+/// model keeps a window's undrained log inside the window object itself, so
+/// the `window_close` that retired the intro window silently destroyed
+/// whatever had been printed there and never drained: the player's own "yes"
+/// echo, "Can you hear me?"'s reply, AND the lead-in to the second question
+/// all vanished from that turn's `TurnResult.transcript`, surfacing a turn
+/// later as what looked like a missing line of story text. Confirmed with a
+/// headless trace of every `put_text`/`window_close`/`window_open` call: the
+/// undrained content was genuinely destroyed at the moment of closing, not
+/// merely captured late.
+#[test]
+fn glulx_counterfeit_monkey_intro_reply_lands_in_the_same_turn_as_the_answer() {
+    let Some(mut s) = glulx_boot("CounterfeitMonkey-11.gblorb") else {
+        eprintln!("SKIP: gitignored stories/CounterfeitMonkey-11.gblorb missing");
+        return;
+    };
+    assert_eq!(
+        s.pending_input(),
+        app::session::InputKind::Line,
+        "CM's first prompt, 'Can you hear me? >>', reads a line"
+    );
+
+    // The turn that answers "Can you hear me?" must carry ITS OWN reply —
+    // including the lead-in to the next question — not a bare prompt.
+    let r1 = s.submit("yes");
+    assert!(
+        r1.transcript.contains("Good, you're conscious"),
+        "SQ-1663: the reply to the FIRST question was dropped: {:?}",
+        r1.transcript
+    );
+    assert!(
+        r1.transcript.contains("Do you remember our name?"),
+        "SQ-1663: the lead-in to the SECOND question was dropped: {:?}",
+        r1.transcript
+    );
+
+    // The turn that answers the second question must carry ONLY ITS OWN
+    // reply, not a leaked copy of the host's internal silent-look probe
+    // (`GlulxSession::silent_look`, SQ-1293): CM's window close/reopen is
+    // itself a one-time transition, so injecting a silent `look` at this
+    // exact point triggers it too, and the probe's own output — which
+    // `silent_look` promises to throw away — must still be discarded rather
+    // than rescued as if it were real play.
+    let r2 = s.submit("yes");
+    assert!(
+        r2.transcript.contains("Right, we're Alexandra now"),
+        "the second question's real reply: {:?}",
+        r2.transcript
+    );
+    assert!(
+        !r2.transcript.contains("er, no"),
+        "SQ-1663: the silent room-naming probe's own discarded output leaked into \
+         a real turn: {:?}",
+        r2.transcript
+    );
+}
+
 /// Coloratura (Lynnea Glasser, Inform 7): a short, single-paragraph, poetic
 /// description — the case with the least text to get wrong.
 #[test]

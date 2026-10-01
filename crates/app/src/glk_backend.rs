@@ -240,6 +240,11 @@ pub(crate) struct DisplaySnapshot {
     graphics: BTreeMap<u32, crate::graphics::Canvas>,
     primary: Option<u32>,
     primary_cleared: bool,
+    /// SQ-1663: a question can itself close the primary window it is asked
+    /// through — see `window_close`'s own doc — which would otherwise rescue
+    /// the question's own (to-be-discarded) output into `orphaned_primary`
+    /// and leak it into the next REAL drain, past this very restore.
+    orphaned_primary: Vec<BufElem>,
 }
 
 /// The app Glk display backend (see the module docs).
@@ -260,6 +265,11 @@ pub struct AppGlk {
     buffers: BTreeMap<u32, BufBuf>,
     /// The primary buffer window id (the first text-buffer opened), if any.
     primary: Option<u32>,
+    /// Undrained text/images rescued from a PRIMARY buffer window that closed
+    /// before `take_transcript`/`take_transcript_elems` ever drained them
+    /// (SQ-1663) — see `window_close`'s own doc for why this exists. Prepended
+    /// ahead of the current primary's own log on the next drain, then cleared.
+    orphaned_primary: Vec<BufElem>,
     /// Set when the primary buffer window is cleared (`glk_window_clear`) this
     /// turn — an Inform 7 menu redraw clears + reprints on every keypress. Taken
     /// by `finish_turn` into `TurnResult.erase_lower` so the app pins the reprint
@@ -513,6 +523,7 @@ impl AppGlk {
             grids: BTreeMap::new(),
             buffers: BTreeMap::new(),
             primary: None,
+            orphaned_primary: Vec::new(),
             primary_cleared: false,
             scans: BTreeMap::new(),
             graphics: BTreeMap::new(),
@@ -722,14 +733,26 @@ impl AppGlk {
     /// `(text, (char_count, bits, fg, bg) chunks)` for `push_transcript_runs`.
     /// fg/bg carry the resolved stylehint colour (24-bit via `ZColour::True24`).
     pub fn take_transcript(&mut self) -> (String, Vec<TranscriptChunk>) {
-        let Some(pid) = self.primary else {
-            return (String::new(), Vec::new());
-        };
-        let Some(buf) = self.buffers.get_mut(&pid) else {
-            return (String::new(), Vec::new());
-        };
         let mut text = String::new();
         let mut chunks: Vec<TranscriptChunk> = Vec::new();
+        // SQ-1663: whatever a now-closed PRIMARY window printed and never got
+        // drained comes first — it was written before anything the CURRENT
+        // primary holds. See `window_close`'s doc for why this exists.
+        for elem in std::mem::take(&mut self.orphaned_primary) {
+            let BufElem::Text { bits, fg, bg, link, para, glk_style, text: s } = elem else { continue };
+            let n = s.chars().count();
+            if n == 0 {
+                continue;
+            }
+            chunks.push((n, bits, crate::state::unpack_zcolour(fg), crate::state::unpack_zcolour(bg), link, para, glk_style, false));
+            text.push_str(&s);
+        }
+        let Some(pid) = self.primary else {
+            return (text, chunks);
+        };
+        let Some(buf) = self.buffers.get_mut(&pid) else {
+            return (text, chunks);
+        };
         for elem in &buf.log[buf.drained..] {
             let BufElem::Text { bits, fg, bg, link, para, glk_style, text: s } = elem else { continue };
             let n = s.chars().count();
@@ -747,8 +770,6 @@ impl AppGlk {
     /// elements (consecutive text runs coalesced; images preserved in place).
     pub fn take_transcript_elems(&mut self) -> Vec<crate::session::TranscriptElem> {
         use crate::session::TranscriptElem;
-        let Some(pid) = self.primary else { return Vec::new() };
-        let Some(buf) = self.buffers.get_mut(&pid) else { return Vec::new() };
         let mut out: Vec<TranscriptElem> = Vec::new();
         // Accumulate consecutive Text runs into one element, matching the
         // char-count chunk shape `push_transcript_runs` expects:
@@ -761,6 +782,32 @@ impl AppGlk {
             } else {
                 runs.clear();
             }
+        };
+        // SQ-1663: a now-closed PRIMARY window's undrained output comes first —
+        // see `window_close`'s own doc for why this exists.
+        for elem in std::mem::take(&mut self.orphaned_primary) {
+            match elem {
+                BufElem::Text { bits, fg, bg, link, para, glk_style, text } => {
+                    let n = text.chars().count();
+                    if n > 0 {
+                        let (f, b) = (crate::state::unpack_zcolour(fg), crate::state::unpack_zcolour(bg));
+                        cur_runs.push((n, bits, f, b, link, para, glk_style, false));
+                        cur_text.push_str(&text);
+                    }
+                }
+                BufElem::Image(img) => {
+                    flush(&mut out, &mut cur_text, &mut cur_runs);
+                    out.push(TranscriptElem::Image(img));
+                }
+            }
+        }
+        let Some(pid) = self.primary else {
+            flush(&mut out, &mut cur_text, &mut cur_runs);
+            return out;
+        };
+        let Some(buf) = self.buffers.get_mut(&pid) else {
+            flush(&mut out, &mut cur_text, &mut cur_runs);
+            return out;
         };
         for elem in &buf.log[buf.drained..] {
             match elem {
@@ -837,6 +884,7 @@ impl AppGlk {
             graphics: self.graphics.clone(),
             primary: self.primary,
             primary_cleared: self.primary_cleared,
+            orphaned_primary: self.orphaned_primary.clone(),
         }
     }
 
@@ -852,6 +900,7 @@ impl AppGlk {
         self.graphics = snap.graphics;
         self.primary = snap.primary;
         self.primary_cleared = snap.primary_cleared;
+        self.orphaned_primary = snap.orphaned_primary;
     }
 
     /// Whether the story window's output currently ends at the game's read
@@ -1618,6 +1667,22 @@ impl GlkBackend for AppGlk {
     }
 
     fn window_close(&mut self, id: u32) {
+        // SQ-1663: a story that closes its PRIMARY buffer window (Counterfeit Monkey
+        // rebuilds its whole window tree the moment its opening Q&A ends, closing and
+        // reopening windows 1-3 under the same ids) must not lose whatever it printed
+        // there and the host had not drained yet. `self.buffers.remove` below would
+        // otherwise discard `log[drained..]` outright, and the next `take_transcript*`
+        // call — now reading the fresh, empty `BufBuf` the reopened window gets — would
+        // report only what was printed AFTER the reopen. On a real terminal that text
+        // was already on screen; rescue it into `orphaned_primary` so the next drain
+        // still returns it, in the same order, ahead of whatever the new window prints.
+        if self.primary == Some(id) {
+            if let Some(b) = self.buffers.get_mut(&id) {
+                if b.drained < b.log.len() {
+                    self.orphaned_primary.extend(b.log.split_off(b.drained));
+                }
+            }
+        }
         self.grids.remove(&id);
         self.buffers.remove(&id);
         self.scans.remove(&id);
