@@ -22,8 +22,12 @@ pub struct ResetOptions {
     /// Wipe the accumulated map (as `/reset map` does), so only the start room
     /// remains after the re-seed.
     pub clear_map: bool,
-    /// Delete the game's AUTO persistent data first (the Glk file VFS and the
-    /// other per-story sidecars), so the fresh boot re-initialises from nothing.
+    /// Delete the game's saved progress first: the AUTO persistent data (the
+    /// Glk file VFS and the other per-story sidecars) so the fresh boot
+    /// re-initialises from nothing, AND the player's quick-save slot
+    /// (SQ-1665) — unlike an ordinary per-turn auto-save, which deliberately
+    /// never touches a quick-save, this is an explicit request to wipe
+    /// everything the host could resume from.
     pub delete_data: bool,
 }
 
@@ -50,7 +54,22 @@ pub fn reset_game(
     // re-initializes: the on-disk sidecars go now, and the in-memory VFS carried
     // into the Glulx rebuild is suppressed below (an empty carry_vfs).
     if delete_data {
+        // Land any in-flight background per-turn auto-save first (SQ-1184/
+        // SQ-1665), the same ordering `write_save_state` uses before its own
+        // synchronous write to the same path: without it, a write enqueued by
+        // the turn just played can still be mid-flight on the archive-writer
+        // thread, and `delete_auto_persistent` racing ahead of it only looks
+        // like a deletion — the background write lands moments later and
+        // resurrects `default.lanthorn` with the old game's data, so "Delete
+        // saved progress" appeared to do nothing.
+        state.archive_worker.flush();
         crate::storage::delete_auto_persistent(game_dir);
+        // SQ-1665: "Delete saved progress" also wipes the quick-save slot.
+        // The quick-save is never written by the background archive worker
+        // (every write to it goes through `host::persist::write_save_state`,
+        // which flushes and writes synchronously), so no ordering race
+        // applies here the way it did above.
+        crate::storage::delete_quick_save(game_dir);
     }
     // Rebuild the engine from the original story bytes via the same factory used
     // at startup: classify the executable, then replace the concrete session in

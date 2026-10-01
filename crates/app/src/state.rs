@@ -2508,7 +2508,8 @@ pub struct OverlayState {
     pub reset_clear_map: bool,
     /// When true, the "Delete saved progress" checkbox is checked in the reset
     /// dialog: on confirm, the game's auto persistent data (VFS cache + aux + auto
-    /// Save State) is deleted so the game re-initializes from scratch.
+    /// Save State) AND the player's quick-save slot are deleted (SQ-1665) so the
+    /// game re-initializes from scratch with nothing left to resume from.
     pub reset_delete_data: bool,
     /// When `Some`, the save-name modal is open (host Save State slot or in-game
     /// `@save`). Replaces the old bottom-bar `PromptKind::SaveAs` overlay so the

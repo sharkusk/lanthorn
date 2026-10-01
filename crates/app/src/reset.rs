@@ -529,8 +529,9 @@ mod tests {
 
     #[test]
     fn reset_game_with_delete_data_removes_auto_sidecars() {
-        // delete_data = true wipes the three AUTO sidecars in game_dir before the
-        // rebuild, while keeping the player's named/in-game saves.
+        // delete_data = true wipes the three AUTO sidecars AND the quick-save
+        // slot (SQ-1665) in game_dir before the rebuild, while keeping the
+        // player's named/in-game saves.
         let fixture = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
             .join("../zvm/tests/fixtures/czech.z5");
         let Ok(bytes) = std::fs::read(&fixture) else { return };
@@ -539,7 +540,7 @@ mod tests {
             .join(format!("lanthorn-reset-delete-{}", std::process::id()));
         let _ = std::fs::remove_dir_all(&game_dir);
         std::fs::create_dir_all(&game_dir).unwrap();
-        for f in ["default.glkvfs", "default.aux", "default.lanthorn"] {
+        for f in ["default.glkvfs", "default.aux", "default.lanthorn", "quick-save.lanthorn"] {
             std::fs::write(game_dir.join(f), b"x").unwrap();
         }
         std::fs::write(game_dir.join("myslot.lanthorn"), b"x").unwrap();
@@ -551,11 +552,104 @@ mod tests {
         let mut state = app::state::AppState::default();
         super::reset_game(&mut *engine, &mut mapper, &mut state, &bytes, &fixture, &game_dir, false, true);
 
-        for f in ["default.glkvfs", "default.aux", "default.lanthorn"] {
+        for f in ["default.glkvfs", "default.aux", "default.lanthorn", "quick-save.lanthorn"] {
             assert!(!game_dir.join(f).exists(), "{f} should be deleted by delete_data");
         }
         assert!(game_dir.join("myslot.lanthorn").exists(), "named save kept");
         assert!(game_dir.join("quick.qzl").exists(), "in-game save kept");
+
+        let _ = std::fs::remove_dir_all(&game_dir);
+    }
+
+    /// SQ-1665: `/reset-game`'s "Delete saved progress" checkbox
+    /// (`delete_data`) must flush any IN-FLIGHT background per-turn auto-save
+    /// before deleting `default.lanthorn` — the same ordering
+    /// `host::persist::write_save_state` already uses before its own
+    /// synchronous write to the same path (SQ-1184). Without the flush, the
+    /// per-turn auto-save the player's last move just enqueued can still be
+    /// building on the archive-writer thread when `delete_auto_persistent`
+    /// runs; the deletion then wins the race only by luck, and the
+    /// background write lands moments later and resurrects
+    /// `default.lanthorn` with the OLD game's data — "Delete saved progress"
+    /// silently does nothing.
+    ///
+    /// Falsifies deterministically rather than by luck, the same way
+    /// `lifecycle::exit_auto_save_flushes_a_pending_background_write_before_
+    /// its_own_write` does: the pending job carries several MB of
+    /// incompressible bytes so its Deflate pass reliably outlasts
+    /// `delete_auto_persistent`'s near-instant synchronous `remove_file`.
+    /// Comment out the `state.archive_worker.flush()` call added to
+    /// `host::reset::reset_game`'s `delete_data` arm and this test reliably
+    /// fails with the stale archive back on disk.
+    #[test]
+    fn reset_game_with_delete_data_flushes_a_pending_background_write_before_deleting() {
+        let fixture = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("../zvm/tests/fixtures/czech.z5");
+        let Ok(bytes) = std::fs::read(&fixture) else { return };
+
+        let game_dir = app::scratch_dir("reset-delete-flush-sq1665");
+        let arc_file = game_dir.join("default.lanthorn");
+
+        let mut engine: Box<dyn app::engine::Engine> =
+            Box::new(app::session::GameSession::new(bytes.clone(), true, false, None).expect("zcode session"));
+        let mut mapper = mapper::mapper::Mapper::default();
+        let mut state = app::state::AppState::default();
+
+        // Several MB of incompressible bytes: a real Deflate pass, not a
+        // near-instant run of zeros, so this job reliably outlasts
+        // `delete_auto_persistent`'s synchronous `remove_file` when the
+        // worker is NOT flushed first.
+        let mut noise = vec![0u8; 6 * 1024 * 1024];
+        let mut x: u64 = 0x9E37_79B9_7F4A_7C15;
+        for b in noise.iter_mut() {
+            x ^= x << 13;
+            x ^= x >> 7;
+            x ^= x << 17;
+            *b = x as u8;
+        }
+        let mut aux = std::collections::BTreeMap::new();
+        aux.insert("noise".to_string(), noise);
+        let stale_job = app::archive_worker::ArchiveJob {
+            path: arc_file.clone(),
+            mapper_graph: mapper::mapper::Mapper::default().graph,
+            save: std::sync::Arc::new(app::engine::EngineSave::new("test", 1, vec![9, 9, 9])),
+            screen: None,
+            aux,
+            meta: app::archive::Meta {
+                format_version: app::archive::CURRENT_FORMAT_VERSION,
+                ifid: None,
+                name: None,
+                turns: 999, // the STALE marker this test must NOT see survive
+                saved_at: String::new(),
+                location: None,
+                score: None,
+                trigger: app::archive::SaveTrigger::HostState,
+                source: app::archive::SaveSource::default(),
+            },
+            session: app::archive::SessionRecord::empty().snapshot(),
+            pictures: Vec::new(),
+            display: None,
+            ground: None,
+        };
+        // Simulates the per-turn auto-save the player's last move enqueued,
+        // still in flight when they confirm the reset dialog's delete option.
+        state.archive_worker.enqueue(stale_job);
+
+        super::reset_game(&mut *engine, &mut mapper, &mut state, &bytes, &fixture, &game_dir, false, true);
+
+        // Give the race a chance to resolve deterministically either way: a
+        // fixed `reset_game` already flushed internally, so this is a no-op
+        // (nothing left pending); an unfixed one left the stale job in
+        // flight, and THIS flush is what lands it — without waiting for it
+        // here, the assertion below could pass by luck on a fast machine
+        // even with the bug present, same as the originally reported race.
+        state.archive_worker.flush();
+
+        assert!(
+            !arc_file.exists(),
+            "SQ-1665: a stale in-flight per-turn auto-save must not resurrect \
+             default.lanthorn after 'Delete saved progress' deleted it"
+        );
 
         let _ = std::fs::remove_dir_all(&game_dir);
     }
