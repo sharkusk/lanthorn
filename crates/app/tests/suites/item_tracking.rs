@@ -1202,6 +1202,87 @@ fn anchorhead_carried_items_are_tracked_from_the_very_first_inventory_listing() 
     assert_eq!(umbrella.location, app::session::ObservedItemLocation::Carried);
 }
 
+// ── SQ-1659: the inventory DOCK shows the registry's clean name, not the raw joined list ────
+//
+// The reported defect: after typing `inventory` in Anchorhead, the inventory panel's
+// "Carrying:" row read "umbrella things green handle brolly bumbersho — found Outside the
+// Real Estate Office, turn 2" instead of a clean "umbrella". `render::inventory_dock::carried_line`
+// used the LIVE `name` parameter — `grammar_model::ObjectWords::display_name()`'s raw joined
+// word list, the right fallback when there is no better source but exactly the word-salad shape
+// SQ-1648's `item_tracker_display_name` exists to avoid for player-facing text — even when the
+// mapper's own registry already held the clean, resolved name for the same item (stamped by
+// `apply_item_observations` from the identical per-turn observation). This test exercises the
+// dock exactly the way `main.rs` builds it (`inventory_items_with_keys` + a real, populated
+// `MapGraph` + `build_inventory_dock_rows`), through a real commercial story, past the exact
+// `inventory` command SQ-1657 made resolvable at all for this avatar.
+#[test]
+fn anchorhead_inventory_dock_shows_the_clean_registry_name_not_the_joined_word_list() {
+    let Some(mut s) = boot_anchorhead() else {
+        eprintln!("SKIP: gitignored stories/Anchorhead.gblorb missing");
+        return;
+    };
+    // Drain the boot banner the same way `anchorhead_carried_items_are_tracked_from_the_very_first_inventory_listing`
+    // does, so the FIRST submitted command's transcript is the `inventory` reply alone.
+    let _ = s.seed_turn();
+
+    let r = s.submit("inventory");
+    assert!(
+        r.transcript.contains("wearing your trenchcoat") && r.transcript.contains("holding your umbrella"),
+        "the real inventory text: {:?}",
+        r.transcript
+    );
+
+    // The avatar must actually be identified — SQ-1657's own regression — or the dock has
+    // nothing to draw at all and the rest of this test would pass vacuously.
+    let player_obj = s
+        .introspect()
+        .expect("Anchorhead's object list reads perfectly")
+        .player_object()
+        .expect("SQ-1657: the inventory listing just submitted identifies the avatar");
+
+    // Populate a REAL mapper registry from this exact turn — the same two calls `turn.rs`
+    // makes in production (`apply_turn` for the room graph `carried_line`'s "found …" clause
+    // reads, `apply_item_observations` for the per-item record `carried_line` now prefers).
+    let mut mapper = mapper::mapper::Mapper::default();
+    app::session::apply_turn(&mut mapper, "inventory", &r, &mut Default::default());
+    app::session::apply_item_observations(&mut mapper, 1, &r);
+
+    // The exact pair `main.rs` calls to build the live "Carrying:" list and the dock's rows.
+    let carried = app::render::transcript::inventory_items_with_keys(Some(player_obj), &[], s.introspect());
+    let raw_umbrella = carried
+        .iter()
+        .find(|(_, name)| name.to_lowercase().contains("umbrella"))
+        .map(|(_, name)| name.clone())
+        .expect("the umbrella is among the live carried contents");
+    assert!(
+        raw_umbrella.split_whitespace().count() > 1,
+        "premise: Anchorhead's umbrella really has no hardware short name, so the live \
+         display_name() really is the multi-word joined list this bug report describes, not \
+         coincidentally already clean: {raw_umbrella:?}"
+    );
+
+    let dock_rows = app::render::inventory_dock::build_inventory_dock_rows(&carried, &mapper.graph, None);
+    let (text, meta_start) = dock_rows
+        .iter()
+        .find_map(|row| match row {
+            app::render::inventory_dock::ItemDockRow::Carried { text, meta_start, .. }
+                if text.to_lowercase().contains("umbrella") =>
+            {
+                Some((text.clone(), *meta_start))
+            }
+            _ => None,
+        })
+        .expect("the umbrella is drawn as a Carrying: row");
+    let name_prefix: String = text.chars().take(meta_start).collect();
+    assert_eq!(
+        name_prefix.trim(),
+        "umbrella",
+        "SQ-1659: the dock must show the registry's clean resolved name, not the raw joined \
+         word list — the reported symptom was exactly this row reading \
+         \"umbrella things green handle brolly bumbersho\": {text:?}"
+    );
+}
+
 /// Counterfeit Monkey (release 11, serial 230220 — `stories/CounterfeitMonkey-11.gblorb`, not
 /// fetchable on CI; see `scripts/fixtures.manifest`'s own note, so this skips there): the
 /// SINGLE-item case the brief for this quest specifically calls out — the R-remover is the

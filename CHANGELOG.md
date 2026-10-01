@@ -103,6 +103,11 @@ while any such tag, or this Unreleased section, still exists.*
   own input. Scrolling up to read backlog while the game prints something on
   its own (a timer, a delayed event) still leaves your view exactly where you
   left it, same as before.
+- Fixed the inventory panel's "Carrying:" row showing a jumbled run-on of
+  every word a game answers to for an item, instead of its clean name — a
+  game object with no proper printed name (some *Anchorhead* items, among
+  others) could read "umbrella things green handle brolly bumbersho"
+  instead of "umbrella" once the item had been seen at least once.
 
 ## v0.8.1 — 2026-09-29
 

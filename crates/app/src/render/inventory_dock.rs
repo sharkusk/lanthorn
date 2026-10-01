@@ -144,15 +144,27 @@ fn filter_matches(filter: Option<&str>, name: &str) -> bool {
     }
 }
 
-/// One "Carrying:" row's text: the item's live display `name`, cross-referenced
+/// One "Carrying:" row's text: the item's display name, cross-referenced
 /// against the mapper's registry (by `key`) for where it was first found.
+///
+/// The NAME shown prefers the registry's own `rec.name` over the `name`
+/// parameter whenever a record exists (SQ-1659): `name` is derived from
+/// [`grammar_model::ObjectWords::display_name`] (every parser word for the
+/// object joined together — the raw `o.display_name()` call in
+/// `render::transcript::inventory_items_with_keys`), which is the right
+/// fallback when there is no better source but is exactly the word-salad
+/// shape `session::item_tracker_display_name` (SQ-1648) exists to avoid for
+/// text the player reads — and the registry's `rec.name` is already that
+/// resolved, clean name, stamped by `apply_item_observations` from the very
+/// same per-turn observation this live contents list is built from. Only
+/// falls back to `name` when there is no record yet to prefer.
 ///
 /// `key` is `None` (no live object tree — the inventory-fallback path) or
 /// `Some` of an id the registry never captured — rare, since the registry is
 /// built from the very same per-turn observations, but possible: an item
 /// picked up before the mapper started tracking, or a story whose "take"
 /// phrasing the structural signal `apply_item_observations` reads never
-/// recognised. Either way this shows the name ALONE, gracefully, rather than
+/// recognised. Either way this shows a name ALONE, gracefully, rather than
 /// omitting the item or panicking — an unrecorded provenance is not a reason
 /// to hide an item the player is plainly holding right now.
 ///
@@ -165,7 +177,7 @@ fn carried_line(name: &str, key: Option<ItemKey>, graph: &MapGraph) -> (String, 
     let record = key.and_then(|k| graph.item(k));
     match record {
         Some(rec) => {
-            let prefix = format!("  {name}");
+            let prefix = format!("  {}", rec.name);
             let meta_start = prefix.chars().count();
             let line = format!(
                 "{prefix} — found {}, turn {}",
@@ -757,6 +769,51 @@ mod tests {
         assert!(
             texts.iter().any(|t| t.trim() == "mysterious coin"),
             "an uncaptured item still shows by name alone: {texts:?}"
+        );
+    }
+
+    /// SQ-1659: the reported defect, reduced to a synthetic fixture. A carried item WITH a
+    /// registry record must show the registry's already-clean `rec.name` — the exact name
+    /// `session::item_tracker_display_name` resolved when the observation was first applied —
+    /// even though the LIVE name passed in through `carried` is the raw joined word-salad
+    /// `grammar_model::ObjectWords::display_name()` produces for an Inform 7 object with no
+    /// hardware short name (the real shape: Anchorhead's green umbrella read "umbrella things
+    /// green handle brolly bumbersho" instead of "umbrella").
+    #[test]
+    fn carried_item_with_a_registry_record_prefers_the_registrys_clean_name_over_a_word_salad_live_name() {
+        let mut g = MapGraph::new();
+        g.upsert_room(1, "Outside the Real Estate Office".into());
+        g.note_item_carried(10, "umbrella".to_string(), 1, 2);
+        let carried = vec![(Some(10u32), "umbrella things green handle brolly bumbersho".to_string())];
+
+        let rows = build_inventory_dock_rows(&carried, &g, None);
+        let (text, meta_start) = rows
+            .iter()
+            .find_map(|r| match r {
+                ItemDockRow::Carried { text, meta_start, .. } => Some((text.clone(), *meta_start)),
+                _ => None,
+            })
+            .expect("the carried row is drawn");
+        let name_prefix: String = text.chars().take(meta_start).collect();
+        assert_eq!(
+            name_prefix.trim(),
+            "umbrella",
+            "the registry's clean name must win over the live word-salad name: {text:?}"
+        );
+    }
+
+    /// Non-regression half of the same fix: with NO registry record yet (the very first frame
+    /// before any observation has landed for this specific item), the live name passed in is
+    /// still shown exactly as before — there is nothing better to prefer.
+    #[test]
+    fn carried_item_with_no_registry_record_still_shows_the_live_name_even_when_it_is_a_word_salad() {
+        let g = MapGraph::new();
+        let carried = vec![(Some(10u32), "umbrella things green handle brolly bumbersho".to_string())];
+        let rows = build_inventory_dock_rows(&carried, &g, None);
+        let texts: Vec<&str> = rows.iter().map(text_of).collect();
+        assert!(
+            texts.iter().any(|t| t.trim() == "umbrella things green handle brolly bumbersho"),
+            "no registry record yet, so the live name is the only source available: {texts:?}"
         );
     }
 
