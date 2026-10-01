@@ -2701,10 +2701,10 @@ fn render_middle(
         // unmoved anchor keeps the filtered position it already had; only a
         // genuine move (or a Rebuild, where `starts_before` is 0 and
         // `visible_indices` is the whole transcript) recomputes it.
-        cache.clear_anchor_filtered = if !matches!(plan, WrapPlan::Rebuild) && old_anchor == state.clear_anchor {
+        cache.clear_anchor_filtered = if !matches!(plan, WrapPlan::Rebuild) && old_anchor == state.top_anchor {
             old_anchor_filtered
         } else {
-            state.clear_anchor.map(|a| starts_before + visible_indices.iter().filter(|&&i| i < a).count())
+            state.top_anchor.map(|a| starts_before + visible_indices.iter().filter(|&&i| i < a).count())
         };
         // The anchor is where that line STARTS in the wrap just built (SQ-0640) — a
         // separate wrap of the prefix would count a margin float's strips twice
@@ -7632,6 +7632,7 @@ mod tests {
         let restore = |state: &mut AppState| {
             state.transcript = archived.iter().map(|s| s.to_string()).collect();
             state.clear_anchor = None;
+            state.top_anchor = None;
             state.transcript_kinds = vec![TranscriptKind::Story; archived.len()];
             state.transcript_runs = vec![Vec::new(); archived.len()];
             state.transcript_para = vec![ParaFmt::default(); archived.len()];
@@ -7714,12 +7715,17 @@ mod tests {
 
     #[test]
     fn wrap_cache_invalidates_on_anchor_change() {
+        // `top_anchor` (SQ-1656), not `clear_anchor` — the render-facing
+        // top-anchor is what `WrapShape` actually tracks here; `clear_anchor`
+        // alone moving (a preserving clear) must NOT force a rewrap, which is
+        // exactly what `a_preserving_clear_leaves_anchor_row_untouched_but_
+        // an_ordinary_clear_still_moves_it` above proves from the other side.
         let mut state = AppState::default();
         state.push_transcript_kind("hello world", TranscriptKind::Story);
         let area = Rect::new(0, 0, 20, 8);
         wrap_render(&state, area);
         poison_wrap_cache(&state);
-        state.clear_anchor = Some(0); // screen-clear boundary moved
+        state.top_anchor = Some(0); // top-anchor boundary moved
         wrap_render(&state, area);
         assert_ne!(cached_first_text(&state), "SENTINEL", "anchor change must re-wrap");
     }
@@ -7770,5 +7776,45 @@ mod tests {
         // While scrolled (scroll != 0) the anchor does not apply.
         let (_v3, _t3, first3) = window_wrapped_rows(&rows, Some(4), 3, 1);
         assert_eq!(first3, 2);
+    }
+
+    /// SQ-1656: the render-pipeline counterpart of the state-level divergence
+    /// `mark_screen_clear_preserving_top_anchor_leaves_top_anchor_behind`
+    /// (`state.rs`) proves directly — this shows it is actually
+    /// `window_wrapped_rows`' own `anchor_row` input that stops moving, not
+    /// just a field nobody reads. A game-driven clear that PRESERVES the
+    /// prior screen (`AppState::mark_screen_clear_preserving_top_anchor`)
+    /// must not move `cache.anchor_row`, which is exactly the `anchor_row`
+    /// [`window_wrapped_rows`] is called with at draw time (line 2756
+    /// above) — so it must fall back to ordinary bottom-sticking instead of
+    /// pinning the new content to the top of the pane. An ordinary
+    /// (collapsing-shaped) clear — `mark_screen_clear` — still moves it,
+    /// exactly as every clear did before this quest.
+    #[test]
+    fn a_preserving_clear_leaves_anchor_row_untouched_but_an_ordinary_clear_still_moves_it() {
+        let area = Rect::new(0, 0, 34, 12);
+        let mut state = script_state();
+        drive_script(&mut state, area, true);
+        wrap_render(&state, area);
+        assert_eq!(wrap_bookkeeping(&state).0, None, "premise: nothing has cleared yet, so there is no anchor row");
+
+        state.mark_screen_clear_preserving_top_anchor();
+        state.push_transcript_kind("preserved screen content", TranscriptKind::Story);
+        wrap_render(&state, area);
+        assert_eq!(
+            wrap_bookkeeping(&state).0,
+            None,
+            "a preserving clear must leave anchor_row at None — the renderer falls back to \
+             ordinary bottom-sticking scrollback rather than pinning this content to the top"
+        );
+
+        state.mark_screen_clear();
+        wrap_render(&state, area);
+        assert_eq!(
+            wrap_bookkeeping(&state).0,
+            Some(wrap_product(&state).len()),
+            "an ordinary (collapsing-shaped) clear still top-anchors, unchanged from before \
+             this quest — cleared with nothing printed since anchors past the last row"
+        );
     }
 }

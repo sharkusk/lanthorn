@@ -1910,6 +1910,7 @@ pub fn boot_story(req: BootRequest<'_>, hooks: &mut dyn BootHooks) -> Result<Boo
     if let Some((lines, kinds, runs, para, images)) = startup_transcript {
         state.transcript = lines;
         state.clear_anchor = None;
+        state.top_anchor = None;
         state.transcript_kinds = kinds;
         state.transcript_runs = runs;
         state.transcript_para = para;

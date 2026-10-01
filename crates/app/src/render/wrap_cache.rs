@@ -72,9 +72,14 @@ pub(crate) struct WrapShape {
     pub images_enabled: bool,
     /// Picker cell pixel size — drives an image band's cell footprint.
     pub char_px: (u16, u16),
-    /// Screen-clear anchor (a full-transcript index). Also the TRUNCATION case:
-    /// `transcript.truncate` at a clear anchor or a rewind moves it, and this
-    /// rebuilds rather than needing a path of its own.
+    /// `AppState::top_anchor` (a full-transcript index) — despite the field
+    /// name here, this is the RENDER-FACING top-anchor, not `AppState::
+    /// clear_anchor` itself (SQ-1656: the two diverge on a game-driven clear
+    /// that preserves the prior screen, where `clear_anchor` still moves as
+    /// the next clear's comparison baseline but the render must NOT top-anchor
+    /// against it). Also the TRUNCATION case: `transcript.truncate` at a clear
+    /// anchor or a rewind moves it, and this rebuilds rather than needing a
+    /// path of its own.
     pub clear_anchor: Option<usize>,
     /// The MACHINE's own screen pair (`AppState::v6_page_pair`), the base a Story
     /// line's inherited channels resolve from under ZMSD §8.3 (SQ-0822). It can
@@ -122,7 +127,7 @@ impl WrapShape {
             filter: state.transcript_filter,
             images_enabled: state.game_picker.is_some(),
             char_px,
-            clear_anchor: state.clear_anchor,
+            clear_anchor: state.top_anchor,
             machine_pair: state.v6_page_pair.get(),
             story_page: state.v6_story_page.get(),
             period_look: state.period_look,
@@ -843,6 +848,7 @@ mod tests {
     fn restore_transcript(state: &mut AppState, lines: &[&str]) {
         state.transcript = lines.iter().map(|s| s.to_string()).collect();
         state.clear_anchor = None;
+        state.top_anchor = None;
         state.transcript_kinds = vec![TranscriptKind::Story; lines.len()];
         state.transcript_runs = vec![Vec::new(); lines.len()];
         state.transcript_para = vec![crate::state::ParaFmt::default(); lines.len()];

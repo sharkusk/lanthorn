@@ -6864,7 +6864,7 @@ pub fn build_main_text(state: &AppState, cols: u16, rows: u16) -> (crate::render
     // cleared, nothing printed since — reads as an EMPTY screen on both, rather
     // than as an absent anchor that bottom-sticks the erased scrollback (SQ-0748).
     let anchor_row = (scroll == 0)
-        .then(|| crate::render::transcript::anchor_row_at(line_starts, total, state.clear_anchor))
+        .then(|| crate::render::transcript::anchor_row_at(line_starts, total, state.top_anchor))
         .flatten();
     if let Some(a) = anchor_row.filter(|&a| total - a <= budget) {
         start = a;

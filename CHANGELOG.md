@@ -86,6 +86,11 @@ while any such tag, or this Unreleased section, still exists.*
   Monkey* and the full commercial release of *Anchorhead* were affected this
   way for their whole length, with everything you picked up going untracked
   even though the game's own replies confirmed you were carrying it.
+- Fixed the story screen scrolling a legitimately-still-there earlier screen
+  off the top, or briefly jumping backward then snapping forward on an early
+  action, even with plenty of room to show everything — *Counterfeit
+  Monkey*'s opening accessibility questions and *Anchorhead*'s intro/quote
+  sequence were the two games this showed up on most.
 
 ## v0.8.1 — 2026-09-29
 

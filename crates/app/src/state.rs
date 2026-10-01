@@ -2772,10 +2772,32 @@ pub struct AppState {
     /// needs the pre-turn total, which is only known at render time). (SQ-0404)
     pub last_transcript_total_rows: u16,
     /// Transcript length at the most recent game screen-clear (`erase_window`),
-    /// or `None`. When set and the view is at the bottom, the renderer pins the
-    /// post-clear lines to the top of the pane so a screen clear looks fresh
-    /// while older scrollback stays reachable above it. See `mark_screen_clear`.
+    /// or `None`. The comparison baseline [`apply_game_driven_result`](crate::host::turn::apply_game_driven_result)
+    /// reads to decide whether the NEXT clear looks like the same screen
+    /// redrawing (collapse) or a different one taking over (preserve) —
+    /// see `mark_screen_clear`. Moves on EVERY clear, collapse or preserve
+    /// alike; [`Self::top_anchor`] is the one the renderer actually
+    /// top-anchors against, and the two diverge exactly on a preserving
+    /// clear (SQ-1656).
     pub clear_anchor: Option<usize>,
+    /// The anchor the renderer actually top-anchors the view against (SQ-1656).
+    /// Equal to `clear_anchor` after every typed-command clear and every
+    /// game-driven clear that COLLAPSES the prior screen (same rule as
+    /// before SQ-1656 ever existed — see `beyondzork_title_repaint.rs`,
+    /// SQ-0748): the clear really did destroy what came before, so the
+    /// fresh content is pinned to the top of the pane with older scrollback
+    /// reachable by scrolling up.
+    ///
+    /// Left UNTOUCHED (not cleared, not advanced) by a game-driven clear
+    /// that PRESERVES the prior screen (SQ-1654's `is_screen_reprint` gate
+    /// says no) — nothing was destroyed, so the new content has no business
+    /// being pinned above a fold either; it falls back to ordinary
+    /// bottom-sticking scrollback, as if no clear had happened there at
+    /// all. Reset alongside `clear_anchor` at every restore/rewind site
+    /// that replaces the transcript wholesale (a stale index into a
+    /// replaced transcript is not merely unhelpful, it can coincide with
+    /// real content and mis-anchor it).
+    pub top_anchor: Option<usize>,
     /// Monotonic transcript-content generation, bumped by every mutation of the
     /// transcript vecs (append / insert / merge / in-place edit / wholesale
     /// reset). Distinguishes a same-length content replacement (rewind / restore)
@@ -3883,6 +3905,7 @@ impl Default for AppState {
             pager: crate::pager::Pager::default(),
             last_transcript_total_rows: 0,
             clear_anchor: None,
+            top_anchor: None,
             transcript_gen: 0,
             transcript_edits: 0,
             transcript_tail_insert: std::cell::Cell::new(None),
@@ -5280,6 +5303,27 @@ impl AppState {
     /// rather than an organically-followed reader, and takes the instant-jump
     /// path instead of arming a follow-ease (SQ-1607).
     pub fn mark_screen_clear(&mut self) {
+        self.clear_anchor = Some(self.transcript.len());
+        self.top_anchor = self.clear_anchor;
+        self.transcript_scroll = 0;
+        self.scroll_anim = None;
+        self.pager.screen_cleared_this_turn = true;
+    }
+
+    /// Same as [`Self::mark_screen_clear`], except [`Self::top_anchor`] is left
+    /// exactly where it was (SQ-1656) — for a game-driven screen clear that
+    /// PRESERVES what came before (SQ-1654's `is_screen_reprint` gate said this
+    /// is a different screen taking over, not the same one redrawing). The view
+    /// still snaps to the bottom and the pager still arms as usual; only the
+    /// top-anchor PIN is withheld, so the new content renders as ordinary
+    /// scrollback that happens to be at the bottom, rather than forced to the
+    /// top of the pane with the still-reachable (not destroyed) prior screen
+    /// hidden above a fold as if it had been.
+    ///
+    /// `clear_anchor` itself still moves — `apply_game_driven_result` needs it
+    /// as the next clear's own comparison baseline regardless of which way this
+    /// one went.
+    pub fn mark_screen_clear_preserving_top_anchor(&mut self) {
         self.clear_anchor = Some(self.transcript.len());
         self.transcript_scroll = 0;
         self.scroll_anim = None;
@@ -6931,6 +6975,33 @@ mod tests {
         s.truncate_transcript(5);
         assert_eq!(s.transcript.len(), 1);
         assert_eq!(s.transcript_gen, gen2, "a no-op truncate must not bump the generation");
+    }
+
+    /// SQ-1656: `mark_screen_clear_preserving_top_anchor` is what
+    /// `apply_game_driven_result` reaches for when a game-driven clear is a
+    /// DIFFERENT screen taking over rather than the same one redrawing
+    /// (SQ-1654's `is_screen_reprint` gate said no truncate) — `clear_anchor`
+    /// still advances (it is the next clear's own comparison baseline), but
+    /// `top_anchor` — the one the renderer actually top-anchors against — is
+    /// left exactly where it was, so the new content falls back to ordinary
+    /// bottom-sticking scrollback instead of being pinned above a fold that
+    /// hides the still-reachable prior screen as if it had been destroyed.
+    /// `mark_screen_clear` (the collapse shape, and every typed-command
+    /// clear) keeps moving both together, unchanged from before this quest.
+    #[test]
+    fn mark_screen_clear_preserving_top_anchor_leaves_top_anchor_behind() {
+        let mut s = AppState::default();
+        assert_eq!(s.clear_anchor, None, "premise: nothing has cleared yet");
+        assert_eq!(s.top_anchor, None, "premise: nothing has cleared yet");
+
+        s.mark_screen_clear_preserving_top_anchor();
+        assert_eq!(s.clear_anchor, Some(0), "clear_anchor always advances, preserve or not");
+        assert_eq!(s.top_anchor, None, "top_anchor must be left exactly where it was");
+
+        s.push_transcript("a different screen's content");
+        s.mark_screen_clear();
+        assert_eq!(s.clear_anchor, Some(1));
+        assert_eq!(s.top_anchor, Some(1), "an ordinary clear keeps top_anchor moving in lockstep");
     }
 
     #[test]

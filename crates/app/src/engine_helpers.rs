@@ -368,6 +368,7 @@ pub fn apply_archive_state(
     *mapper = ac.mapper;
     state.transcript = ac.transcript;
     state.clear_anchor = None;
+    state.top_anchor = None;
     state.transcript_kinds = ac.transcript_kinds;
     state.transcript_runs = ac.transcript_runs;
     state.transcript_para = ac.transcript_para;
