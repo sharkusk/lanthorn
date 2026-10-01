@@ -115,7 +115,7 @@ fn boot_frame(engine: &mut dyn Engine, w: u16, h: u16) -> (AppState, u16, app::r
         state.pager.arm(pager::opening_baseline(&state));
     }
     let m = measure(engine, &state, w, h);
-    pager::apply_frame(&mut state, m.max_scroll, m.viewport_rows, m.prompt_rows, m.total_rows, m.transcript_surface);
+    pager::apply_frame(&mut state, m.max_scroll, m.viewport_rows, m.prompt_rows, m.total_rows, m.transcript_surface, m.top_anchored_fits);
     (state, blanks, m)
 }
 

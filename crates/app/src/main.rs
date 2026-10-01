@@ -600,6 +600,11 @@ struct PaneRects {
     /// zeroed transcript metrics must not clamp scrollback or reset the pager
     /// baseline (SQ-0578).
     pub transcript_surface: bool,
+    /// Whether this frame is showing a top-anchored post-clear screen in full
+    /// — see `render::transcript::TranscriptRender::top_anchored_fits`
+    /// (SQ-1661). `pager::apply_frame` must not arm a follow-ease while this
+    /// holds.
+    pub transcript_top_anchored_fits: bool,
     /// List-row viewport of the open selection-list modal this frame, synced to
     /// `AppState.modal_list_viewport` so nav actions can window/animate. 0 when
     /// no list modal is open.
@@ -689,6 +694,7 @@ fn draw_frame(
     let mut transcript_prompt_rows: u16 = 0;
     let mut transcript_total_rows: u16 = 0;
     let mut transcript_surface = false;
+    let mut transcript_top_anchored_fits = false;
     let mut transcript_links_out: Vec<((u16, u16), u32)> = Vec::new();
     let mut win_rects_out: Vec<(u32, app::engine::WinKind, Rect)> = Vec::new();
     let mut pane_layout_out = app::layout::PaneLayout::default();
@@ -837,6 +843,7 @@ fn draw_frame(
             transcript_prompt_rows = m.prompt_rows;
             transcript_total_rows = m.total_rows;
             transcript_surface = m.transcript_surface;
+            transcript_top_anchored_fits = m.top_anchored_fits;
             transcript_links_out = m.links;
             win_rects_out = m.win_rects;
             story_area = story_fp.content;
@@ -873,6 +880,7 @@ fn draw_frame(
                     transcript_prompt_rows = m.prompt_rows;
                     transcript_total_rows = m.total_rows;
                     transcript_surface = m.transcript_surface;
+                    transcript_top_anchored_fits = m.top_anchored_fits;
                     transcript_links_out = m.links;
                     win_rects_out = m.win_rects;
                     story_area = story_fp.content;
@@ -909,6 +917,7 @@ fn draw_frame(
                     transcript_prompt_rows = m.prompt_rows;
                     transcript_total_rows = m.total_rows;
                     transcript_surface = m.transcript_surface;
+                    transcript_top_anchored_fits = m.top_anchored_fits;
                     transcript_links_out = m.links;
                     win_rects_out = m.win_rects;
                     story_area = story_fp.content;
@@ -1288,7 +1297,7 @@ fn draw_frame(
 
     // The draw closure runs exactly once, so the overlay ladder always ran.
     let overlay_rects = overlay_rects.expect("draw_frame closure runs exactly once");
-    Ok(PaneRects { map: map_area, story: story_area, boundaries: pane_layout_out.boundary_zones(), pane_layout: pane_layout_out, room_rects: room_rects_out, map_marker_rects: map_marker_rects_out, map_view: map_control_view, room_dock: pane_layout_out.room_dock, room_dock_tabs: room_dock_tabs_out, room_dock_close: room_dock_close_out, room_dock_room: room_dock_room_out, room_dock_body_total: room_dock_body_total_out, room_dock_body_viewport: room_dock_body_viewport_out, room_menu_area: room_menu_area_out, room_menu_items: room_menu_items_out, layer_tabs: layer_tabs_out, border_controls: border_controls_out, debug_tabs: debug_tabs_out, dialog: overlay_rects.dialog, aux_dialog: overlay_rects.aux_dialog, history_prompt: overlay_rects.history_prompt, font_check: overlay_rects.font_check, fetch_keep: overlay_rects.fetch_keep, reset_dialog: overlay_rects.reset_dialog, region_prompt: overlay_rects.region_prompt, game_over: overlay_rects.game_over, save_name_dialog: overlay_rects.save_name_dialog, text_entry: overlay_rects.text_entry, confirm_delete: overlay_rects.confirm_delete, confirm_overwrite: overlay_rects.confirm_overwrite, quit_dialog: overlay_rects.quit_dialog, launch_dialog: overlay_rects.launch_dialog, hints_panel: overlay_rects.hints_panel, command_band: band_hits, inventory_dock: inv_hits, palette: palette_hits, transcript_links: transcript_links_out, win_rects: win_rects_out, transcript_max_scroll, transcript_viewport_rows, transcript_prompt_rows, transcript_total_rows, transcript_surface, modal_list_viewport })
+    Ok(PaneRects { map: map_area, story: story_area, boundaries: pane_layout_out.boundary_zones(), pane_layout: pane_layout_out, room_rects: room_rects_out, map_marker_rects: map_marker_rects_out, map_view: map_control_view, room_dock: pane_layout_out.room_dock, room_dock_tabs: room_dock_tabs_out, room_dock_close: room_dock_close_out, room_dock_room: room_dock_room_out, room_dock_body_total: room_dock_body_total_out, room_dock_body_viewport: room_dock_body_viewport_out, room_menu_area: room_menu_area_out, room_menu_items: room_menu_items_out, layer_tabs: layer_tabs_out, border_controls: border_controls_out, debug_tabs: debug_tabs_out, dialog: overlay_rects.dialog, aux_dialog: overlay_rects.aux_dialog, history_prompt: overlay_rects.history_prompt, font_check: overlay_rects.font_check, fetch_keep: overlay_rects.fetch_keep, reset_dialog: overlay_rects.reset_dialog, region_prompt: overlay_rects.region_prompt, game_over: overlay_rects.game_over, save_name_dialog: overlay_rects.save_name_dialog, text_entry: overlay_rects.text_entry, confirm_delete: overlay_rects.confirm_delete, confirm_overwrite: overlay_rects.confirm_overwrite, quit_dialog: overlay_rects.quit_dialog, launch_dialog: overlay_rects.launch_dialog, hints_panel: overlay_rects.hints_panel, command_band: band_hits, inventory_dock: inv_hits, palette: palette_hits, transcript_links: transcript_links_out, win_rects: win_rects_out, transcript_max_scroll, transcript_viewport_rows, transcript_prompt_rows, transcript_total_rows, transcript_surface, transcript_top_anchored_fits, modal_list_viewport })
 }
 
 // ── Command-band mouse routing ───────────────────────────────────────────────
@@ -2163,6 +2172,7 @@ fn run_event_loop(boot: startup::BootResult, launched_from_library: bool) -> Run
                     panes.transcript_prompt_rows,
                     panes.transcript_total_rows,
                     panes.transcript_surface,
+                    panes.transcript_top_anchored_fits,
                 );
                 // Carry this frame's modal list viewport so the next nav action
                 // can window/animate the open selection-list modal.

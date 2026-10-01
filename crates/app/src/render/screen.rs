@@ -61,6 +61,12 @@ pub struct StoryPaneMetrics {
     /// the drawing where it put the text" — is the fix (SQ-1203). Empty for the
     /// Z-machine/Scott simple path (no Glk ids to record).
     pub win_rects: Vec<(u32, WinKind, Rect)>,
+    /// Whether this frame is showing a top-anchored post-clear screen in full
+    /// — see `render::transcript::TranscriptRender::top_anchored_fits`, whose
+    /// doc has the reasoning (SQ-1661). `false` on the generic multi-window
+    /// fallback (no primary buffer rendered this frame, so nothing is
+    /// anchored) and whenever the primary buffer isn't currently top-anchored.
+    pub top_anchored_fits: bool,
 }
 
 /// Tally `(grids, buffers, others)` leaf windows in the tree. Used only by tests
@@ -342,6 +348,7 @@ fn render_story_pane_frame(
             links,
             transcript_surface: true,
             win_rects: Vec::new(),
+            top_anchored_fits: t.top_anchored_fits,
         };
     }
 
@@ -385,6 +392,7 @@ fn render_story_pane_frame(
         links: Vec::new(),
         transcript_surface: false,
         win_rects: Vec::new(),
+        top_anchored_fits: false,
     });
     m.links.extend(grid_links);
     m.win_rects.extend(win_rects);
@@ -802,6 +810,7 @@ fn render_node(
                     links: t.links,
                     transcript_surface: true,
                     win_rects: Vec::new(),
+                    top_anchored_fits: t.top_anchored_fits,
                 })
             } else {
                 render_inline_buffer(b, state, area, buf, links);
@@ -1906,6 +1915,7 @@ fn render_node(
                         links: Vec::new(),
                         transcript_surface: true,
                         win_rects: Vec::new(),
+                        top_anchored_fits: rm.top_anchored_fits,
                     });
                 }
                 return None;
@@ -6866,6 +6876,11 @@ pub fn build_main_text(state: &AppState, cols: u16, rows: u16) -> (crate::render
     let anchor_row = (scroll == 0)
         .then(|| crate::render::transcript::anchor_row_at(line_starts, total, state.top_anchor))
         .flatten();
+    // Shares `window_wrapped_rows`'s own fits-check (SQ-1661) rather than
+    // re-deriving it, so the pager's follow-ease (`pager::apply_frame`) can
+    // skip arming one on this path exactly as it does on the cell path.
+    let top_anchored_fits =
+        crate::render::transcript::top_anchor_fits(anchor_row, total, budget, scroll.min(u16::MAX as usize) as u16);
     if let Some(a) = anchor_row.filter(|&a| total - a <= budget) {
         start = a;
         end = total;
@@ -6913,6 +6928,7 @@ pub fn build_main_text(state: &AppState, cols: u16, rows: u16) -> (crate::render
         viewport_rows: budget.min(u16::MAX as usize) as u16,
         max_scroll: max_scroll.min(u16::MAX as usize) as u16,
         first_visible_row: start.min(u16::MAX as usize) as u16,
+        top_anchored_fits,
     };
     (main, metrics)
 }
@@ -6933,6 +6949,9 @@ pub struct RasterMetrics {
     /// Absolute wrapped-row index drawn at the top of the visible slice (for the
     /// published `TranscriptGeom`).
     pub first_visible_row: u16,
+    /// Whether this frame is showing a top-anchored post-clear screen in full
+    /// — see `render::transcript::TranscriptRender::top_anchored_fits` (SQ-1661).
+    pub top_anchored_fits: bool,
 }
 
 /// How deep a chrome run must sit before the HYBRID path will treat a screen as a

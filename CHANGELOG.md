@@ -110,6 +110,11 @@ while any such tag, or this Unreleased section, still exists.*
   game object with no proper printed name (some *Anchorhead* items, among
   others) could read "umbrella things green handle brolly bumbersho"
   instead of "umbrella" once the item had been seen at least once.
+- Fixed a new command right after a screen clear (like the end of
+  *Anchorhead*'s intro) briefly jumping the story screen back to whatever was
+  hidden before the clear, then scrolling quickly back down to the fresh
+  line — your next move now just appears below the cleared screen with no
+  stray jump at all.
 
 ## v0.8.1 — 2026-09-29
 

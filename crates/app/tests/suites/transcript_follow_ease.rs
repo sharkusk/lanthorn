@@ -88,6 +88,7 @@ fn drive_one_turn(s: &mut GameSession, state: &mut AppState, area: Rect, cmd: &s
         m1.prompt_rows,
         m1.total_rows,
         m1.transcript_surface,
+        m1.top_anchored_fits,
     );
 }
 

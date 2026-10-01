@@ -70,7 +70,7 @@ fn resumed_transcript_calibrates_to_the_bottom_instead_of_paging_from_the_top() 
 
     // The frame the resume lands on: a v6 full-screen picture takeover (Zork
     // Zero's splash) — no transcript surface at all (SQ-0578).
-    pager::apply_frame(&mut state, 0, 40, 0, 0, false);
+    pager::apply_frame(&mut state, 0, 40, 0, 0, false, false);
     assert!(state.pager.baseline_stale, "a surfaceless frame cannot calibrate anything");
     assert_eq!(state.last_transcript_total_rows, 0, "still unseeded — no real frame has drawn yet");
 
@@ -81,7 +81,7 @@ fn resumed_transcript_calibrates_to_the_bottom_instead_of_paging_from_the_top() 
 
     // The next frame lays the whole restored transcript out: 400 rows into a
     // 24-row viewport — an overflow that would normally engage the pager.
-    pager::apply_frame(&mut state, 376, 24, 0, 400, true);
+    pager::apply_frame(&mut state, 376, 24, 0, 400, true, false);
     assert!(!state.pager.active, "a resumed transcript must not page — the reader already read it");
     assert_eq!(state.transcript_scroll, 0, "the view calibrates to the bottom, not the top");
     assert_eq!(state.last_transcript_total_rows, 400, "the baseline is calibrated to the resumed total");
@@ -91,7 +91,7 @@ fn resumed_transcript_calibrates_to_the_bottom_instead_of_paging_from_the_top() 
     // reopen the pager, and the view stays at the bottom with the baseline
     // tracking the new total.
     state.pager.arm_after_turn(state.last_transcript_total_rows, InputKind::Line, false, Driver::PlayerInput);
-    pager::apply_frame(&mut state, 381, 24, 0, 405, true);
+    pager::apply_frame(&mut state, 381, 24, 0, 405, true, false);
     assert!(!state.pager.active, "a small post-resume turn must not page");
     assert_eq!(state.transcript_scroll, 0, "still at the bottom");
     assert_eq!(state.last_transcript_total_rows, 405, "baseline tracks the new total");
@@ -306,7 +306,7 @@ fn zork_zero_amiga_splash_resume_does_not_replay_the_transcript() {
 
     let m = measure(&fresh_control, &control_state, 80, 30);
     assert!(m.transcript_surface, "premise: a `>` prompt frame has a transcript surface");
-    pager::apply_frame(&mut control_state, m.max_scroll, m.viewport_rows, m.prompt_rows, m.total_rows, m.transcript_surface);
+    pager::apply_frame(&mut control_state, m.max_scroll, m.viewport_rows, m.prompt_rows, m.total_rows, m.transcript_surface, m.top_anchored_fits);
     assert!(!control_state.pager.active, "control: the `>`-prompt resume must not page");
     assert_eq!(control_state.transcript_scroll, 0, "control: the view sits at the bottom");
 
@@ -338,7 +338,7 @@ fn zork_zero_amiga_splash_resume_does_not_replay_the_transcript() {
         !m.transcript_surface,
         "premise: the rebus splash is a full-screen picture takeover with no transcript surface"
     );
-    pager::apply_frame(&mut splash_state, m.max_scroll, m.viewport_rows, m.prompt_rows, m.total_rows, m.transcript_surface);
+    pager::apply_frame(&mut splash_state, m.max_scroll, m.viewport_rows, m.prompt_rows, m.total_rows, m.transcript_surface, m.top_anchored_fits);
     assert!(splash_state.pager.baseline_stale, "a surfaceless frame cannot calibrate anything");
 
     // Act once: the key that dismisses the splash, exactly as `turn.rs`'s
@@ -355,7 +355,7 @@ fn zork_zero_amiga_splash_resume_does_not_replay_the_transcript() {
 
     let m2 = measure(&fresh_splash, &splash_state, 80, 30);
     assert!(m2.transcript_surface, "premise: the frame past the splash has a real transcript surface");
-    pager::apply_frame(&mut splash_state, m2.max_scroll, m2.viewport_rows, m2.prompt_rows, m2.total_rows, m2.transcript_surface);
+    pager::apply_frame(&mut splash_state, m2.max_scroll, m2.viewport_rows, m2.prompt_rows, m2.total_rows, m2.transcript_surface, m2.top_anchored_fits);
     assert!(!splash_state.pager.active, "splash: the resumed transcript must not page — it was already read");
     assert_eq!(splash_state.transcript_scroll, 0, "splash: the view calibrates to the bottom, not the top");
 }

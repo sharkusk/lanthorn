@@ -229,6 +229,7 @@ fn park_with(
         m1.prompt_rows,
         m1.total_rows,
         m1.transcript_surface,
+        m1.top_anchored_fits,
     );
     // The raster path builds its composite (and its metrics) on a worker thread and
     // redraws the last-ready one meanwhile; the run loop polls that job every tick,
@@ -432,6 +433,7 @@ fn a_turn_that_clears_mid_output_parks_on_the_first_new_row() {
         let (m1, _) = render(&state);
         app::pager::apply_frame(
             &mut state, m1.max_scroll, m1.viewport_rows, m1.prompt_rows, m1.total_rows, m1.transcript_surface,
+            m1.top_anchored_fits,
         );
         let (_, g2) = render(&state);
         let g2 = g2.expect("the parked frame lays the transcript out");
@@ -587,6 +589,7 @@ fn a_continued_row_that_wraps_parks_on_the_row_it_shares_and_no_higher() {
             m1.prompt_rows,
             m1.total_rows,
             m1.transcript_surface,
+            m1.top_anchored_fits,
         );
         assert!(state.pager.active, "honor={honor}: the page overflows a 12-row pane");
         let (_, g2) = render(&state);

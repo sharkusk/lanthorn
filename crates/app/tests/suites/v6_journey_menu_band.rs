@@ -366,7 +366,7 @@ const HOST_PAGE: image::Rgba<u8> = image::Rgba([0, 0, 0, 255]);
 fn empty_prose(_cols: u16, rows: u16) -> (MainText, RasterMetrics) {
     (
         MainText { lines: Vec::new(), styles: Vec::new(), input: String::new(), cursor_col: 0, awaiting: false, floats: Vec::new() },
-        RasterMetrics { total_rows: 0, viewport_rows: rows, max_scroll: 0, first_visible_row: 0 },
+        RasterMetrics { total_rows: 0, viewport_rows: rows, max_scroll: 0, first_visible_row: 0, top_anchored_fits: false },
     )
 }
 

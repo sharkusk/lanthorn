@@ -169,6 +169,7 @@ fn host_prose(cols: u16, rows: u16) -> (MainText, RasterMetrics) {
         viewport_rows: budget,
         max_scroll: total.saturating_sub(budget),
         first_visible_row: 0,
+        top_anchored_fits: false,
     };
     (main, metrics)
 }
@@ -367,7 +368,7 @@ fn empty_prose(_cols: u16, rows: u16) -> (MainText, RasterMetrics) {
         awaiting: false,
         floats: Vec::new(),
     };
-    let metrics = RasterMetrics { total_rows: 0, viewport_rows: rows, max_scroll: 0, first_visible_row: 0 };
+    let metrics = RasterMetrics { total_rows: 0, viewport_rows: rows, max_scroll: 0, first_visible_row: 0, top_anchored_fits: false };
     (main, metrics)
 }
 

@@ -1198,6 +1198,19 @@ pub(crate) fn anchor_row_at(starts: &[usize], total: usize, clear_anchor: Option
 /// Returns (visible rows oldest-first, total wrapped-row count, first visible
 /// absolute row). This does NOT wrap — the wrapping is done once by the caller
 /// (cached across frames), so windowing/scroll is cheap. (SQ-0305)
+/// Whether [`window_wrapped_rows`] would take its top-anchor branch for this
+/// `(anchor_row, total, rows, scroll)`: at the bottom (`scroll == 0`), an
+/// anchor set, and the post-anchor content still fitting `rows`. Mirrors that
+/// function's own `scroll == 0` branch condition exactly (SQ-1661) — a caller
+/// that needs to know this WITHOUT windowing (the pager's follow-ease, which
+/// must not arm an animation computed in the wrong coordinate space while a
+/// top-anchored view is showing fully; see `pager::apply_frame`) calls this
+/// instead of re-deriving the condition by hand, so the two can never drift
+/// apart the way the bug it fixes did.
+pub(crate) fn top_anchor_fits(anchor_row: Option<usize>, total: usize, rows: usize, scroll: u16) -> bool {
+    scroll == 0 && anchor_row.is_some_and(|a| total.saturating_sub(a.min(total)) <= rows)
+}
+
 pub(crate) fn window_wrapped_rows(
     display_rows: &[WrappedRow],
     anchor_row: Option<usize>,
@@ -1831,6 +1844,15 @@ pub struct TranscriptRender {
     pub prompt_rows: u16,
     /// Per-frame map from rendered cell `(col, row)` to Glk hyperlink value.
     pub links: Vec<((u16, u16), u32)>,
+    /// Whether THIS frame is showing a top-anchored post-clear screen in full
+    /// (see [`window_wrapped_rows`]) — the view is at the bottom, a clear
+    /// anchor is set, and its content still fits the viewport with no
+    /// overflow. `pager::apply_frame` (SQ-1661) must not arm a follow-ease
+    /// while this holds: the ease's FROM/TO values are computed against the
+    /// FULL transcript's row count, a coordinate space `window_wrapped_rows`
+    /// only uses once this stops being true, and animating through it briefly
+    /// shows pre-clear content the anchor is supposed to hide.
+    pub top_anchored_fits: bool,
 }
 
 /// Render the GAME pane into `buf` within `area`:
@@ -2752,6 +2774,10 @@ fn render_middle(
     state.graphics_render.borrow_mut().queue_external_deletes(evicted_bands);
     // Window the cached rows to the visible viewport (cheap; no re-wrap). The
     // top-anchor only applies at the bottom, handled inside `window_wrapped_rows`.
+    // Captured before windowing (same inputs, mirrored condition) so the pager
+    // (SQ-1661) knows whether THIS frame is showing a top-anchored view in
+    // full, without reaching into the wrap cache itself.
+    let top_anchored_fits = top_anchor_fits(entry.anchor_row, entry.rows.len(), transcript_rows, effective_scroll);
     let (lines, total_rows, first_abs_row) =
         window_wrapped_rows(&entry.rows, entry.anchor_row, transcript_rows, effective_scroll);
     // Search highlight style, themed via the `transcript_search_highlight`
@@ -3101,6 +3127,7 @@ fn render_middle(
         viewport_rows: transcript_rows.min(u16::MAX as usize) as u16,
         prompt_rows,
         links,
+        top_anchored_fits,
     }
 }
 

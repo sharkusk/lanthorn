@@ -487,7 +487,7 @@ fn settle_pager(b: &mut BootedStory, w: u16, h: u16) {
     let mut buf = Buffer::empty(area);
     let char_mode = b.session.pending_input() == InputKind::Char;
     let m = app::render::screen::render_story_pane(&b.session.screen(), char_mode, None, &b.state, area, &mut buf);
-    app::pager::apply_frame(&mut b.state, m.max_scroll, m.viewport_rows, m.prompt_rows, m.total_rows, m.transcript_surface);
+    app::pager::apply_frame(&mut b.state, m.max_scroll, m.viewport_rows, m.prompt_rows, m.total_rows, m.transcript_surface, m.top_anchored_fits);
 }
 
 /// A restarted game's banner must pause at `[more]` exactly where a fresh boot
