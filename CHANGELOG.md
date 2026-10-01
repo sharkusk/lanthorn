@@ -96,6 +96,13 @@ while any such tag, or this Unreleased section, still exists.*
   wedding ring and umbrella, and *Counterfeit Monkey*'s R-remover, now show
   up as carried the moment you check your own INVENTORY, instead of staying
   invisible until you drop and re-take them.
+- Fixed the story screen staying scrolled up after you typed a command and
+  hit Return, with inline prompts, if you'd scrolled back through earlier
+  text first — submitting your own command now jumps you straight back to
+  what just happened, the way most terminal and chat apps already treat your
+  own input. Scrolling up to read backlog while the game prints something on
+  its own (a timer, a delayed event) still leaves your view exactly where you
+  left it, same as before.
 
 ## v0.8.1 — 2026-09-29
 

@@ -3884,6 +3884,14 @@ fn run_event_loop(boot: startup::BootResult, launched_from_library: bool) -> Run
                 // (SQ-0676 — this path bypasses `apply_action`'s own hook).
                 app::input::band_react_to_input(&mut state);
 
+                // Submitting a command is the player's own active "show me what
+                // happens now" signal — unlike passive output arriving while the
+                // reader is deliberately scrolled into history (SQ-1595, left
+                // untouched by `snap_scroll_for_own_submission`'s own doc).
+                // Every submission path lands here — ordinary command, slash
+                // command (routed below) and band quick-pick alike (SQ-1658).
+                state.snap_scroll_for_own_submission();
+
                 // An empty cmd (Enter on a blank line) is still submitted to the
                 // game, which decides what a blank line means (re-prompt / "I beg
                 // your pardon?"), matching other interpreters (SQ-0265). Only skip

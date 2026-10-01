@@ -4438,6 +4438,25 @@ impl AppState {
         self.sixel_scroll_motion_at = Some(Instant::now());
     }
 
+    /// Snap the transcript back to the bottom for the player's OWN command
+    /// submission — a deliberate "show me what happens now" signal, distinct
+    /// from passive output arriving while the reader is deliberately scrolled
+    /// into history ([`Self::arm_transcript_follow_ease`]'s own territory,
+    /// via `pager::apply_frame`'s `at_bottom` check, which this leaves
+    /// untouched). Called *before* the turn's output arrives, so that check
+    /// sees `transcript_scroll == 0` and takes its normal already-at-bottom
+    /// follow path for the new output, exactly as any other turn that starts
+    /// at the bottom does (SQ-1658).
+    ///
+    /// No-op when already at the bottom, so an ordinary submission that
+    /// never needed to move the view doesn't churn `scroll_anim` or flash the
+    /// scrollbar for nothing.
+    pub fn snap_scroll_for_own_submission(&mut self) {
+        if self.transcript_scroll != 0 {
+            self.scroll_transcript_to(0);
+        }
+    }
+
     /// Arm (or replace) the transcript's smooth-scroll animation for new output
     /// arriving while the reader was already at the bottom (SQ-1595), easing
     /// over `config.animation.follow_ms` rather than `scroll_ms`. Sets the
@@ -7267,6 +7286,36 @@ mod tests {
         let a = s.scroll_anim.as_ref().expect("animation armed when enabled");
         assert_eq!(a.from, 3, "from = previous displayed offset");
         assert_eq!(a.target(), 8, "to = new target");
+    }
+
+    /// SQ-1658: the player's own command submission is an active signal — a
+    /// reader scrolled up into history who then types a command and hits
+    /// Return must end up heading back to the bottom, unlike passive output
+    /// arriving unprompted (SQ-1595, pinned separately by
+    /// `pager::apply_frame_arms_no_follow_ease_when_reader_scrolled_away`).
+    #[test]
+    fn snap_scroll_for_own_submission_heads_to_the_bottom_when_scrolled_up() {
+        let mut s = AppState::default();
+        s.transcript_scroll = 7;
+        s.snap_scroll_for_own_submission();
+        assert_eq!(s.transcript_scroll, 0, "logical target is the bottom");
+        let a = s.scroll_anim.as_ref().expect("a reader-driven scroll-to-bottom must be armed");
+        assert_eq!(a.from, 7, "eases from wherever the reader had scrolled to");
+        assert_eq!(a.target(), 0, "…down to the bottom");
+        assert_eq!(a.kind, ScrollAnimKind::Scroll, "this is a reader-style jump, not a content-arrival follow-ease");
+    }
+
+    /// Already at the bottom: submitting a command must not touch `scroll_anim`
+    /// or re-arm anything — there is nothing to snap, so this must be exactly
+    /// as inert as today's behavior for a submission from the bottom.
+    #[test]
+    fn snap_scroll_for_own_submission_is_a_noop_when_already_at_bottom() {
+        let mut s = AppState::default();
+        assert_eq!(s.transcript_scroll, 0, "premise: already at the bottom");
+        s.snap_scroll_for_own_submission();
+        assert_eq!(s.transcript_scroll, 0);
+        assert!(s.scroll_anim.is_none(), "no animation churned for a no-op snap");
+        assert!(s.scrollbar_shown_at.is_none(), "no scrollbar flash for a no-op snap");
     }
 
     /// `scroll_transcript_to` is the ordinary, reader-driven scroll path
