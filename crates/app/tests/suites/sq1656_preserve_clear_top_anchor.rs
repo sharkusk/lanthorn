@@ -86,22 +86,24 @@ fn pane_rows(session: &dyn Engine, state: &AppState) -> Vec<String> {
         .collect()
 }
 
-/// The user's reported symptom #1 (generalised to Anchorhead, whose intro
-/// sequence `sq1654_scrollback_preserves_screens.rs` already drives at the
-/// data level: three separate `read_char` "press any key" screens, each its
-/// own game-driven `erase_lower` clear, essentially no line overlap between
-/// them — so EVERY one of these clears is a PRESERVE, never a collapse).
-///
-/// Without the fix, `mark_screen_clear` pins the render to the LAST clear's
-/// anchor whenever what follows it still fits the pane — hiding the intro
-/// card and the epigraph quote splash above the fold the moment the title
-/// banner's own clear lands, even though (by construction here) the whole
-/// sequence fits the pane with room to spare. With the fix those two earlier
-/// clears are preserves and leave `top_anchor` untouched, so the view just
-/// bottom-sticks the whole, short scrollback and everything is on screen at
-/// once.
+/// SQ-1660 (reverting SQ-1656): Anchorhead's intro sequence
+/// (`sq1654_scrollback_preserves_screens.rs` drives the identical three
+/// presses and confirms per-press content at the data level: press 0 reveals
+/// the intro card, press 1 the "THE FIRST DAY" / H. P. Lovecraft epigraph,
+/// press 2 the title banner opening onto "Outside the Real Estate Office" —
+/// each its own game-driven `erase_lower` clear, essentially no line overlap
+/// between them) must top-anchor the RENDER on every one of those clears,
+/// exactly like any other clear: each press's rendered viewport shows ONLY
+/// that press's new screen by default, with the prior screen(s) scrolled off
+/// above the fold rather than stacked together with no visual sign a clear
+/// happened (the user's reported symptom this quest restores the fix for).
+/// `sq1654_scrollback_preserves_screens.rs`'s own test already proves
+/// `state.transcript` keeps every screen's text regardless — this file
+/// additionally confirms that un-rendered survival here, and that no scroll
+/// animation is armed across the transition (instant, not animated, per the
+/// user's explicit request).
 #[test]
-fn anchorhead_intro_screens_all_stay_visible_once_gameplay_starts() {
+fn anchorhead_intro_screens_each_top_anchor_and_hide_the_last_by_default() {
     let story = fixture_path("Anchorhead.gblorb");
     if !story.is_file() {
         eprintln!("SKIP: no Anchorhead.gblorb");
@@ -111,39 +113,81 @@ fn anchorhead_intro_screens_all_stay_visible_once_gameplay_starts() {
     let mut b = boot_headless(story, &home);
     assert_eq!(b.session.pending_input(), InputKind::Char, "premise: the intro waits for a keypress");
 
-    for press in 0..3 {
+    let press_once = |b: &mut app::host::BootedStory, press: u32| {
         let result = b.session.submit_key(KeyInput::Char(' ')).expect("key reaches the story");
         assert!(result.erase_lower, "press {press}: premise — each intro screen is its own game-driven clear");
         let out = apply_game_driven_result(&mut b.state, &mut b.mapper, &result, &b.game_dir, None, &*b.session, Driver::PlayerInput);
         assert!(!out.quit, "press {press}: the game goes on");
-    }
+        assert!(
+            b.state.scroll_anim.is_none(),
+            "press {press}: a game-driven clear is instant — no scroll animation armed"
+        );
+    };
+
+    press_once(&mut b, 0);
+    let rows0 = pane_rows(&*b.session, &b.state);
+    let text0 = rows0.join("\n");
+    assert!(
+        text0.contains("Welcome to Anchorhead") || text0.contains("first raindrops"),
+        "press 0: the intro card must be on screen by default: {rows0:#?}"
+    );
+
+    press_once(&mut b, 1);
+    let rows1 = pane_rows(&*b.session, &b.state);
+    let text1 = rows1.join("\n");
+    assert!(
+        text1.contains("THE FIRST DAY") || text1.contains("H. P. Lovecraft"),
+        "press 1: the epigraph quote splash must be on screen by default: {rows1:#?}"
+    );
+    assert!(
+        !text1.contains("Welcome to Anchorhead") && !text1.contains("first raindrops"),
+        "press 1: the intro card must NOT be part of the default render any more \
+         (it is only reachable by scrolling up): {rows1:#?}"
+    );
+
+    press_once(&mut b, 2);
     assert_eq!(b.session.pending_input(), InputKind::Line, "premise: gameplay is reached (a line prompt)");
+    let rows2 = pane_rows(&*b.session, &b.state);
+    let text2 = rows2.join("\n");
+    assert!(
+        text2.contains("Outside the Real Estate Office"),
+        "press 2: gameplay's own opening room must be on screen by default: {rows2:#?}"
+    );
+    assert!(
+        !text2.contains("Welcome to Anchorhead")
+            && !text2.contains("first raindrops")
+            && !text2.contains("THE FIRST DAY")
+            && !text2.contains("H. P. Lovecraft"),
+        "press 2: neither the intro card nor the epigraph must be part of the default \
+         render any more: {rows2:#?}"
+    );
 
-    // Non-vacuity: every one of those three clears really was a preserve, not
-    // a collapse — `top_anchor` was never touched, so it is still at its
-    // initial `None` (nothing destroyed, nothing to pin against).
+    // Non-vacuity: every one of those three clears moved BOTH anchors in
+    // lockstep (there is no preserve/collapse split in the render-facing
+    // anchor any more) — top_anchor must equal clear_anchor, not be left
+    // behind the way SQ-1656 left it.
+    assert!(b.state.clear_anchor.is_some(), "premise: clear_anchor advances on every clear");
     assert_eq!(
-        b.state.top_anchor, None,
-        "premise: none of the three intro clears looks like the prior screen \
-         redrawing itself, so top_anchor must still be untouched"
+        b.state.top_anchor, b.state.clear_anchor,
+        "every clear — collapse or preserve-shaped alike — must move top_anchor in lockstep \
+         with clear_anchor, exactly as before SQ-1656 ever existed"
     );
-    // `clear_anchor` moved regardless — it is the next clear's own comparison
-    // baseline and is unaffected by this fix.
-    assert!(b.state.clear_anchor.is_some(), "premise: clear_anchor still advances on every clear");
 
-    let rows = pane_rows(&*b.session, &b.state);
-    let text = rows.join("\n");
+    // SQ-1654's guarantee, unaffected by this quest: every prior screen's text
+    // still survives in full in `state.transcript`, reachable by scrolling up,
+    // even though none of it is part of the default render above.
+    let transcript_text = b.state.transcript.join("\n");
     assert!(
-        text.contains("Welcome to Anchorhead") || text.contains("first raindrops"),
-        "the intro card must be ON SCREEN, not scrolled off above the fold: {rows:#?}"
+        transcript_text.contains("Welcome to Anchorhead") && transcript_text.contains("first raindrops"),
+        "the intro card must still be in state.transcript: {transcript_text}"
     );
     assert!(
-        text.contains("THE FIRST DAY") || text.contains("H. P. Lovecraft"),
-        "the epigraph quote splash must be on screen too: {rows:#?}"
+        transcript_text.contains("THE FIRST DAY") && transcript_text.contains("H. P. Lovecraft"),
+        "the epigraph quote splash must still be in state.transcript: {transcript_text}"
     );
     assert!(
-        text.contains("Outside the Real Estate Office"),
-        "and gameplay's own opening room: {rows:#?}"
+        transcript_text.contains("Outside the Real Estate Office"),
+        "gameplay's own opening room must still be in state.transcript: {transcript_text}"
     );
 
     let _ = std::fs::remove_dir_all(&home);

@@ -86,11 +86,13 @@ while any such tag, or this Unreleased section, still exists.*
   Monkey* and the full commercial release of *Anchorhead* were affected this
   way for their whole length, with everything you picked up going untracked
   even though the game's own replies confirmed you were carrying it.
-- Fixed the story screen scrolling a legitimately-still-there earlier screen
-  off the top, or briefly jumping backward then snapping forward on an early
-  action, even with plenty of room to show everything — *Counterfeit
+- Fixed the story screen briefly jumping backward then snapping forward on an
+  early action, even with plenty of room to show everything — *Counterfeit
   Monkey*'s opening accessibility questions and *Anchorhead*'s intro/quote
-  sequence were the two games this showed up on most.
+  sequence were the two games this showed up on most. (A screen clear always
+  scrolls the previous screen off the top instantly, same as before — what's
+  fixed is the stray jump-and-snap, not the clear itself. Anything typed
+  since is still reachable by scrolling up, per the entry above.)
 - Fixed the same tracker gap for the items you start the game already
   holding, before you've ever typed TAKE — *Anchorhead*'s trenchcoat,
   wedding ring and umbrella, and *Counterfeit Monkey*'s R-remover, now show

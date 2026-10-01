@@ -2774,27 +2774,23 @@ pub struct AppState {
     /// Transcript length at the most recent game screen-clear (`erase_window`),
     /// or `None`. The comparison baseline [`apply_game_driven_result`](crate::host::turn::apply_game_driven_result)
     /// reads to decide whether the NEXT clear looks like the same screen
-    /// redrawing (collapse) or a different one taking over (preserve) —
-    /// see `mark_screen_clear`. Moves on EVERY clear, collapse or preserve
-    /// alike; [`Self::top_anchor`] is the one the renderer actually
-    /// top-anchors against, and the two diverge exactly on a preserving
-    /// clear (SQ-1656).
+    /// redrawing (collapse, which truncates scrollback back to this anchor)
+    /// or a different one taking over (preserve, which keeps the scrollback
+    /// but still pins the render — see `mark_screen_clear`). Moves in
+    /// lockstep with [`Self::top_anchor`] on every clear, collapse or
+    /// preserve alike (SQ-1656 briefly made them diverge on a preserving
+    /// clear; SQ-1660 reverted that — stacking two unrelated screens in one
+    /// viewport with no visual sign a clear happened read as broken in
+    /// practice, not as the fix it was meant to be).
     pub clear_anchor: Option<usize>,
-    /// The anchor the renderer actually top-anchors the view against (SQ-1656).
-    /// Equal to `clear_anchor` after every typed-command clear and every
-    /// game-driven clear that COLLAPSES the prior screen (same rule as
-    /// before SQ-1656 ever existed — see `beyondzork_title_repaint.rs`,
-    /// SQ-0748): the clear really did destroy what came before, so the
-    /// fresh content is pinned to the top of the pane with older scrollback
-    /// reachable by scrolling up.
-    ///
-    /// Left UNTOUCHED (not cleared, not advanced) by a game-driven clear
-    /// that PRESERVES the prior screen (SQ-1654's `is_screen_reprint` gate
-    /// says no) — nothing was destroyed, so the new content has no business
-    /// being pinned above a fold either; it falls back to ordinary
-    /// bottom-sticking scrollback, as if no clear had happened there at
-    /// all. Reset alongside `clear_anchor` at every restore/rewind site
-    /// that replaces the transcript wholesale (a stale index into a
+    /// The anchor the renderer actually top-anchors the view against. Equal
+    /// to `clear_anchor` after every clear — typed-command or game-driven,
+    /// collapsing or preserving alike (see `beyondzork_title_repaint.rs`,
+    /// SQ-0748): a clear always pins the fresh content to the top of the
+    /// pane, instantly and with no scroll animation, with everything older
+    /// reachable by scrolling up rather than shown alongside the new screen
+    /// by default. Reset alongside `clear_anchor` at every restore/rewind
+    /// site that replaces the transcript wholesale (a stale index into a
     /// replaced transcript is not merely unhelpful, it can coincide with
     /// real content and mis-anchor it).
     pub top_anchor: Option<usize>,
@@ -5329,26 +5325,6 @@ impl AppState {
         self.pager.screen_cleared_this_turn = true;
     }
 
-    /// Same as [`Self::mark_screen_clear`], except [`Self::top_anchor`] is left
-    /// exactly where it was (SQ-1656) — for a game-driven screen clear that
-    /// PRESERVES what came before (SQ-1654's `is_screen_reprint` gate said this
-    /// is a different screen taking over, not the same one redrawing). The view
-    /// still snaps to the bottom and the pager still arms as usual; only the
-    /// top-anchor PIN is withheld, so the new content renders as ordinary
-    /// scrollback that happens to be at the bottom, rather than forced to the
-    /// top of the pane with the still-reachable (not destroyed) prior screen
-    /// hidden above a fold as if it had been.
-    ///
-    /// `clear_anchor` itself still moves — `apply_game_driven_result` needs it
-    /// as the next clear's own comparison baseline regardless of which way this
-    /// one went.
-    pub fn mark_screen_clear_preserving_top_anchor(&mut self) {
-        self.clear_anchor = Some(self.transcript.len());
-        self.transcript_scroll = 0;
-        self.scroll_anim = None;
-        self.pager.screen_cleared_this_turn = true;
-    }
-
     /// Truncate the transcript — and every parallel sidecar vec — back to `len`,
     /// collapsing a menu-redraw reprint to a screen-clear boundary so consecutive
     /// reprints replace each other instead of piling up in scrollback. A no-op if
@@ -6996,31 +6972,33 @@ mod tests {
         assert_eq!(s.transcript_gen, gen2, "a no-op truncate must not bump the generation");
     }
 
-    /// SQ-1656: `mark_screen_clear_preserving_top_anchor` is what
-    /// `apply_game_driven_result` reaches for when a game-driven clear is a
-    /// DIFFERENT screen taking over rather than the same one redrawing
-    /// (SQ-1654's `is_screen_reprint` gate said no truncate) — `clear_anchor`
-    /// still advances (it is the next clear's own comparison baseline), but
-    /// `top_anchor` — the one the renderer actually top-anchors against — is
-    /// left exactly where it was, so the new content falls back to ordinary
-    /// bottom-sticking scrollback instead of being pinned above a fold that
-    /// hides the still-reachable prior screen as if it had been destroyed.
-    /// `mark_screen_clear` (the collapse shape, and every typed-command
-    /// clear) keeps moving both together, unchanged from before this quest.
+    /// SQ-1660 (reverting SQ-1656): every `mark_screen_clear` call moves
+    /// `top_anchor` in lockstep with `clear_anchor`, with no preserve/collapse
+    /// split any more — `apply_game_driven_result` calls it unconditionally
+    /// now, whether or not the clear's content looked like the prior screen
+    /// redrawing. SQ-1656 briefly left `top_anchor` behind on a "different
+    /// screen taking over" clear so the new content fell back to ordinary
+    /// bottom-sticking scrollback; in practice that stacked unrelated screens
+    /// (e.g. Anchorhead's intro card and its quote splash) in one viewport
+    /// with no visual sign a clear had happened between them, so the user
+    /// asked for the pin back — instant, no scroll animation (`scroll_anim`
+    /// stays `None`, set directly below).
     #[test]
-    fn mark_screen_clear_preserving_top_anchor_leaves_top_anchor_behind() {
+    fn mark_screen_clear_always_moves_top_anchor_in_lockstep() {
         let mut s = AppState::default();
         assert_eq!(s.clear_anchor, None, "premise: nothing has cleared yet");
         assert_eq!(s.top_anchor, None, "premise: nothing has cleared yet");
 
-        s.mark_screen_clear_preserving_top_anchor();
-        assert_eq!(s.clear_anchor, Some(0), "clear_anchor always advances, preserve or not");
-        assert_eq!(s.top_anchor, None, "top_anchor must be left exactly where it was");
+        s.mark_screen_clear();
+        assert_eq!(s.clear_anchor, Some(0));
+        assert_eq!(s.top_anchor, Some(0), "top_anchor moves with clear_anchor on every clear");
+        assert!(s.scroll_anim.is_none(), "a clear is instant — no scroll animation armed");
 
         s.push_transcript("a different screen's content");
         s.mark_screen_clear();
         assert_eq!(s.clear_anchor, Some(1));
-        assert_eq!(s.top_anchor, Some(1), "an ordinary clear keeps top_anchor moving in lockstep");
+        assert_eq!(s.top_anchor, Some(1), "still in lockstep on a second clear");
+        assert!(s.scroll_anim.is_none());
     }
 
     #[test]

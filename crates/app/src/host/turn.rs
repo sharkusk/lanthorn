@@ -1201,31 +1201,26 @@ pub fn apply_game_driven_result(
                 })
                 .collect()
         };
-        // Collapse (the prior screen redrawing itself) moves the render-facing
-        // top-anchor along with the housekeeping one, exactly as every OTHER
-        // clear in the app does (`mark_screen_clear`) — the collapsed screen
-        // really is destroyed, so the fresh content belongs pinned to the top.
-        // Preserve (a different screen taking over, or no prior anchor at all
-        // to compare against) leaves the top-anchor where it was: nothing was
-        // destroyed, so this content is ordinary scrollback, not a fresh
-        // screen to pin (SQ-1656 — the CM accessibility Q&A and Anchorhead
-        // intro/quote sequence were wrongly hidden above the fold by treating
-        // every preserving clear as if it were a collapse).
-        let collapsed = if let Some(anchor) = state.clear_anchor {
+        // Whether a reprint collapses the prior screen (truncating scrollback
+        // back to the clear anchor) is unaffected by SQ-1660 — that's SQ-1654's
+        // call and stays exactly as it was. What SQ-1656 added and SQ-1660
+        // reverts is the render-facing top-anchor PIN below: every game-driven
+        // clear, collapse or preserve alike, pins the fresh content to the top
+        // of the pane again (`mark_screen_clear`), instantly hiding whatever
+        // came before above a fold, reachable by scrolling up. SQ-1656's
+        // preserving variant left two unrelated screens (e.g. Anchorhead's
+        // intro card and its quote splash) stacked together in the same
+        // viewport with no visual sign a clear had happened between them —
+        // the user watched this in practice and asked for the pre-SQ-1656
+        // behavior back, with no scroll animation on the transition (both
+        // `mark_screen_clear` already guarantees by setting `scroll_anim =
+        // None` directly).
+        if let Some(anchor) = state.clear_anchor {
             if is_screen_reprint(&state.transcript[anchor..], &new_content_text) {
                 state.truncate_transcript(anchor);
-                true
-            } else {
-                false
             }
-        } else {
-            false
-        };
-        if collapsed {
-            state.mark_screen_clear();
-        } else {
-            state.mark_screen_clear_preserving_top_anchor();
         }
+        state.mark_screen_clear();
     }
     // Whether this turn's output CONTINUED the transcript's last pre-turn row
     // instead of opening one below it — the pager needs it (below).
