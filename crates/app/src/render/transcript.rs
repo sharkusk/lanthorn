@@ -1211,6 +1211,74 @@ pub(crate) fn top_anchor_fits(anchor_row: Option<usize>, total: usize, rows: usi
     scroll == 0 && anchor_row.is_some_and(|a| total.saturating_sub(a.min(total)) <= rows)
 }
 
+/// The `[start, end)` index window into an `n`-row array for a given standing
+/// top-anchor and scroll position — the pure index arithmetic behind
+/// [`window_wrapped_rows`], factored out so the v6 raster path
+/// (`render::screen::build_main_text`, which windows a differently-typed row
+/// array and so cannot call `window_wrapped_rows` directly) can share it rather
+/// than re-deriving the same formula by hand (SQ-1666; that duplication is
+/// exactly how this bug's shape bit twice).
+///
+/// When the anchor's own post-anchor content (`n - anchor_row`) fits `rows`,
+/// scrolling through it is made CONTINUOUS rather than a cutover at scroll==0
+/// vs. scroll>=1 (the bug): `scroll == 0` returns exactly `[anchor_row, n)`
+/// (today's pinned, possibly-short view). Each further unit of `scroll` reveals
+/// one more row of pre-anchor history immediately above the current top, by
+/// decrementing `start` while `end` stays pinned at `n` — so the still-pinned
+/// anchored content never moves or disappears — until the window has grown to
+/// fill all `rows` (at `scroll == pad`, where `pad = rows - (n - anchor_row)`
+/// is exactly how many rows of growing room the pinned view had below it).
+/// From there, further scrolling hands off to the ordinary backward-sliding
+/// window (an `end` that recedes from `n` too), continuing from exactly where
+/// the growth phase left off rather than restarting at `scroll == 0` of it —
+/// which is what [`anchored_max_scroll`] accounts for the `pad` steps of.
+pub(crate) fn anchored_window_bounds(n: usize, anchor_row: Option<usize>, rows: usize, scroll: usize) -> (usize, usize) {
+    // Clamped: the anchor indexes THESE rows, and an anchor past their end would
+    // slice out of range rather than merely mis-anchor (SQ-0640).
+    if let Some(anchor_row) = anchor_row.map(|a| a.min(n)) {
+        let anchored_len = n - anchor_row;
+        if anchored_len <= rows {
+            let pad = rows - anchored_len;
+            if scroll <= pad {
+                return (anchor_row.saturating_sub(scroll), n);
+            }
+            let max_scroll = n.saturating_sub(rows);
+            let generic_scroll = (scroll - pad).min(max_scroll);
+            let end = n.saturating_sub(generic_scroll);
+            let start = end.saturating_sub(rows);
+            return (start, end);
+        }
+    }
+    // Clamp scroll so it never exceeds the top: past `n - rows` the window would
+    // otherwise shrink from the bottom, blanking viewport rows.
+    let max_scroll = n.saturating_sub(rows);
+    let scroll = scroll.min(max_scroll);
+    let end = n.saturating_sub(scroll);
+    let start = end.saturating_sub(rows);
+    (start, end)
+}
+
+/// The largest meaningful scroll offset for an `n`-row array windowed by `rows`
+/// with an optional standing top-anchor — the counterpart callers that clamp a
+/// scroll offset (page/half-page scroll, the mouse-wheel step, `apply_frame`'s
+/// post-frame clamp) must use instead of the anchor-blind `n.saturating_sub(rows)`
+/// once an anchor is in play (SQ-1666). When the anchor's content fits `rows`,
+/// [`anchored_window_bounds`] spends `pad = rows - (n - anchor_row)` extra scroll
+/// units growing the pinned view before it starts sliding — a caller still
+/// clamping to the old `n - rows` would cut the reachable range `pad` rows short
+/// of the true top of the transcript, silently losing the oldest `pad` rows to
+/// scrolling (even though the jump itself is fixed).
+pub(crate) fn anchored_max_scroll(n: usize, anchor_row: Option<usize>, rows: usize) -> usize {
+    if let Some(anchor_row) = anchor_row.map(|a| a.min(n)) {
+        let anchored_len = n - anchor_row;
+        if anchored_len <= rows {
+            let pad = rows - anchored_len;
+            return pad + n.saturating_sub(rows);
+        }
+    }
+    n.saturating_sub(rows)
+}
+
 pub(crate) fn window_wrapped_rows(
     display_rows: &[WrappedRow],
     anchor_row: Option<usize>,
@@ -1221,21 +1289,7 @@ pub(crate) fn window_wrapped_rows(
         return (Vec::new(), 0, 0);
     }
     let n = display_rows.len();
-    if scroll == 0 {
-        // Clamped: the anchor indexes THESE rows, and an anchor past their end would
-        // slice out of range rather than merely mis-anchor (SQ-0640).
-        if let Some(anchor_row) = anchor_row.map(|a| a.min(n)) {
-            if n.saturating_sub(anchor_row) <= rows {
-                return (display_rows[anchor_row..n].to_vec(), n, anchor_row);
-            }
-        }
-    }
-    // Clamp scroll so it never exceeds the top: past `n - rows` the window would
-    // otherwise shrink from the bottom, blanking viewport rows.
-    let max_scroll = n.saturating_sub(rows);
-    let scroll = (scroll as usize).min(max_scroll);
-    let end = n.saturating_sub(scroll);
-    let start = end.saturating_sub(rows);
+    let (start, end) = anchored_window_bounds(n, anchor_row, rows, scroll as usize);
     (display_rows[start..end].to_vec(), n, start)
 }
 
@@ -3135,7 +3189,12 @@ fn render_middle(
             }
         }
     }
-    let max_scroll = total_rows.saturating_sub(transcript_rows).min(u16::MAX as usize) as u16;
+    // Anchor-aware (SQ-1666): with a standing top-anchor whose content still
+    // fits, `window_wrapped_rows` spends extra scroll units growing the pinned
+    // view before it starts sliding (`anchored_window_bounds`'s `pad`) — the
+    // plain `total_rows - transcript_rows` cuts the reachable range short by
+    // exactly that much, stranding the oldest `pad` rows unreachable by scroll.
+    let max_scroll = anchored_max_scroll(total_rows, entry.anchor_row, transcript_rows).min(u16::MAX as usize) as u16;
     let total = total_rows.min(u16::MAX as usize) as u16;
     TranscriptRender {
         scrollbar: drew_scrollbar,
@@ -3905,9 +3964,17 @@ mod tests {
             (0, 3, 3),
             "the post-clear screen is blank; the three erased rows stay in scrollback"
         );
-        // Scrolling back still reaches them.
-        let (back, _, _) = window_wrapped_rows(&rows, anchor, 2, 1);
-        assert_eq!(back.len(), 2, "the erased screen is still reachable above the anchor");
+        // Scrolling back still reaches them, one row at a time (SQ-1666): with a
+        // fully blank anchored screen (`anchored_len == 0`), `pad == rows == 2`,
+        // so scroll=1 reveals just "c" (not a 2-row jump straight to ["a","b"] —
+        // the bug this quest fixes) and scroll=2 fills the 2-row viewport with
+        // "b","c" before scroll=3 starts the ordinary backward slide onto "a","b".
+        let (back1, _, _) = window_wrapped_rows(&rows, anchor, 2, 1);
+        assert_eq!(back1.iter().map(|r| r.text.as_str()).collect::<Vec<_>>(), vec!["c"]);
+        let (back2, _, _) = window_wrapped_rows(&rows, anchor, 2, 2);
+        assert_eq!(back2.iter().map(|r| r.text.as_str()).collect::<Vec<_>>(), vec!["b", "c"]);
+        let (back3, _, _) = window_wrapped_rows(&rows, anchor, 2, 3);
+        assert_eq!(back3.iter().map(|r| r.text.as_str()).collect::<Vec<_>>(), vec!["a", "b"], "the erased screen is still reachable above the anchor");
     }
 
     #[test]
@@ -7817,9 +7884,30 @@ mod tests {
         let (vis2, _t, first2) = window_wrapped_rows(&rows, Some(4), 3, 0);
         assert_eq!(first2, 4);
         assert_eq!(vis2.iter().map(|r| r.text.as_str()).collect::<Vec<_>>(), vec!["R4", "R5"]);
-        // While scrolled (scroll != 0) the anchor does not apply.
-        let (_v3, _t3, first3) = window_wrapped_rows(&rows, Some(4), 3, 1);
-        assert_eq!(first3, 2);
+        // SQ-1666: scrolling through the anchor boundary is CONTINUOUS, not a
+        // cutover at scroll==0 vs. scroll>=1. `pad = rows - (n - anchor_row) = 3
+        // - 2 = 1`, so scroll=1 is still the anchor-growth phase (one more row of
+        // history revealed above the still-pinned R4/R5, nothing dropped from the
+        // bottom) and scroll=2 is the first step of the ordinary backward slide
+        // (continuing from exactly where growth left off, not restarting at its
+        // own scroll==0). Walking scroll=1..5 reaches every older row one at a
+        // time and then clamps at the true top (anchored_max_scroll == 4).
+        let at = |scroll: u16| {
+            let (v, _t, first) = window_wrapped_rows(&rows, Some(4), 3, scroll);
+            (first, v.iter().map(|r| r.text.clone()).collect::<Vec<_>>())
+        };
+        assert_eq!(at(1), (3, vec!["R3".into(), "R4".into(), "R5".into()]), "one more row revealed above, nothing lost at the bottom");
+        assert_eq!(at(2), (2, vec!["R2".into(), "R3".into(), "R4".into()]), "window now full (3 rows); slides, R5 recedes");
+        assert_eq!(at(3), (1, vec!["R1".into(), "R2".into(), "R3".into()]));
+        assert_eq!(at(4), (0, vec!["R0".into(), "R1".into(), "R2".into()]), "reached the very start of the transcript");
+        assert_eq!(at(5), at(4), "scrolling past the top clamps, does not go out of range");
+        assert_eq!(
+            anchored_max_scroll(6, Some(4), 3),
+            4,
+            "pad (1) + the ordinary n-rows max_scroll (3) — callers that clamp a scroll \
+             offset must use this, not the anchor-blind n-rows formula, or the oldest \
+             `pad` rows become unreachable by scroll"
+        );
     }
 
     /// SQ-1660 (reverting SQ-1656): the render-pipeline counterpart of the

@@ -6851,40 +6851,45 @@ pub fn build_main_text(state: &AppState, cols: u16, rows: u16) -> (crate::render
     // scroll keybindings measure against.
     let budget = rows.saturating_sub(1) as usize;
     let total = wrapped.len();
-    let max_scroll = total.saturating_sub(budget);
+    // anchor_row must be known regardless of scroll now that scrolling through
+    // it is continuous (SQ-1666) — it used to be looked up only behind a
+    // `scroll == 0` gate, back when the anchor only ever mattered there;
+    // `anchored_window_bounds`/`anchored_max_scroll` below now decide that
+    // per scroll value internally instead.
+    let anchor_row = crate::render::transcript::anchor_row_at(line_starts, total, state.top_anchor);
+    // Anchor-aware (SQ-1666): shared with the cell path
+    // (`render::transcript::anchored_max_scroll`) so scrolling through a
+    // standing top-anchor whose content still fits has somewhere to go — the
+    // plain `total - budget` cuts the reachable range short by the anchor's
+    // own "growth" padding (see that function's doc for why).
+    let max_scroll = crate::render::transcript::anchored_max_scroll(total, anchor_row, budget);
     // Rows-from-bottom scroll offset (0 = newest at the bottom), clamped so it
     // never scrolls past the oldest row. Same scroll model as the terminal
     // transcript (`effective_transcript_scroll`), so the shared scroll keys and
     // the [more] pager (SQ-0404) drive the raster and terminal paths identically:
     // when the user scrolls back the visible slice shifts up in lockstep. (SQ-0455)
     let scroll = (state.effective_transcript_scroll() as usize).min(max_scroll);
-    let mut end = total.saturating_sub(scroll);
-    let mut start = end.saturating_sub(budget);
-    // Top-anchor the post-clear screen, exactly as the cell path does
-    // (`window_wrapped_rows`, SQ-0305/0640): at the bottom of the scrollback, a
-    // game screen-clear pins its output to the TOP of the box with blanks below,
-    // instead of bottom-sticking and dragging pre-clear history back into view.
-    // Shogun's title needs it (SQ-0728): the SQ-0697 freeze retires nine banner
-    // lines as paint and marks the clear, and window 0's new box is four rows —
-    // bottom-sticking redrew the tail of the banner it had just frozen up top,
-    // across the menu, instead of the one line the game printed into the new box.
-    // Only while the post-clear content still fits; once it overflows, the box
-    // scrolls normally.
-    // Shared with the cell path so an anchor at the very end of the transcript —
-    // cleared, nothing printed since — reads as an EMPTY screen on both, rather
-    // than as an absent anchor that bottom-sticks the erased scrollback (SQ-0748).
-    let anchor_row = (scroll == 0)
-        .then(|| crate::render::transcript::anchor_row_at(line_starts, total, state.top_anchor))
-        .flatten();
     // Shares `window_wrapped_rows`'s own fits-check (SQ-1661) rather than
     // re-deriving it, so the pager's follow-ease (`pager::apply_frame`) can
     // skip arming one on this path exactly as it does on the cell path.
     let top_anchored_fits =
         crate::render::transcript::top_anchor_fits(anchor_row, total, budget, scroll.min(u16::MAX as usize) as u16);
-    if let Some(a) = anchor_row.filter(|&a| total - a <= budget) {
-        start = a;
-        end = total;
-    }
+    // Top-anchor the post-clear screen, exactly as the cell path does
+    // (`render::transcript::anchored_window_bounds`, SQ-0305/0640/1666): at the
+    // bottom of the scrollback, a game screen-clear pins its output to the TOP
+    // of the box with blanks below, instead of bottom-sticking and dragging
+    // pre-clear history back into view — and scrolling UP through that pin now
+    // grows the window backward one row at a time instead of jumping straight
+    // to an unrelated slice the moment scroll leaves 0 (SQ-1666). Shogun's
+    // title needs the pin itself (SQ-0728): the SQ-0697 freeze retires nine
+    // banner lines as paint and marks the clear, and window 0's new box is
+    // four rows — bottom-sticking redrew the tail of the banner it had just
+    // frozen up top, across the menu, instead of the one line the game printed
+    // into the new box. Shared with the cell path so an anchor at the very end
+    // of the transcript — cleared, nothing printed since — reads as an EMPTY
+    // screen on both, rather than as an absent anchor that bottom-sticks the
+    // erased scrollback (SQ-0748).
+    let (start, end) = crate::render::transcript::anchored_window_bounds(total, anchor_row, budget, scroll);
     let visible_len = end - start;
     let lines = wrapped[start..end].to_vec();
     // Emphasis travels with the visible slice. `wrapped_styles` self-pads — it
@@ -12388,6 +12393,70 @@ mod tests {
         assert_eq!(m.total_rows, 3);
         assert_eq!(m.max_scroll, 0, "content fits — nothing to scroll");
         assert_eq!(main.lines, vec!["L0", "L1", "L2"]);
+        assert_eq!(m.first_visible_row, 0);
+    }
+
+    /// SQ-1666: the raster path duplicated `window_wrapped_rows`'s own
+    /// two-formula cutover (anchor pin exactly at `scroll == 0`, generic
+    /// anchor-blind slice at any other scroll) by hand — this is that same fix
+    /// (`render::transcript::anchored_window_bounds`/`anchored_max_scroll`,
+    /// now shared rather than re-derived) proven on THIS path. 20 pre-clear
+    /// lines, a screen clear, then 2 short post-clear lines into a 5-row body
+    /// (`rows: 6` minus the reserved input row): `anchored_len = 22 - 20 = 2`
+    /// fits the 5-row budget, so `pad = 5 - 2 = 3` — scroll 1..=3 grows the
+    /// pinned window backward one row at a time (bottom edge pinned at the
+    /// total), and scroll 4 is the first step of the ordinary backward slide.
+    #[test]
+    fn build_main_text_scrolls_continuously_through_a_short_top_anchor() {
+        let mut state = crate::state::AppState::default();
+        for k in 0..20 {
+            state.push_transcript_kind(&format!("L{k}"), crate::state::TranscriptKind::Story);
+        }
+        state.mark_screen_clear();
+        for k in 0..2 {
+            state.push_transcript_kind(&format!("X{k}"), crate::state::TranscriptKind::Story);
+        }
+        state.transcript_scroll = 0;
+
+        // scroll == 0: today's correct pinned view, unaffected by this fix.
+        let (main, m) = build_main_text(&state, 40, 6);
+        assert_eq!(m.total_rows, 22);
+        assert_eq!(m.viewport_rows, 5);
+        assert_eq!(main.lines, vec!["X0", "X1"], "pinned to the top, fewer than 5 rows returned");
+        assert!(m.top_anchored_fits);
+        // `anchored_max_scroll`: pad (3) + the ordinary 22-row/5-row max_scroll
+        // (17) — the anchor-blind `total - budget` would cut this short by 3,
+        // stranding the oldest 3 pre-clear rows unreachable by scroll.
+        assert_eq!(m.max_scroll, 20, "pad (3) + 17 (22 total - 5 body)");
+
+        // scroll 1..=3: continuous anchor-growth, one more row of pre-clear
+        // history each step, X0/X1 staying pinned to the bottom of the window
+        // (never jumping to an unrelated slice — the bug this quest fixes).
+        state.transcript_scroll = 1;
+        let (main, m) = build_main_text(&state, 40, 6);
+        assert_eq!(main.lines, vec!["L19", "X0", "X1"]);
+        assert!(!m.top_anchored_fits, "no longer showing the anchor in full once scrolled");
+
+        state.transcript_scroll = 2;
+        let (main, _m) = build_main_text(&state, 40, 6);
+        assert_eq!(main.lines, vec!["L18", "L19", "X0", "X1"]);
+
+        state.transcript_scroll = 3;
+        let (main, _m) = build_main_text(&state, 40, 6);
+        assert_eq!(main.lines, vec!["L17", "L18", "L19", "X0", "X1"], "window now full (5 rows)");
+
+        // scroll == 4: the hand-off to the ordinary backward slide, continuing
+        // from exactly where the growth phase left off — X1 recedes off the
+        // bottom rather than the window jumping elsewhere.
+        state.transcript_scroll = 4;
+        let (main, _m) = build_main_text(&state, 40, 6);
+        assert_eq!(main.lines, vec!["L16", "L17", "L18", "L19", "X0"]);
+
+        // Over-scroll clamps at the true top of the transcript (L0), not 3
+        // rows short of it.
+        state.transcript_scroll = 999;
+        let (main, m) = build_main_text(&state, 40, 6);
+        assert_eq!(main.lines, vec!["L0", "L1", "L2", "L3", "L4"]);
         assert_eq!(m.first_visible_row, 0);
     }
 

@@ -39,6 +39,8 @@ mod sq1654_scrollback_preserves_screens;
 mod sq1656_preserve_clear_top_anchor;
 #[path = "suites/sq1661_topanchor_followease.rs"]
 mod sq1661_topanchor_followease;
+#[path = "suites/sq1666_continuous_anchor_scroll.rs"]
+mod sq1666_continuous_anchor_scroll;
 
 #[path = "suites/adf_disk_image.rs"]
 mod adf_disk_image;
