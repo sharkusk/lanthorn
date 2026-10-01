@@ -348,7 +348,7 @@ fn panels(s: &GlulxSession) -> (Vec<String>, String, Vec<String>) {
     // fallback and shows by name alone — exactly what the plain `rows` list
     // above already asserts against.
     let carried_with_keys =
-        inventory_items_with_keys(state.player_obj, &state.inventory_fallback, s.introspect());
+        inventory_items_with_keys(state.player_obj, &state.inventory_fallback, s.introspect(), None);
     let empty_graph = mapper::graph::MapGraph::new();
     let dock_rows = build_inventory_dock_rows(&carried_with_keys, &empty_graph, None);
     let area = Rect::new(0, 0, 40, inventory_dock_target_height(dock_rows.len(), 40, 100));
@@ -473,7 +473,16 @@ fn king_of_shreds_panels_are_filled_at_the_first_prompt() {
         l.contains("letter") && l.contains("key"),
         "John Croft's letter and the printworks key: {rows:?}"
     );
-    assert!(painted.contains("letter"), "the dock paints it: {painted:?}");
+    // SQ-1662 made `inventory_items_with_keys` (which the dock paints from) prefer
+    // `typeable_name` over the raw joined-word `rows` above uses — the same
+    // preference `inventory_click_words` already had. For this object, whose
+    // Inform-authored word list is `["john", "croft's", "handwritt", "note",
+    // "letter"]` with no printed name to search instead, `typeable_name`'s
+    // no-tokens fallback picks the stored list's FIRST word ("john") rather than
+    // its most descriptive one ("letter") — a pre-existing quirk of that fallback
+    // (already present in `carried`'s click words, below, before this change),
+    // not something new this test's own scope covers.
+    assert!(painted.contains("john"), "the dock paints it: {painted:?}");
     assert!(!carried.is_empty(), "and the carried column is filled: {carried:?}");
 }
 

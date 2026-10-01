@@ -765,6 +765,7 @@ fn draw_frame(
                 state.player_obj,
                 &state.inventory_fallback,
                 engine.introspect(),
+                state.vocab.peek(),
             );
             app::render::inventory_dock::build_inventory_dock_rows(&carried, &mapper.graph, state.inv_dock_filter.as_deref())
         } else {

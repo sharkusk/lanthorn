@@ -1769,16 +1769,33 @@ pub fn inventory_items(
 /// [`inventory_click_words`] (both walk the identical `intro.contents(obj)`
 /// list), so an index into this list is always the same item as the same
 /// index into either of those.
+///
+/// `vocab` is the same story vocabulary [`inventory_click_words`] takes, and
+/// is used the same way (SQ-1662): each entry prefers
+/// [`crate::vocab::typeable_name`]'s short, single word over the raw
+/// `display_name()` join, falling back to `display_name()` only when
+/// `typeable_name` cannot resolve anything. Without this, an item with no
+/// hardware short name (every Inform 7 object) showed every parser word
+/// joined into one run-on string until the item's registry record caught up
+/// — visible at boot on a returning player whose avatar resolves instantly
+/// from a persisted sidecar (SQ-1655/SQ-1657), before any turn has run.
 pub fn inventory_items_with_keys(
     player_obj: Option<u16>,
     inventory_fallback: &[String],
     introspect: Option<&dyn Introspect>,
+    vocab: Option<&crate::vocab::StoryVocabulary>,
 ) -> Vec<(Option<u32>, String)> {
     let player = player_obj.or_else(|| introspect.and_then(|i| i.player_object()));
     match (player, introspect) {
-        (Some(obj), Some(intro)) => {
-            intro.contents(obj).iter().filter_map(|o| o.display_name().map(|name| (Some(o.id), name))).collect()
-        }
+        (Some(obj), Some(intro)) => intro
+            .contents(obj)
+            .iter()
+            .filter_map(|o| {
+                let display = o.display_name()?;
+                let name = crate::vocab::typeable_name(o, vocab).unwrap_or(display);
+                Some((Some(o.id), name))
+            })
+            .collect(),
         _ => inventory_fallback.iter().cloned().map(|s| (None, s)).collect(),
     }
 }
@@ -6623,9 +6640,9 @@ mod tests {
     #[test]
     fn inventory_items_with_keys_fallback_has_no_ids() {
         let items = vec!["brass lamp".to_string(), "rusty key".to_string()];
-        let got = inventory_items_with_keys(None, &items, None);
+        let got = inventory_items_with_keys(None, &items, None, None);
         assert_eq!(got, vec![(None, "brass lamp".to_string()), (None, "rusty key".to_string())]);
-        assert!(inventory_items_with_keys(None, &[], None).is_empty());
+        assert!(inventory_items_with_keys(None, &[], None, None).is_empty());
     }
 
     /// SQ-1244: with no introspection, `inventory_click_words` falls back to

@@ -72,7 +72,7 @@ fn carrying_and_elsewhere_sections_reflect_a_real_walkthrough() {
         drive(&mut s, &mut mapper, cmd);
     }
 
-    let carried = inventory_items_with_keys(None, &[], s.introspect());
+    let carried = inventory_items_with_keys(None, &[], s.introspect(), None);
     // The lamp really is carried, through the very same call `main.rs` makes.
     assert!(
         carried.iter().any(|(_, name)| name.to_lowercase().contains("lantern")),

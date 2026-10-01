@@ -1710,6 +1710,16 @@ impl VocabState {
         self.story.as_ref()
     }
 
+    /// Like [`get`](Self::get), but never triggers the lazy load — for a
+    /// caller that only has `&AppState` (draw_frame's own signature) and
+    /// knows another call to `get` already ran earlier the same frame
+    /// (SQ-1662: `main.rs`'s inventory-dock build, which the frame's own
+    /// `refresh_inventory_click_words` always primes first under the
+    /// identical visibility check). `None` before anything has loaded yet.
+    pub fn peek(&self) -> Option<&StoryVocabulary> {
+        self.story.as_ref()
+    }
+
     /// The story's vocabulary and the words already answered, in ONE borrow.
     ///
     /// Both are needed to decide whether to speak, and the story is borrowed out

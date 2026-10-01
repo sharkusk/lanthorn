@@ -13,8 +13,11 @@
 
 use crate::fixture_paths::fixture_path;
 
+use app::config::Config;
 use app::engine::{Engine, Introspect, KeyInput};
 use app::glulx_session::GlulxSession;
+use app::host::{apply_game_driven_result, boot_story, finish_command_turn, BootRequest, BootedStory, LaunchFlags, QuietBoot, TerminalFacts};
+use app::launch_options::LaunchOverrides;
 use app::session::GameSession;
 
 fn story(name: &str) -> Option<Vec<u8>> {
@@ -1247,18 +1250,37 @@ fn anchorhead_inventory_dock_shows_the_clean_registry_name_not_the_joined_word_l
     app::session::apply_turn(&mut mapper, "inventory", &r, &mut Default::default());
     app::session::apply_item_observations(&mut mapper, 1, &r);
 
-    // The exact pair `main.rs` calls to build the live "Carrying:" list and the dock's rows.
-    let carried = app::render::transcript::inventory_items_with_keys(Some(player_obj), &[], s.introspect());
-    let raw_umbrella = carried
+    // Premise: Anchorhead's umbrella really has no hardware short name, so the raw
+    // `ObjectWords::display_name()` join really is the multi-word list this bug report
+    // describes — read directly off `contents`, bypassing `inventory_items_with_keys`
+    // itself, since SQ-1662 gave THAT function its own typeable_name-preferring fallback
+    // and it no longer surfaces the raw join at all (see the next assertion).
+    let raw_umbrella = s
+        .introspect()
+        .expect("Anchorhead's object list reads perfectly")
+        .contents(player_obj)
+        .iter()
+        .find_map(|o| o.display_name().filter(|n| n.to_lowercase().contains("umbrella")))
+        .expect("the umbrella is among the live carried contents");
+    assert!(
+        raw_umbrella.split_whitespace().count() > 1,
+        "premise: not coincidentally already clean: {raw_umbrella:?}"
+    );
+
+    // The exact pair `main.rs` calls to build the live "Carrying:" list and the dock's
+    // rows. SQ-1662: `inventory_items_with_keys` now prefers `typeable_name` over the raw
+    // join itself, so this is already clean before the dock's own registry preference
+    // (asserted below) ever gets a chance to apply.
+    let carried = app::render::transcript::inventory_items_with_keys(Some(player_obj), &[], s.introspect(), None);
+    let live_umbrella = carried
         .iter()
         .find(|(_, name)| name.to_lowercase().contains("umbrella"))
         .map(|(_, name)| name.clone())
         .expect("the umbrella is among the live carried contents");
-    assert!(
-        raw_umbrella.split_whitespace().count() > 1,
-        "premise: Anchorhead's umbrella really has no hardware short name, so the live \
-         display_name() really is the multi-word joined list this bug report describes, not \
-         coincidentally already clean: {raw_umbrella:?}"
+    assert_eq!(
+        live_umbrella, "umbrella",
+        "SQ-1662: inventory_items_with_keys itself must prefer the short typeable name over \
+         the raw joined word list: {live_umbrella:?}"
     );
 
     let dock_rows = app::render::inventory_dock::build_inventory_dock_rows(&carried, &mapper.graph, None);
@@ -1281,6 +1303,201 @@ fn anchorhead_inventory_dock_shows_the_clean_registry_name_not_the_joined_word_l
          word list — the reported symptom was exactly this row reading \
          \"umbrella things green handle brolly bumbersho\": {text:?}"
     );
+}
+
+// ── SQ-1662: the live panel at a RETURNING player's instant-avatar boot ───────
+//
+// User report: "when we start anchorhead fresh, inventory panel is showing items +
+// jibberish. After the first command it properly updates." Root cause: SQ-1655's
+// player-global sidecar correctly restores a returning player's avatar INSTANTLY at
+// boot — `introspect().player_object()` answers `Some(..)` before any command runs —
+// but `render::transcript::inventory_items_with_keys` (the live "Carrying:" panel's
+// data source) called `o.display_name()` directly with no smarter fallback, unlike its
+// sibling `inventory_click_words`, which already preferred `vocab::typeable_name`'s
+// short word. The fix gives `inventory_items_with_keys` the same vocab parameter and
+// fallback. This test reproduces the exact two-session shape that exposes it: a FIRST
+// session, driven through the real host turn path, locks the avatar via a confirmed
+// pickup and persists the sidecar (`glulx_session.rs`'s `remember_player_global`); a
+// SECOND session reuses the same home dir — exactly what "New Game" does for a
+// returning player — and the panel must already read cleanly, with ZERO commands
+// submitted.
+
+/// A config rooted in a scratch home, same shape `host_boot.rs`'s own `headless_config`
+/// uses, so this reads and writes nothing under the real `~/.lanthorn`.
+fn sq1662_headless_config(home: &std::path::Path) -> Config {
+    Config { user_dir: home.to_path_buf(), config_file: home.join("config.toml"), random_seed: Some(1), ..Config::default() }
+}
+
+/// Boot Anchorhead through the real host path (`boot_story`) — the same request a
+/// player's own "New Game" issues, never a bare resume probe.
+fn sq1662_boot_anchorhead_host(home: &std::path::Path, data_base: &std::path::Path) -> BootedStory {
+    let overrides = LaunchOverrides::default();
+    let req = BootRequest {
+        story_path: fixture_path("Anchorhead.gblorb"),
+        disk_entry: None,
+        overrides: &overrides,
+        cfg: sq1662_headless_config(home),
+        data_base: data_base.to_path_buf(),
+        flags: LaunchFlags::default(),
+        terminal: TerminalFacts::default(),
+        fresh_start: true,
+    };
+    boot_story(req, &mut QuietBoot).expect("Anchorhead boots headlessly")
+}
+
+/// Drain the up-to-six leading char-mode keypresses the real TUI drains before the
+/// first typed command — `main.rs`'s own `submit_key` -> `apply_game_driven_result`
+/// path (SQ-1654), never `finish_command_turn`.
+fn sq1662_drain_intro(b: &mut BootedStory) {
+    for _ in 0..6 {
+        if b.session.pending_input() != app::session::InputKind::Char {
+            break;
+        }
+        let r = b.session.submit_key(KeyInput::Enter).expect("Anchorhead takes a key");
+        let _ = apply_game_driven_result(&mut b.state, &mut b.mapper, &r, &b.game_dir, None, &*b.session, app::pager::Driver::PlayerInput);
+    }
+}
+
+/// Submit one command through the real host turn path — `finish_command_turn`, the
+/// exact call `main.rs`'s own submit path makes — handling a pending `Event` the same
+/// way `replay_anchorhead` does (an empty submit resumes it). Returns the transcript.
+fn sq1662_submit(b: &mut BootedStory, cmd: &str, tidy: &mut u32) -> String {
+    let result = match b.session.pending_input() {
+        app::session::InputKind::Event => b.session.submit(""),
+        _ => b.session.submit(cmd),
+    };
+    let transcript = result.transcript.clone();
+    let _ = finish_command_turn(cmd, true, result, &mut b.state, &mut b.mapper, &mut *b.session, &b.game_dir, &b.ifid, &b.arc_file, None, tidy);
+    transcript
+}
+
+/// **The reported defect, end to end through the real production boot path.**
+#[test]
+fn anchorhead_returning_players_fresh_boot_shows_clean_live_inventory_names_before_any_command() {
+    if !fixture_path("Anchorhead.gblorb").is_file() {
+        eprintln!("SKIP: gitignored stories/Anchorhead.gblorb missing");
+        return;
+    }
+    let home = app::scratch_dir("sq1662-anchorhead-returning-player");
+    let data_base = home.join("saves");
+
+    // ── Session 1: play far enough to lock the avatar and persist the sidecar ──
+    let mut tidy1 = 0u32;
+    let mut first = sq1662_boot_anchorhead_host(&home, &data_base);
+    sq1662_drain_intro(&mut first);
+    assert!(
+        first.session.introspect().expect("Anchorhead's object list reads perfectly").player_object().is_none(),
+        "premise: a brand-new session has nothing yet to lock the avatar on"
+    );
+
+    let script = anchorhead_script();
+    assert!(script.len() >= 51, "premise: the committed walkthrough reaches the keyring take");
+    assert_eq!(script[50], "take keyring", "premise: this is the walkthrough's first real take");
+    for cmd in script.iter().take(51) {
+        let _ = sq1662_submit(&mut first, cmd, &mut tidy1);
+    }
+    assert!(
+        first.session.introspect().expect("Anchorhead's object list still reads perfectly").player_object().is_some(),
+        "premise: the confirmed pickup above must lock the player-global sidecar (SQ-1655)"
+    );
+
+    // ── Session 2: a returning player's brand-new game, same home dir ──────────
+    let mut second = sq1662_boot_anchorhead_host(&home, &data_base);
+    sq1662_drain_intro(&mut second);
+
+    // THE premise this whole test exists to pin: the avatar resolves INSTANTLY from
+    // the persisted sidecar, with no command submitted in this second session at all.
+    assert!(
+        second.session.introspect().expect("Anchorhead's object list reads perfectly").player_object().is_some(),
+        "SQ-1655/SQ-1657: a returning player's avatar must resolve instantly from the \
+         persisted sidecar, before any turn has run in this new session"
+    );
+
+    // THE regression: the live panel, read the exact way `main.rs` reads it, with
+    // zero commands submitted this session.
+    let carried = app::render::transcript::inventory_items_with_keys(
+        second.state.player_obj,
+        &second.state.inventory_fallback,
+        second.session.introspect(),
+        second.state.vocab.peek(),
+    );
+    assert!(!carried.is_empty(), "the avatar is already carrying things at boot: {carried:?}");
+    for (_, name) in &carried {
+        assert!(
+            name.split_whitespace().count() <= 2,
+            "SQ-1662: the live panel must show a short, clean name at this returning \
+             player's instant boot, not every parser word joined into one run-on string \
+             (the exact reported symptom was \
+             \"umbrella things green handle brolly bumbersho\"): {name:?} in {carried:?}"
+        );
+    }
+    let umbrella = carried.iter().find(|(_, name)| name.to_lowercase().contains("umbrella"));
+    assert_eq!(
+        umbrella.map(|(_, name)| name.as_str()),
+        Some("umbrella"),
+        "the umbrella specifically must read clean, matching the bug report's own named \
+         item: {carried:?}"
+    );
+
+    let _ = std::fs::remove_dir_all(&home);
+}
+
+/// Falsifies the fix above: with the OLD `display_name()`-only behavior restored (no
+/// `typeable_name` preference), the same returning-player boot must reproduce the
+/// originally reported word-salad symptom. Temporarily hand-inlines the pre-fix body
+/// of `inventory_items_with_keys` rather than calling it, per this project's own
+/// "falsify fixes" testing convention — reverting the real fix and re-running the test
+/// above would also prove this, but would require editing production code to do it.
+#[test]
+fn anchorhead_returning_players_fresh_boot_reproduces_word_salad_under_the_old_display_name_only_fallback() {
+    if !fixture_path("Anchorhead.gblorb").is_file() {
+        eprintln!("SKIP: gitignored stories/Anchorhead.gblorb missing");
+        return;
+    }
+    let home = app::scratch_dir("sq1662-anchorhead-returning-player-falsify");
+    let data_base = home.join("saves");
+
+    let mut tidy1 = 0u32;
+    let mut first = sq1662_boot_anchorhead_host(&home, &data_base);
+    sq1662_drain_intro(&mut first);
+    let script = anchorhead_script();
+    for cmd in script.iter().take(51) {
+        let _ = sq1662_submit(&mut first, cmd, &mut tidy1);
+    }
+    assert!(first.session.introspect().unwrap().player_object().is_some(), "premise: the avatar is locked");
+
+    let mut second = sq1662_boot_anchorhead_host(&home, &data_base);
+    sq1662_drain_intro(&mut second);
+    let player = second
+        .session
+        .introspect()
+        .unwrap()
+        .player_object()
+        .expect("premise: the avatar resolves instantly on the returning player's new game");
+
+    // The pre-fix body of `inventory_items_with_keys`: `o.display_name()` alone, no
+    // `typeable_name` preference at all.
+    let old_behavior: Vec<(Option<u32>, String)> = second
+        .session
+        .introspect()
+        .unwrap()
+        .contents(player)
+        .iter()
+        .filter_map(|o| o.display_name().map(|name| (Some(o.id), name)))
+        .collect();
+    let old_umbrella = old_behavior
+        .iter()
+        .find(|(_, name)| name.to_lowercase().contains("umbrella"))
+        .map(|(_, name)| name.clone())
+        .expect("the umbrella is among the live carried contents");
+    assert!(
+        old_umbrella.split_whitespace().count() > 1,
+        "falsification check: the OLD display_name()-only fallback really does reproduce \
+         the reported multi-word word-salad symptom, confirming the test above actually \
+         exercises the fix rather than passing vacuously: {old_umbrella:?}"
+    );
+
+    let _ = std::fs::remove_dir_all(&home);
 }
 
 /// Counterfeit Monkey (release 11, serial 230220 — `stories/CounterfeitMonkey-11.gblorb`, not
