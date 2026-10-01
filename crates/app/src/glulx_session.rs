@@ -1361,6 +1361,71 @@ impl GlulxSession {
         self.pickup_watch = room_addr.map(|addr| (addr, self.room_children_snapshot(addr)));
     }
 
+    /// Feed [`crate::glulx_playerlock::PlayerLock`] a SECOND, independent kind of evidence
+    /// (SQ-1657): the `inventory` command's own prose names the items the player already
+    /// carries, and the story's own vocabulary says which objects those words identify — so
+    /// the avatar is whichever object the matched items' live [`gvm::objects::ParseNames::parent`]
+    /// agrees on.
+    ///
+    /// This complements [`Self::learn_player_from_pickups`] (SQ-1655) rather than replacing
+    /// it: both Anchorhead and Counterfeit Monkey start the player already holding their key
+    /// item(s) — the trenchcoat/wedding ring/umbrella, the R-remover — with no take ever
+    /// needed early on, so the pickup watcher has no confirmed pickup to learn from at all.
+    /// `inventory` is the one command whose prose exhaustively lists what the player already
+    /// has, independent of ever having taken any of it.
+    ///
+    /// Fed into the exact SAME [`crate::glulx_playerlock::PlayerLock::observe_pickup`] the
+    /// pickup evidence above uses, not a parallel acceptance path: an inventory match that
+    /// agrees with an existing lock is silent, one that contradicts it goes through the same
+    /// reject-and-relock discipline, and one found while unlocked elects a candidate the same
+    /// way. See that method's own doc for what all of that means; this method's only job is
+    /// turning this turn's prose into the one address it asks for — [`inventory_evidence_parent`]
+    /// is the pure part of that job, kept separate so it is testable without booting a story.
+    ///
+    /// `cmd` must be an `inventory`-shaped command ([`crate::session::inventory_command`]) —
+    /// the same lexical, story-grammar-driven gate `learn_player_from_pickups` applies to a
+    /// take-shaped one, for the identical reason: without it, any turn whose prose happens to
+    /// use an item's own name (an "examine" reply, an ordinary room description) would read
+    /// as inventory evidence.
+    fn learn_player_from_inventory(&mut self, cmd: Option<&str>, transcript: &str, ram: &[u32]) {
+        let Some(cmd) = cmd else { return };
+        if !crate::session::inventory_command(cmd, self.cached_vocabulary()) {
+            return;
+        }
+        let Some(names) = self.parse_names() else { return };
+        // SQ-1657: both commercial specimens have a rich conversation/hint-quip system whose
+        // "topic" objects carry entire ORDINARY-ENGLISH SENTENCES as their own static `name`
+        // vocabulary (Counterfeit Monkey confirmed directly: "had", "isn't", "nothing", "so"
+        // and dozens of other filler words each uniquely name exactly one quip object, the
+        // same "exactly one object answers to this word" bar a genuine held item passes). A
+        // bare `is_object(mem, addr) && parent(mem, addr).is_some()` plausibility test — the
+        // one the pickup watcher above uses — cannot tell the two apart: a quip object is a
+        // real $70-tagged tree member with a real parent exactly like the avatar is. What DOES
+        // tell them apart is confirmed directly too: the avatar's parent chain reaches a
+        // declared ROOM in this story's own compiled world model (it is, after all, standing
+        // somewhere on the map), while every sampled quip-container's does not (quips are
+        // never placed on the map at all). So where [`Self::i7_world`] is readable, plausibility
+        // is upgraded to that stronger, room-grounded test; where it is not (a story the reader
+        // refuses), this falls back to the same weaker test the pickup watcher trusts, rather
+        // than refusing the whole evidence source outright.
+        let mem = self.machine.mem();
+        let objects: Vec<(u32, grammar_model::ObjectWords)> =
+            names.objects().filter_map(|addr| names.of(mem, addr).map(|ow| (addr, ow))).collect();
+        let world = self.i7_world();
+        let candidate = inventory_evidence_parent(transcript, &objects, |addr| names.parent(mem, addr), |addr| {
+            if !names.is_object(mem, addr) {
+                return false;
+            }
+            match world {
+                Some(w) => w.rooms().iter().any(|&r| names.has_ancestor(mem, addr, r)),
+                None => names.parent(mem, addr).is_some(),
+            }
+        });
+        if let Some(avatar) = candidate {
+            self.player_lock.observe_pickup(ram, avatar);
+        }
+    }
+
     /// The room to judge avatar candidates by — the *only* thing it is used
     /// for, which is why it is not [`location_addr`](Self::location_addr).
     ///
@@ -1671,7 +1736,11 @@ impl GlulxSession {
         // lock must be visible to the `glulx_item_observations` call right below, not
         // one turn late. See `learn_player_from_pickups`'s own doc.
         let was_player_locked = self.player_lock.locked();
+        // SQ-1657: `learn_player_from_pickups` consumes `pending_command` below, so this turn's
+        // command is cloned out first for `learn_player_from_inventory`'s own gate.
+        let cmd_this_turn = self.pending_command.clone();
         self.learn_player_from_pickups(location.as_ref(), &ram);
+        self.learn_player_from_inventory(cmd_this_turn.as_deref(), &transcript, &ram);
         match (was_player_locked, self.player_lock.locked()) {
             (None, Some(addr)) => self.remember_player_global(addr),
             (Some(_), None) => self.forget_player_global(),
@@ -2822,6 +2891,77 @@ fn heading_to_room(name: &str) -> LocationInfo {
         parent: 0,
         name: name.to_string(),
     }
+}
+
+/// The pure matching core behind [`GlulxSession::learn_player_from_inventory`] (SQ-1657):
+/// isolated from [`gvm::memory::Memory`]/[`gvm::objects::ParseNames`] the way
+/// [`crate::glulx_playerlock::PlayerLock`] itself is from both — a function of data the
+/// caller has already read, never of live engine state, so it is testable without booting a
+/// story.
+///
+/// `objects` is the WHOLE story's objects as `(address, parse words)` — every object this
+/// turn's prose could possibly name, not only the player's current holdings, because the
+/// disambiguation rule below needs to know about every OTHER object too. `parent_of` is
+/// [`gvm::objects::ParseNames::parent`]. `is_plausible_avatar` asks whatever situatedness
+/// question the caller trusts for THIS evidence source — see
+/// [`GlulxSession::learn_player_from_inventory`]'s own doc for why it needs a stronger one
+/// than the bare "has some parent" test [`gvm::objects::ParseNames::find_player`] and the
+/// pickup watcher apply to their own candidates — supplied as a closure because only the
+/// caller can ask a live `ParseNames` either question.
+///
+/// Every word of `prose` is checked against the whole `objects` list: a word more than one
+/// object answers to cannot say which one the prose actually meant, so it is dropped as
+/// evidence for either — the same "shared word, trust neither" discipline SQ-1652's
+/// `crate::session::item_tracker_display_name` already applies, here to find an object's
+/// IDENTITY rather than its display name, and applied uniformly so it also covers the
+/// single-match case (Counterfeit Monkey's starting inventory is one item, the R-remover).
+/// The objects that survive that filter must all agree on one common parent — disagreement
+/// among them teaches nothing, on the same never-guess footing — and that parent must pass
+/// `is_plausible_avatar`. `None` whenever any of this comes up empty or disagreeing: this is
+/// allowed to under-report, exactly like [`GlulxSession::learn_player_from_pickups`]'s own
+/// evidence.
+fn inventory_evidence_parent(
+    prose: &str,
+    objects: &[(u32, grammar_model::ObjectWords)],
+    parent_of: impl Fn(u32) -> Option<u32>,
+    is_plausible_avatar: impl Fn(u32) -> bool,
+) -> Option<u32> {
+    let prose_words: std::collections::BTreeSet<String> = prose
+        .split(|c: char| !c.is_alphanumeric() && c != '\'')
+        .map(|w| w.to_lowercase())
+        .filter(|w| !w.is_empty())
+        .collect();
+    let mut matched: Vec<u32> = Vec::new();
+    for word in &prose_words {
+        let mut hit: Option<u32> = None;
+        for (addr, ow) in objects {
+            if ow.refers_to(word) {
+                if hit.is_some() {
+                    hit = None; // ambiguous: more than one object claims this word
+                    break;
+                }
+                hit = Some(*addr);
+            }
+        }
+        if let Some(addr) = hit {
+            if !matched.contains(&addr) {
+                matched.push(addr);
+            }
+        }
+    }
+    if matched.is_empty() {
+        return None;
+    }
+    // Plausibility is checked BEFORE agreement, not after: a matched word that happens to
+    // belong to an implausible object (CM's quip/hint-topic objects, see this function's
+    // caller) must not be allowed to manufacture a false disagreement against a genuinely
+    // plausible match — it is simply not evidence, the same as a word matching nothing at all.
+    let mut parents = matched.iter().filter_map(|&addr| parent_of(addr)).filter(|&p| is_plausible_avatar(p));
+    let first = parents.next()?;
+    if !parents.all(|p| p == first) {
+        return None; // the plausible matched items disagree on who holds them; nothing to commit to
+    }
+    Some(first)
 }
 
 /// The empty initial screen snapshot.
@@ -5450,5 +5590,125 @@ mod tests {
         let key = crate::session::classify_take_attempt("take chair", &items, Some(&vocab))
             .expect("an unambiguous candidate, visibly not carried, is flagged fixed-in-place");
         assert_eq!(key, MP_CHAIR);
+    }
+
+    // ── inventory_evidence_parent (SQ-1657) ─────────────────────────────────────
+    //
+    // Pure-data unit tests for `GlulxSession::learn_player_from_inventory`'s matching core —
+    // no story booted, mirroring `glulx_playerlock`'s own test module pattern of exercising the
+    // state machine directly on hand-built data.
+
+    fn ow(id: u32, words: &[&str]) -> (u32, grammar_model::ObjectWords) {
+        (id, grammar_model::ObjectWords::new(id, String::new(), words.iter().map(|w| w.to_string()).collect(), Some(1), None))
+    }
+
+    #[test]
+    fn inventory_evidence_parent_locks_onto_a_single_unambiguous_item() {
+        // Counterfeit Monkey's own shape: ONE held item, named by exactly one word no other
+        // object in the story claims.
+        let objects = vec![ow(10, &["r-remov", "remover"])];
+        let got = inventory_evidence_parent(
+            "we are equipped with your r-remover",
+            &objects,
+            |addr| if addr == 10 { Some(99) } else { None },
+            |addr| addr == 99,
+        );
+        assert_eq!(got, Some(99), "a single unambiguous match is enough to identify the avatar");
+    }
+
+    #[test]
+    fn inventory_evidence_parent_refuses_a_word_two_objects_both_claim() {
+        let objects = vec![ow(10, &["green"]), ow(11, &["green"])];
+        let got = inventory_evidence_parent("green", &objects, |_| Some(99), |_| true);
+        assert_eq!(got, None, "a shared word cannot say which object the prose actually meant");
+    }
+
+    #[test]
+    fn inventory_evidence_parent_elects_the_shared_parent_multiple_items_agree_on() {
+        let objects = vec![ow(10, &["trenchcoat"]), ow(11, &["umbrella"]), ow(12, &["wedding", "ring"])];
+        let got = inventory_evidence_parent(
+            "wearing your trenchcoat and your wedding ring, holding your umbrella",
+            &objects,
+            |addr| if [10, 11, 12].contains(&addr) { Some(99) } else { None },
+            |addr| addr == 99,
+        );
+        assert_eq!(got, Some(99), "three independently-named items agreeing on one parent");
+    }
+
+    #[test]
+    fn inventory_evidence_parent_requires_the_matched_items_to_agree_on_one_plausible_parent() {
+        let objects = vec![ow(10, &["trenchcoat"]), ow(11, &["umbrella"])];
+        let got = inventory_evidence_parent(
+            "wearing your trenchcoat, holding your umbrella",
+            &objects,
+            |addr| match addr {
+                10 => Some(99),
+                11 => Some(100), // a DIFFERENT parent — the items disagree on who holds them
+                _ => None,
+            },
+            |_| true,
+        );
+        assert_eq!(got, None, "disagreement among plausible candidates teaches nothing");
+    }
+
+    #[test]
+    fn inventory_evidence_parent_refuses_an_implausible_parent() {
+        let objects = vec![ow(10, &["remover"])];
+        let got = inventory_evidence_parent("remover", &objects, |_| Some(99), |_| false);
+        assert_eq!(got, None, "the matched item's own parent must still pass the caller's plausibility test");
+    }
+
+    /// The CM shape that motivated checking plausibility BEFORE agreement, not after (confirmed
+    /// directly against the real `CounterfeitMonkey-11.gblorb`: its hint/quip system marks
+    /// dozens of ordinary English words as the sole vocabulary of individual quip objects, all
+    /// sharing one quip-container parent). A matched word whose object's parent is NOT
+    /// plausible must not manufacture a false disagreement against a genuinely plausible one.
+    #[test]
+    fn inventory_evidence_parent_ignores_an_implausible_matched_items_parent_rather_than_treating_it_as_disagreement()
+    {
+        let objects = vec![ow(10, &["remover"]), ow(11, &["nothing"]), ow(12, &["so"])];
+        let got = inventory_evidence_parent(
+            "we are equipped with your remover; nothing so unusual",
+            &objects,
+            |addr| match addr {
+                10 => Some(99),  // the real avatar
+                11 => Some(200), // a quip-container parent — NOT plausible
+                12 => Some(200),
+                _ => None,
+            },
+            |addr| addr == 99, // only the real avatar passes the room-grounded plausibility test
+        );
+        assert_eq!(got, Some(99), "implausible noise must be filtered out, not treated as a contradiction");
+    }
+
+    /// Demonstrates the composition with [`crate::glulx_playerlock::PlayerLock::observe_pickup`]
+    /// this quest relies on rather than reimplementing (SQ-1657): inventory evidence that
+    /// AGREES with an existing lock leaves it untouched. `PlayerLock`'s own test module already
+    /// covers `observe_pickup` directly; this proves the two compose the way the production
+    /// code assumes.
+    #[test]
+    fn inventory_evidence_feeding_observe_pickup_agrees_with_an_existing_lock() {
+        let mut lock = crate::glulx_playerlock::PlayerLock::locked_at(0x1000, 0x1004);
+        let objects = vec![ow(10, &["umbrella"])];
+        let candidate = inventory_evidence_parent("umbrella", &objects, |_| Some(0xABCD), |_| true)
+            .expect("the umbrella names its holder");
+        lock.observe_pickup(&[0, 0xABCD, 7], candidate);
+        assert_eq!(lock.locked(), Some(0x1004), "agreeing inventory evidence leaves an existing lock untouched");
+    }
+
+    /// The other half of the same composition: inventory evidence that CONTRADICTS an existing
+    /// lock goes through `observe_pickup`'s own reject-and-relock discipline, not a bespoke one.
+    #[test]
+    fn inventory_evidence_feeding_observe_pickup_rejects_and_relocks_on_contradiction() {
+        let mut lock = crate::glulx_playerlock::PlayerLock::locked_at(0x1000, 0x1004);
+        let objects = vec![ow(10, &["umbrella"])];
+        let candidate = inventory_evidence_parent("umbrella", &objects, |_| Some(0x9999), |_| true)
+            .expect("the umbrella names its holder");
+        lock.observe_pickup(&[0, 0x1111, 0x9999], candidate);
+        assert_eq!(
+            lock.locked(),
+            Some(0x1008),
+            "the story contradicted the old lock; inventory evidence re-established a fresh one"
+        );
     }
 }

@@ -1143,3 +1143,103 @@ fn anchorhead_carried_items_are_tracked_once_a_confirmed_pickup_locks_the_avatar
     let clothes = r.items.iter().find(|i| i.words.refers_to("clothes")).expect("clothes are carried");
     assert_eq!(clothes.location, app::session::ObservedItemLocation::Carried);
 }
+
+// ── SQ-1657: the avatar found from the very first `inventory` listing ───────
+//
+// SQ-1655 closed the gap for a story whose avatar `find_player`'s static scan cannot find,
+// but only from the PICKUP side: a confirmed take visibly moving an object out of a room.
+// Both Anchorhead and Counterfeit Monkey start the player already wearing/holding their key
+// item(s) — Anchorhead's trenchcoat, wedding ring and umbrella; Counterfeit Monkey's single
+// R-remover — so a session that never types a `take` at all (an `inventory`-first player, or
+// one who only ever examines things) never gives the pickup watcher any evidence, and
+// `result.items` stayed empty forever. `GlulxSession::learn_player_from_inventory` closes
+// that from the OTHER side: the `inventory` command's own prose already names everything the
+// player holds, and the story's own vocabulary says which objects those words identify.
+
+/// Anchorhead: `inventory`, with NO prior take, must still lock the avatar — the exact
+/// reported gap ("still not seeing any inventory for Anchorhead").
+#[test]
+fn anchorhead_carried_items_are_tracked_from_the_very_first_inventory_listing() {
+    let Some(mut s) = boot_anchorhead() else {
+        eprintln!("SKIP: gitignored stories/Anchorhead.gblorb missing");
+        return;
+    };
+    // `Engine::seed_turn` is the ONE boot drain the real app runs before the player ever types
+    // anything (`host/boot.rs`) — without it, the still-buffered boot banner and opening room
+    // description would be glued onto the FIRST submitted command's own `transcript`, which
+    // `boot_anchorhead`'s own splash-dismissal loop does not drain on its own.
+    let _ = s.seed_turn();
+    // Premise: nothing has happened yet to identify the avatar — the same refusal
+    // `anchorhead_carried_items_are_tracked_once_a_confirmed_pickup_locks_the_avatar` pins for
+    // this story's opening, carried forward to before ANY command at all has run.
+    assert!(
+        s.introspect().expect("Anchorhead's object list reads perfectly").player_object().is_none(),
+        "premise: nothing has happened yet to identify the avatar"
+    );
+
+    let r = s.submit("inventory");
+    assert!(
+        r.transcript.contains("wearing your trenchcoat") && r.transcript.contains("holding your umbrella"),
+        "the real inventory text: {:?}",
+        r.transcript
+    );
+
+    // THE regression: the avatar is now identifiable from the listing alone, no take involved.
+    assert!(
+        s.introspect().expect("Anchorhead's object list still reads perfectly").player_object().is_some(),
+        "SQ-1657: an inventory listing with no prior take must still lock the player-global fallback"
+    );
+
+    let trenchcoat = r
+        .items
+        .iter()
+        .find(|i| i.words.refers_to("trenchcoat") || i.words.refers_to("trenchcoa"))
+        .expect("the trenchcoat is tracked the moment the avatar is known");
+    assert_eq!(trenchcoat.location, app::session::ObservedItemLocation::Carried);
+    let wedding = r.items.iter().find(|i| i.words.refers_to("wedding")).expect("the wedding ring is tracked");
+    assert_eq!(wedding.location, app::session::ObservedItemLocation::Carried);
+    let umbrella = r.items.iter().find(|i| i.words.refers_to("umbrella")).expect("the umbrella is tracked");
+    assert_eq!(umbrella.location, app::session::ObservedItemLocation::Carried);
+}
+
+/// Counterfeit Monkey (release 11, serial 230220 — `stories/CounterfeitMonkey-11.gblorb`, not
+/// fetchable on CI; see `scripts/fixtures.manifest`'s own note, so this skips there): the
+/// SINGLE-item case the brief for this quest specifically calls out — the R-remover is the
+/// whole of the starting inventory, so this is also the test of the unambiguous-single-match
+/// bar `inventory_evidence_parent` applies before trusting a lone match.
+#[test]
+fn counterfeit_monkey_carried_items_are_tracked_from_the_very_first_inventory_listing() {
+    let Some(img) = glulx_image("CounterfeitMonkey-11.gblorb") else {
+        eprintln!("SKIP: gitignored stories/CounterfeitMonkey-11.gblorb missing");
+        return;
+    };
+    let mut s = GlulxSession::new(img, 80, 24, true, false, false, (1.0, 1.0), None, &[]).expect("CM boots");
+    for _ in 0..6 {
+        if s.pending_input() != app::session::InputKind::Char {
+            break;
+        }
+        s.submit_key(KeyInput::Enter);
+    }
+    for cmd in ["yes", "yes", "yes"] {
+        s.submit(cmd);
+    }
+    s.submit_key(KeyInput::Enter);
+
+    assert!(
+        s.introspect().expect("CM's object list reads perfectly").player_object().is_none(),
+        "premise: nothing has happened yet to identify the avatar"
+    );
+
+    let r = s.submit("inventory");
+    assert!(r.transcript.contains("equipped with your R-remover"), "the real inventory text: {:?}", r.transcript);
+
+    // THE regression: the avatar is now identifiable from a SINGLE-item listing, no take
+    // involved — the reported gap ("I also don't see the u-remover in CM").
+    assert!(
+        s.introspect().expect("CM's object list still reads perfectly").player_object().is_some(),
+        "SQ-1657: a single-item inventory listing must still lock the player-global fallback"
+    );
+
+    let remover = r.items.iter().find(|i| i.words.refers_to("remover")).expect("the R-remover is tracked");
+    assert_eq!(remover.location, app::session::ObservedItemLocation::Carried);
+}

@@ -4711,6 +4711,33 @@ pub(crate) fn take_command_target(cmd: &str, vocab: Option<&crate::vocab::StoryV
     None
 }
 
+/// Is `cmd` an `inventory`-shaped command, per the story's OWN grammar (SQ-1657)?
+///
+/// The same resolve-through-the-story's-own-verb-table technique
+/// [`take_command_target`] uses for "take", not a hand-copied spelling list: `first` must
+/// resolve (through [`crate::vocab::StoryVocabulary::verb_named`], truncation included) to
+/// the SAME [`grammar_model::Verb`] the story's own "inventory" spelling reaches, so a
+/// story whose dictionary files "i" as a synonym of that verb — the ordinary Inform case —
+/// is recognised because "i" and "inventory" resolve to one `Verb`, never because "i"
+/// happens to appear in a literal list. No noun is required or inspected: inventory never
+/// takes one in any dialect this codebase has seen, so a trailing word (if a player types
+/// one) changes nothing about whether the command is inventory-shaped.
+///
+/// `None` for `vocab` (no readable dictionary at all) disables this outright, the same
+/// known, accepted gap [`take_command_target`]'s own doc describes for its bare form.
+///
+/// Used by [`crate::glulx_session::GlulxSession::learn_player_from_inventory`] to gate its
+/// player-lock fallback's SECOND evidence source — the `inventory` command's own prose — to
+/// commands that actually asked for an inventory listing, the same discipline
+/// [`take_command_target`] already provides `learn_player_from_pickups`.
+pub(crate) fn inventory_command(cmd: &str, vocab: Option<&crate::vocab::StoryVocabulary>) -> bool {
+    let tokens = crate::vocab::words_of(cmd);
+    let Some(first) = tokens.first() else { return false };
+    let Some(vocab) = vocab else { return false };
+    let Some(inv_verb) = vocab.verb_named("inventory") else { return false };
+    vocab.verb_named(first).is_some_and(|v| std::ptr::eq(v, inv_verb))
+}
+
 /// What to call an item with no printed name, for [`ItemObservation::name`] ONLY (SQ-1648) —
 /// never a substitute for [`grammar_model::ObjectWords::display_name`] itself, whose other callers
 /// (autocomplete, room-object listings) genuinely need every parser-acceptable word and must keep
@@ -11626,6 +11653,30 @@ mod item_observation_tests {
     fn take_command_target_disables_the_bare_form_without_a_vocabulary() {
         assert_eq!(take_command_target("take mailbox", None), None);
         assert_eq!(take_command_target("pick up the leaflet", None), Some("the leaflet".to_string()));
+    }
+
+    // ── inventory_command ───────────────────────────────────────────────────────
+
+    #[test]
+    fn inventory_command_recognises_a_storys_own_synonym() {
+        // `vocab_with_take_verb` is structurally generic (one verb reachable by every
+        // listed spelling) despite its name — reused here for "inventory"/"i".
+        let vocab = vocab_with_take_verb(&["inventory", "i"]);
+        assert!(inventory_command("inventory", Some(&vocab)));
+        assert!(inventory_command("i", Some(&vocab)), "the standard Inform abbreviation");
+    }
+
+    #[test]
+    fn inventory_command_rejects_unrelated_commands() {
+        let vocab = vocab_with_take_verb(&["inventory", "i"]);
+        assert!(!inventory_command("look", Some(&vocab)));
+        assert!(!inventory_command("take lamp", Some(&vocab)));
+        assert!(!inventory_command("", Some(&vocab)));
+    }
+
+    #[test]
+    fn inventory_command_disabled_without_a_vocabulary() {
+        assert!(!inventory_command("inventory", None));
     }
 
     #[test]

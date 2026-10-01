@@ -91,6 +91,11 @@ while any such tag, or this Unreleased section, still exists.*
   action, even with plenty of room to show everything — *Counterfeit
   Monkey*'s opening accessibility questions and *Anchorhead*'s intro/quote
   sequence were the two games this showed up on most.
+- Fixed the same tracker gap for the items you start the game already
+  holding, before you've ever typed TAKE — *Anchorhead*'s trenchcoat,
+  wedding ring and umbrella, and *Counterfeit Monkey*'s R-remover, now show
+  up as carried the moment you check your own INVENTORY, instead of staying
+  invisible until you drop and re-take them.
 
 ## v0.8.1 — 2026-09-29
 
