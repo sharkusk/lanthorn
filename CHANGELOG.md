@@ -6,7 +6,7 @@ All notable changes to lanthorn are recorded here.
 [`.github/workflows/release.yml`](.github/workflows/release.yml)). A tag whose
 name contains a hyphen — `v0.1.0-beta.1`, `v0.2.0-rc.1` — is published as a
 **pre-release**; a bare `vMAJOR.MINOR.PATCH` is a full release. The workspace
-version in `Cargo.toml` (currently `0.8.1`) versions every crate and every
+version in `Cargo.toml` (currently `0.8.2`) versions every crate and every
 binary's `--version` at once, and carries any pre-release suffix so a build
 identifies itself without reading its git hash.
 
@@ -19,13 +19,7 @@ Absolute URLs or no link.
 
 ---
 
-## Unreleased
-
-*This section is drained when a version is cut. README.md describes the
-RELEASED build; prose for a feature that is in `main` but not yet released
-goes into the README in place, at its normal destination, marked with the
-visible tag `*Next release:*`. `release.yml` refuses to cut a release
-while any such tag, or this Unreleased section, still exists.*
+## v0.8.2 — 2026-10-01
 
 ### Added
 
@@ -109,7 +103,21 @@ while any such tag, or this Unreleased section, still exists.*
   every word a game answers to for an item, instead of its clean name — a
   game object with no proper printed name (some *Anchorhead* items, among
   others) could read "umbrella things green handle brolly bumbersho"
-  instead of "umbrella" once the item had been seen at least once.
+  instead of "umbrella". This also showed up right at the start of a brand
+  new game, before you'd typed a single command, if you'd played the same
+  story before — the panel now reads cleanly from the very first frame.
+- Fixed *Counterfeit Monkey*'s opening questions silently dropping a line of
+  story text the moment you answered the first one — the reply to "Can you
+  hear me?" and the lead-in to the next question could vanish entirely
+  instead of printing, making the second question look blank.
+- Fixed scrolling up through a recent screen clear jumping a whole screen's
+  worth of text at once instead of revealing it line by line — most
+  noticeable right after an intro sequence, or after viewing a full-screen
+  picture and returning to the game, before you'd played long enough to
+  fill the screen with your own commands.
+- Fixed `/reset-game`'s "Delete saved progress" option not actually
+  deleting your saved progress — your auto-save and quick-save could both
+  survive a reset and be picked back up later, even with the box checked.
 - Fixed a new command right after a screen clear (like the end of
   *Anchorhead*'s intro) briefly jumping the story screen back to whatever was
   hidden before the clear, then scrolling quickly back down to the fresh
