@@ -90,6 +90,10 @@ while any such tag, or this Unreleased section, still exists.*
 
 ### Fixed
 
+- Walkthroughs, hints and solution files are now marked as spoilers in the
+  document downloader even when IFDB files them somewhere else, and so are files
+  inside a zip that are named that way.
+
 - Story downloads from IFDB are now limited to 100 MB per file, the same as
   documents, and a file over the limit is refused with "Too large to download
   (over 100 MB)". The documents limit is raised from 50 MB to 100 MB.

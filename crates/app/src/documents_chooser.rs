@@ -502,7 +502,7 @@ impl DocumentsChooser {
                     indent: 4,
                     marker: "",
                     tail: e.map(|e| format_size(e.size)).unwrap_or_default(),
-                    spoiler: false,
+                    spoiler: e.is_some_and(|e| e.spoiler),
                     title_match: matches_title(&name, &self.title),
                     name,
                 }

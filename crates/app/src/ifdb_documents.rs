@@ -95,8 +95,27 @@ pub struct DocumentOption {
     pub format: Option<String>,
     pub title: Option<String>,
     pub desc: Option<String>,
-    /// The URL is under `/solutions/` or `/hints/`.
+    /// The URL is under `/solutions/` or `/hints/`, or the file name, title or
+    /// description says walkthrough/solution/hint ([`looks_like_spoiler`]).
     pub spoiler: bool,
+}
+
+/// Whether `text` (a file name, path, title or description) names a spoiler:
+/// walkthrough (also hyphenated, spaced, `walkthru`), solution(s), hint(s),
+/// cheat(s), invisiclues, answer(s), spoiler(s), or "how to win". Case-insensitive
+/// and whole-word: everything that is not a letter (`_ . - /`, digits, spaces)
+/// separates words, so `zork1_solution.txt` matches and `chintz` does not.
+/// Errs towards flagging.
+pub fn looks_like_spoiler(text: &str) -> bool {
+    let lower = text.to_lowercase();
+    let words: Vec<&str> = lower.split(|c: char| !c.is_alphabetic()).filter(|w| !w.is_empty()).collect();
+    const WORDS: &[&str] = &[
+        "walkthrough", "walkthroughs", "walkthru", "walkthrus", "solution", "solutions", "hint", "hints", "cheat",
+        "cheats", "invisiclues", "invisiclue", "answer", "answers", "spoiler", "spoilers",
+    ];
+    words.iter().any(|w| WORDS.contains(w))
+        || words.windows(2).any(|p| p[0] == "walk" && matches!(p[1], "through" | "thru"))
+        || words.windows(3).any(|p| p == ["how", "to", "win"])
 }
 
 impl DocumentOption {
@@ -186,14 +205,21 @@ pub fn parse_document_options(xml: &[u8]) -> Vec<DocumentOption> {
             let kind = classify(&url, format.as_deref())?;
             let filename = document_filename(&basename_from_url(&url)?)?;
             let path = url_path(&url);
+            let title = child_text(link, "title").and_then(|t| one_line(&t));
+            let desc = child_text(link, "desc").and_then(|d| one_line(&d));
             Some(DocumentOption {
-                filename,
                 url,
                 kind,
                 format,
-                title: child_text(link, "title").and_then(|t| one_line(&t)),
-                desc: child_text(link, "desc").and_then(|d| one_line(&d)),
-                spoiler: path.contains("/solutions/") || path.contains("/hints/"),
+                spoiler: path.contains("/solutions/")
+                    || path.contains("/hints/")
+                    || looks_like_spoiler(&filename)
+                    || title.as_deref().is_some_and(looks_like_spoiler)
+                    || desc.as_deref().is_some_and(looks_like_spoiler)
+                    || child_text(link, "label").is_some_and(|l| looks_like_spoiler(&l)),
+                title,
+                desc,
+                filename,
             })
         })
         .collect()
@@ -284,6 +310,8 @@ pub struct ZipEntry {
     pub name: String,
     /// Uncompressed size, from the central directory.
     pub size: u64,
+    /// The entry's own name says walkthrough/solution/hint ([`looks_like_spoiler`]).
+    pub spoiler: bool,
 }
 
 /// What a zip row holds, as far as the server lets us know.
@@ -364,7 +392,13 @@ impl<'a> RemoteZip<'a> {
                 if r.path.ends_with('/') || r.path.ends_with('\\') || r.flags & 1 != 0 || !matches!(r.method, 0 | 8) {
                     return None;
                 }
-                Some(ZipEntry { index, path: r.path.clone(), name: safe_entry_basename(&r.path)?, size: r.size })
+                Some(ZipEntry {
+                    index,
+                    path: r.path.clone(),
+                    name: safe_entry_basename(&r.path)?,
+                    size: r.size,
+                    spoiler: looks_like_spoiler(&r.path),
+                })
             })
             .collect()
     }
@@ -760,6 +794,30 @@ pub(crate) mod tests {
         assert_eq!(k("https://x/games/source/hugo/g.hug", Some("document")), None, "source under /games/");
         assert_eq!(k("https://x/games/g.z5", Some("document")), None, "a story file");
         assert_eq!(k("https://x/", Some("document")), None, "no file name");
+    }
+
+    #[test]
+    fn names_and_titles_flag_spoilers_outside_spoiler_paths() {
+        let xml = |url: &str, title: &str| {
+            format!("<ifiction><story><downloads><links><link><url>{url}</url><format>document</format><title>{title}</title></link></links></downloads></story></ifiction>")
+        };
+        let spoiler = |url: &str, t: &str| parse_document_options(xml(url, t).as_bytes())[0].spoiler;
+        assert!(spoiler("https://x/if-archive/games/lostpig/walkthru.txt", "Walkthrough \u{2014} Competition version"));
+        assert!(spoiler("https://x/a/b.txt", "Walk-through"));
+        assert!(spoiler("https://x/a/zork1_solution.txt", "x"));
+        assert!(spoiler("https://x/a/SOLUTION.TXT", "x"));
+        assert!(spoiler("https://x/a/m.pdf", "Hints for new players"));
+        assert!(!spoiler("https://x/a/manual.pdf", "Manual"));
+    }
+
+    #[test]
+    fn spoiler_matcher_respects_word_boundaries() {
+        for s in ["chintz", "thinter", "Hintergrund", "Manual", "cheater", "scheats"] {
+            assert!(!looks_like_spoiler(s), "{s}");
+        }
+        for s in ["walk through", "How to win", "invisiclues.txt", "zork1_solution.txt", "answers"] {
+            assert!(looks_like_spoiler(s), "{s}");
+        }
     }
 
     #[test]
