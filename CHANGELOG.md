@@ -35,6 +35,13 @@ while any such tag, or this Unreleased section, still exists.*
   once and shared. Leave it out and nothing changes. Lanthorn only takes the name;
   it does not check who you are.
 
+- The Docker browser mode can now give every signed-in user their own saves, map
+  and settings when it sits behind a login-aware reverse proxy (Authelia,
+  Authentik, Caddy `forward_auth`): set `LANTHORN_WEB_AUTH_HEADER` to the header
+  your proxy fills in with the user's name. Each user's running game is kept
+  separate too. The container does no login of its own, so the proxy must be the
+  only way to reach it. Sound is off in this mode.
+
 ### Fixed
 
 - The room inspector now shows room descriptions in Zork Zero, Shogun and

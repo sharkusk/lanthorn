@@ -17,7 +17,7 @@
 # `/data` is $HOME — saves, config, and map archives live in /data/.lanthorn.
 # See docs/features/docker.md for the full story, docker-compose.yml for an
 # example deployment, and docker/entrypoint.sh for the serve-mode knobs
-# (LANTHORN_WEB_PORT, LANTHORN_WEB_CREDENTIAL).
+# (LANTHORN_WEB_PORT, LANTHORN_WEB_CREDENTIAL, LANTHORN_WEB_AUTH_HEADER).
 
 FROM rust:1-slim-trixie AS builder
 

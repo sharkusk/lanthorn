@@ -69,6 +69,7 @@ Serve-mode knobs, as environment variables:
 |---|---|---|
 | `LANTHORN_WEB_PORT` | port ttyd listens on | `7681` |
 | `LANTHORN_WEB_CREDENTIAL` | HTTP basic auth, `user:pass` | unset (no auth) |
+| `LANTHORN_WEB_AUTH_HEADER` | proxy mode: trust this request header (set by a reverse proxy after it authenticated the visitor) as the player's name (see below) | unset |
 | `LANTHORN_WEB_AUDIO` | `on` or `off`: the game's sound, played in the browser | `on` |
 | `LANTHORN_WEB_AUDIO_PORT` | the port that sound is served on | `7682` |
 | `LANTHORN_WEB_IMAGES` | `sixel` or `halfblocks`: how pictures are sent to the browser | `sixel` |
@@ -90,6 +91,36 @@ speaks plain HTTP/WebSocket here.
 
 `docker-compose.yml` at the repo root is a ready-made example of this mode:
 `mkdir -p stories && docker compose up -d`.
+
+### Proxy mode: one player per authenticated user
+
+`LANTHORN_WEB_AUTH_HEADER=<header>` (SQ-1318) starts ttyd with
+`--auth-header <header>`. ttyd 1.7.7 then takes the header's value as the
+connection's user and exports it to the child as `TTYD_USER` (truncated to 29
+characters, the same as lanthorn's player-name limit). `docker/serve-session.sh`
+validates it with the rule `data_roots::validate_player_name` uses and exports
+`LANTHORN_PLAYER`; an invalid or missing name refuses the session on the
+terminal. Outside proxy mode `TTYD_USER` is never read.
+
+- **Lanthorn authenticates nobody.** The trust is entirely the proxy's. ttyd's
+  port must be reachable only through it, and it must overwrite client copies
+  of the header.
+- **With `LANTHORN_WEB_CREDENTIAL` too, the entrypoint exits.** ttyd accepts a
+  request that carries the header *or* the basic-auth password, so keeping both
+  would leave the password as a bypass of the proxy.
+- **A client `--player` is dropped.** `--player` outranks `LANTHORN_PLAYER`
+  inside lanthorn, so the wrapper removes `--player`, `--player=…` from the
+  arguments (the page's `?arg=` is unauthenticated) in proxy mode.
+- **Sessions are keyed by (player, id).** Sockets, stamps and pid files live in
+  `<session dir>/<player>/<id>.*` (`_default` with no player), so reusing
+  another player's session id starts a fresh game. The sweeper walks every
+  player's directory and names a session `<player>/<id>`.
+- **Sound is off.** The audio relay is a second port that browsers dial
+  directly, so it never sees the header and cannot learn the player; its FIFOs
+  stay keyed by id alone (default layout only). Giving it the same header
+  would need the relay behind the proxy at a path on the page's own origin
+  (web-audio.js dials `host:7682` today), which is a larger change than this
+  mode, so the entrypoint switches audio off instead of guessing.
 
 ### The touch grab zone
 

@@ -9,6 +9,27 @@
 #   LANTHORN_WEB_PORT         port ttyd listens on (default 7681)
 #   LANTHORN_WEB_CREDENTIAL   basic-auth as user:pass (default: no auth —
 #                             do not expose an unauthenticated port publicly)
+#   LANTHORN_WEB_AUTH_HEADER  PROXY MODE (SQ-1318): the name of a request header
+#                             (say `X-Forwarded-User`) that a reverse proxy
+#                             in front of ttyd sets after IT has authenticated
+#                             the visitor. ttyd is started with
+#                             `--auth-header <name>`, trusts the header, and
+#                             hands its value to each session as TTYD_USER;
+#                             the session wrapper validates that as a lanthorn
+#                             player name and runs the game as that player
+#                             (`--player`), so every user gets their own
+#                             saves and map. Lanthorn authenticates nobody.
+#                             ttyd's port MUST be reachable only through the
+#                             proxy, and the proxy MUST overwrite or strip any
+#                             client-sent copy of the header — otherwise
+#                             anyone who can reach ttyd is anyone they like.
+#                             Refuses to start together with
+#                             LANTHORN_WEB_CREDENTIAL (ttyd accepts EITHER the
+#                             header OR the password, so keeping both would
+#                             leave the password as a bypass of the proxy),
+#                             and turns browser sound off: the audio relay is
+#                             a separate port that never sees the header, so
+#                             it cannot tell whose session a socket belongs to.
 #   LANTHORN_WEB_AUDIO        on (default) or off: sound in the browser, via
 #                             lanthorn-audio-relay on its own port
 #   LANTHORN_WEB_AUDIO_PORT   that port (default 7682)
@@ -40,7 +61,9 @@
 #                             writes its resume state on the way out and the
 #                             next visit picks up from there.
 #   LANTHORN_WEB_SESSION_DIR  where detached sessions keep their sockets and
-#                             stamps (default /tmp/lanthorn-sessions)
+#                             stamps (default /tmp/lanthorn-sessions), one
+#                             subdirectory per player (`_default` when there
+#                             is none) so a session is keyed by (player, id)
 #   LANTHORN_WEB_AUTOSAVE     on (default) or off: pass `--auto-save on` to
 #                             every served game, so the resume state is
 #                             written after each turn. A pty that can vanish
@@ -97,10 +120,12 @@ stale_sessions() {
     _dir="$1"
     _now="$2"
     _ttl="$3"
-    for _s in "$_dir"/*.seen; do
+    # Sessions live at <dir>/<player>/<id>.seen (`_default` for no player,
+    # SQ-1318), and are named here by that `<player>/<id>` key.
+    for _s in "$_dir"/*/*.seen; do
         [ -f "$_s" ] || continue
-        _id="${_s##*/}"
-        _id="${_id%.seen}"
+        _key="${_s#"$_dir"/}"
+        _key="${_key%.seen}"
         _seen="$(cat "$_s" 2>/dev/null || printf '')"
         # A stamp we cannot read as a number is a stamp from a broken write, and
         # the safe reading of that is "long ago" — an unreapable session would
@@ -109,7 +134,7 @@ stale_sessions() {
             ''|*[!0-9]*) _seen=0 ;;
         esac
         if [ "$((_now - _seen))" -ge "$_ttl" ]; then
-            printf '%s\n' "$_id"
+            printf '%s\n' "$_key"
         fi
     done
 }
@@ -139,6 +164,7 @@ reap_stale_sessions() {
     _dir="$1"
     _audio="${4:-}"
     stale_sessions "$1" "$2" "$3" | while IFS= read -r _id; do
+        # `_id` is the `<player>/<id>` key `stale_sessions` prints.
         _pid="$(cat "$_dir/$_id.pid" 2>/dev/null || printf '')"
         case "$_pid" in
             ''|*[!0-9]*) _pid="" ;;
@@ -147,8 +173,14 @@ reap_stale_sessions() {
             kill -TERM "$_pid" 2>/dev/null || true
         fi
         rm -f "$_dir/$_id.seen" "$_dir/$_id.pid"
+        # FIFOs are keyed by id alone and exist only without a player: proxy
+        # mode runs with sound off (see LANTHORN_WEB_AUTH_HEADER above), so a
+        # named player's session has none, and an id of theirs must never
+        # unlink a default-layout session's pipe.
         if [ -n "$_audio" ]; then
-            rm -f "$_audio/$_id.pcm"
+            case "$_id" in
+                _default/*) rm -f "$_audio/${_id#_default/}.pcm" ;;
+            esac
         fi
     done
 }
@@ -289,6 +321,27 @@ if [ "${1:-}" = "serve" ]; then
     # No story args after `serve` means the picker on the library mount.
     [ "$#" -gt 0 ] || set -- /stories
 
+    # Proxy mode (SQ-1318): see LANTHORN_WEB_AUTH_HEADER in the header comment.
+    # Settled before anything is started, so a refusal leaves nothing running.
+    auth_header="${LANTHORN_WEB_AUTH_HEADER:-}"
+    if [ -n "$auth_header" ]; then
+        case "$auth_header" in
+            *[!A-Za-z0-9-]*)
+                echo "lanthorn: LANTHORN_WEB_AUTH_HEADER must be a header name (letters, digits and '-'), got '$auth_header'" >&2
+                exit 2
+                ;;
+        esac
+        if [ -n "${LANTHORN_WEB_CREDENTIAL:-}" ]; then
+            echo "lanthorn: LANTHORN_WEB_AUTH_HEADER and LANTHORN_WEB_CREDENTIAL are both set. ttyd accepts either one, so the password would let anyone around your proxy. Unset LANTHORN_WEB_CREDENTIAL and let the proxy authenticate." >&2
+            exit 2
+        fi
+        if [ "${LANTHORN_WEB_AUDIO:-on}" != "off" ]; then
+            echo "lanthorn: proxy mode: browser sound is off (the audio relay never sees $auth_header, so it cannot tell whose session a socket is)" >&2
+        fi
+        LANTHORN_WEB_AUDIO=off
+        export LANTHORN_WEB_AUDIO LANTHORN_WEB_AUTH_HEADER
+    fi
+
     # Each connection runs through the session wrapper, which strips the page's
     # session argument, points ALSA at the right place, and — unless
     # LANTHORN_WEB_DETACH=off — hands the connection to the dtach session named
@@ -402,6 +455,9 @@ if [ "${1:-}" = "serve" ]; then
     set -- --index /tmp/lanthorn-index.html "$@"
     if [ -n "$audio_port" ] || [ -n "$detach_on" ]; then
         set -- --url-arg "$@"
+    fi
+    if [ -n "$auth_header" ]; then
+        set -- --auth-header "$auth_header" "$@"
     fi
     if [ -n "${LANTHORN_WEB_CREDENTIAL:-}" ]; then
         set -- --credential "$LANTHORN_WEB_CREDENTIAL" "$@"

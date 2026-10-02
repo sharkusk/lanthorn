@@ -142,6 +142,53 @@ program running on your machine. Set `LANTHORN_WEB_CREDENTIAL` for HTTP
 basic auth, and put a reverse proxy (Caddy, nginx, Traefik) in front for TLS
 before exposing it any further than that.
 
+## One account per person, behind a login proxy
+
+If you already run a login-aware reverse proxy (Authelia,
+Authentik, Caddy with `forward_auth`, Tailscale Serve), the container can give
+every signed-in user their own saves, map and settings. Set
+`LANTHORN_WEB_AUTH_HEADER` to the name of the header your proxy fills in with
+the user's name after it has checked their login:
+
+```yaml
+environment:
+  LANTHORN_WEB_AUTH_HEADER: "Remote-User"   # Authelia; Caddy often uses X-Forwarded-User
+```
+
+The container then plays each connection as that user, the same as launching
+lanthorn with `--player <name>` (see "Sharing one install between players" in
+the command-line guide). A user's running game is kept apart too: pasting
+somebody else's session link starts a fresh game rather than joining theirs.
+
+```caddy
+lanthorn.example.com {
+    forward_auth authelia:9091 {
+        uri /api/authz/forward-auth
+        copy_headers Remote-User
+    }
+    reverse_proxy lanthorn:7681
+}
+```
+
+Three things are on you, because **lanthorn does no authentication of its own**
+and trusts the header completely:
+
+- **ttyd's port must be reachable only through the proxy.** Do not publish
+  `7681` to the network; put the proxy and the container on a private Docker
+  network. Anyone who can reach it directly can send any name they like.
+- **The proxy must overwrite or strip any copy of the header the browser sends.**
+  Authelia and Caddy's `forward_auth` replace it; a bare `reverse_proxy` does
+  not.
+- **Do not also set `LANTHORN_WEB_CREDENTIAL`.** ttyd accepts the header *or*
+  the password, so the password would be a way round the proxy; the container
+  refuses to start with both.
+
+A name that is not a valid player name (1-29 letters, digits, `.`, `_`, `-`, not
+starting with `.`) is refused with a message on the terminal rather than played
+as someone else. Sound in the browser is switched off in this mode: it travels
+on its own port, which never sees the header, so it could not tell whose
+session a connection is.
+
 ## Publishing
 
 A pre-built image is published to GitHub Container Registry on every release,

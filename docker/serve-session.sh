@@ -54,30 +54,101 @@ valid_session_id() {
     printf '%s' "$1"
 }
 
-# Where a session's dtach socket lives, given the session directory and a
-# candidate id. Prints nothing for an id the rule above rejects — which is what
-# makes "no id" and "a bad id" the same case at every call site.
+# A player name, by lanthorn's own rule (crates/app/src/data_roots.rs,
+# `validate_player_name`): 1 to 29 characters of [A-Za-z0-9._-], no leading `.`.
+# Prints the name when it is usable and nothing when it is not.
+valid_player_name() {
+    case "${1:-}" in
+        ''|.*|*[!A-Za-z0-9._-]*) return 0 ;;
+    esac
+    if [ "${#1}" -gt 29 ]; then
+        return 0
+    fi
+    printf '%s' "$1"
+}
+
+# Where a player's sessions live under the session directory (SQ-1318): one
+# directory per player, `_default` for the no-player case. A session is keyed by
+# (player, id), so a pasted URL carrying somebody else's id starts a fresh game
+# in the pasting player's own directory instead of attaching to theirs. Prints
+# nothing for a name the rule above rejects. (`_default` is also a legal player
+# name, but proxy mode, the only way a name arrives here, refuses a missing one,
+# so the two never share a container.)
+session_player_dir() {
+    if [ -z "${2:-}" ]; then
+        printf '%s/_default' "$1"
+        return 0
+    fi
+    _p="$(valid_player_name "$2")"
+    [ -n "$_p" ] || return 0
+    printf '%s/%s' "$1" "$_p"
+}
+
+# Where a session's dtach socket lives, given the session directory, a
+# candidate id and (optionally) the player. Prints nothing for an id or player
+# the rules reject — which is what makes "no id" and "a bad id" the same case at
+# every call site — and for a path too long for a unix socket (sun_path holds 104
+# bytes on macOS and 108 on Linux, NUL included; the page's 16-character ids never get near
+# it, a hand-written 64-character id under a long player name can).
 session_socket() {
     _id="$(valid_session_id "${2:-}")"
     [ -n "$_id" ] || return 0
-    printf '%s/%s.sock' "$1" "$_id"
+    _pd="$(session_player_dir "$1" "${3:-}")"
+    [ -n "$_pd" ] || return 0
+    _path="$_pd/$_id.sock"
+    if [ "${#_path}" -gt 103 ]; then
+        return 0
+    fi
+    printf '%s' "$_path"
 }
 
 # --- end of function definitions; the wrapper's own work begins below --- #
 
+# PROXY MODE (SQ-1318): LANTHORN_WEB_AUTH_HEADER is set, so ttyd trusts that
+# header from the reverse proxy in front of it and exports its value as
+# TTYD_USER. The name becomes the player. Lanthorn authenticates nobody; the
+# proxy did. Outside proxy mode TTYD_USER is never read — without the header
+# switch ttyd never sets it, and a stray one in the environment is not a login.
+proxy=""
+if [ -n "${LANTHORN_WEB_AUTH_HEADER:-}" ]; then
+    proxy="1"
+fi
+
 session=""
 n=$#
 i=0
+skip=""
 while [ "$i" -lt "$n" ]; do
     a="$1"
     shift
     i=$((i+1))
+    if [ -n "$skip" ]; then
+        skip=""
+        continue
+    fi
     case "$a" in
         --web-session=*) session="${a#--web-session=}" ;;
+        # In proxy mode the player is the header's alone. `--player` outranks
+        # LANTHORN_PLAYER inside lanthorn, so a `?arg=--player=amy` in the URL
+        # would otherwise pick anybody's saves: drop it, and the value of the
+        # two-word form with it.
+        --player) if [ -n "$proxy" ]; then skip="1"; else set -- "$@" "$a"; fi ;;
+        --player=*) if [ -z "$proxy" ]; then set -- "$@" "$a"; fi ;;
         *) set -- "$@" "$a" ;;
     esac
 done
 session="$(valid_session_id "$session")"
+
+player=""
+if [ -n "$proxy" ]; then
+    player="$(valid_player_name "${TTYD_USER:-}")"
+    if [ -z "$player" ]; then
+        printf 'lanthorn: refusing this session: the authenticated user name %s is not a valid player name (1-29 characters of letters, digits, ".", "_" and "-", not starting with ".").\n' "'${TTYD_USER:-}'" >&2
+        exit 1
+    fi
+    LANTHORN_PLAYER="$player"
+    export LANTHORN_PLAYER
+fi
 
 audio_dir="${LANTHORN_AUDIO_DIR:-/tmp/lanthorn-audio}"
 session_dir="${LANTHORN_WEB_SESSION_DIR:-/tmp/lanthorn-sessions}"
@@ -89,7 +160,12 @@ fi
 
 sock=""
 if [ -n "$detach" ]; then
-    sock="$(session_socket "$session_dir" "$session")"
+    sock="$(session_socket "$session_dir" "$session" "$player")"
+    # An id or player whose socket path would not fit: play without detaching
+    # rather than hand dtach a path it cannot bind.
+    if [ -z "$sock" ]; then
+        detach=""
+    fi
 fi
 
 # Is this connection joining a game that is already running? Then its ALSA path
@@ -128,9 +204,10 @@ if [ -z "$detach" ]; then
     exec "$@"
 fi
 
-mkdir -p "$session_dir"
-seen="$session_dir/$session.seen"
-pid_file="$session_dir/$session.pid"
+pdir="$(session_player_dir "$session_dir" "$player")"
+mkdir -p "$pdir"
+seen="$pdir/$session.seen"
+pid_file="$pdir/$session.pid"
 
 # The heartbeat is what tells the reaper this session still has somebody in it.
 # Stamping only at attach and detach would have read a player eight hours into

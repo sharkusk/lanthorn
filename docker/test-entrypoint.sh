@@ -35,7 +35,11 @@ here="$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)"
 repo_root="$(CDPATH= cd -- "$here/.." && pwd)"
 
 fixture_dir="$(mktemp -d)"
-trap 'rm -rf "$fixture_dir"' EXIT
+# A short dir for anything that binds a unix socket: macOS's $TMPDIR alone is
+# ~50 characters and sun_path holds 104, which the per-player layout (SQ-1318)
+# now crowds.
+short_dir="$(mktemp -d /tmp/lt.XXXXXX)"
+trap 'rm -rf "$fixture_dir" "$short_dir"' EXIT
 
 mkdir -p "$fixture_dir/fonts"
 cp "$repo_root/docker/web-session.js" "$fixture_dir/web-session.js"
@@ -257,7 +261,7 @@ check "id: a space is rejected" "$?"
 check "id: the empty string is rejected" "$?"
 
 # session_socket: the derivation itself, which is what `dtach -A` is handed.
-[ "$(session_socket /tmp/lanthorn-sessions 'abcdefgh12345678')" = "/tmp/lanthorn-sessions/abcdefgh12345678.sock" ]
+[ "$(session_socket /tmp/lanthorn-sessions 'abcdefgh12345678')" = "/tmp/lanthorn-sessions/_default/abcdefgh12345678.sock" ]
 check "socket: a good id becomes <dir>/<id>.sock" "$?"
 
 [ -z "$(session_socket /tmp/lanthorn-sessions '../../etc/passwd')" ]
@@ -273,23 +277,23 @@ check "socket: no id yields no path" "$?"
 # container and no waiting six hours.
 
 sess_dir="$fixture_dir/sessions"
-mkdir -p "$sess_dir"
+mkdir -p "$sess_dir/_default"
 now=1000000
 ttl=21600                                  # the shipped six hours
 
-printf '%s\n' "$now" > "$sess_dir/freshsession01.seen"
-printf '%s\n' "$((now - ttl + 60))" > "$sess_dir/nearlystale01.seen"
-printf '%s\n' "$((now - ttl))" > "$sess_dir/exactlyold01.seen"
-printf '%s\n' "$((now - 999999))" > "$sess_dir/ancientone01.seen"
-printf 'not-a-number\n' > "$sess_dir/corruptstamp1.seen"
-: > "$sess_dir/emptystamp01.seen"
+printf '%s\n' "$now" > "$sess_dir/_default/freshsession01.seen"
+printf '%s\n' "$((now - ttl + 60))" > "$sess_dir/_default/nearlystale01.seen"
+printf '%s\n' "$((now - ttl))" > "$sess_dir/_default/exactlyold01.seen"
+printf '%s\n' "$((now - 999999))" > "$sess_dir/_default/ancientone01.seen"
+printf 'not-a-number\n' > "$sess_dir/_default/corruptstamp1.seen"
+: > "$sess_dir/_default/emptystamp01.seen"
 # Not a stamp at all: the socket and pid files live in the same directory and
 # must not be mistaken for sessions.
-: > "$sess_dir/freshsession01.pid"
-: > "$sess_dir/freshsession01.sock"
+: > "$sess_dir/_default/freshsession01.pid"
+: > "$sess_dir/_default/freshsession01.sock"
 
 stale="$(stale_sessions "$sess_dir" "$now" "$ttl" | sort | tr '\n' ' ')"
-expected="ancientone01 corruptstamp1 emptystamp01 exactlyold01 "
+expected="_default/ancientone01 _default/corruptstamp1 _default/emptystamp01 _default/exactlyold01 "
 [ "$stale" = "$expected" ]
 check "reaper: names exactly the stale sessions (got '$stale', want '$expected')" "$?"
 
@@ -586,9 +590,9 @@ unset LANTHORN_WEB_GRAB_ZONE
 
 reap_dir="$fixture_dir/sessions-reap"
 reap_audio="$fixture_dir/audio-reap"
-mkdir -p "$reap_dir" "$reap_audio"
-printf '%s\n' "$now" > "$reap_dir/freshsession01.seen"
-printf '%s\n' "$((now - 999999))" > "$reap_dir/ancientone01.seen"
+mkdir -p "$reap_dir/_default" "$reap_audio"
+printf '%s\n' "$now" > "$reap_dir/_default/freshsession01.seen"
+printf '%s\n' "$((now - 999999))" > "$reap_dir/_default/ancientone01.seen"
 mkfifo "$reap_audio/freshsession01.pcm"
 mkfifo "$reap_audio/ancientone01.pcm"
 
@@ -600,18 +604,18 @@ check "reaper: an ended session's audio FIFO is unlinked, which is how the relay
 [ -p "$reap_audio/freshsession01.pcm" ]
 check "reaper: a live session's FIFO is left exactly where its game is writing" "$?"
 
-[ ! -f "$reap_dir/ancientone01.seen" ]
+[ ! -f "$reap_dir/_default/ancientone01.seen" ]
 check "reaper: an ended session's bookkeeping is forgotten" "$?"
 
-[ -f "$reap_dir/freshsession01.seen" ]
+[ -f "$reap_dir/_default/freshsession01.seen" ]
 check "reaper: a live session's stamp survives the sweep" "$?"
 
 # The audio directory is a fourth argument with a default, and `set -u` would
 # abort the whole sweep on an unset $4 — so a three-argument call must still
 # end the session it was called about.
-printf '%s\n' "$((now - 999999))" > "$reap_dir/ancienttwo01.seen"
+printf '%s\n' "$((now - 999999))" > "$reap_dir/_default/ancienttwo01.seen"
 reap_stale_sessions "$reap_dir" "$now" "$ttl"
-[ ! -f "$reap_dir/ancienttwo01.seen" ]
+[ ! -f "$reap_dir/_default/ancienttwo01.seen" ]
 check "reaper: called without an audio directory it still ends the session" "$?"
 
 # --- the wrapper's audio path, per mode (SQ-1328) ---
@@ -623,7 +627,7 @@ check "reaper: called without an audio directory it still ends the session" "$?"
 # game and read back the LANTHORN_AUDIO_OUT each was handed.
 
 wrap_audio="$fixture_dir/wrap-audio"
-wrap_sess="$fixture_dir/wrap-sessions"
+wrap_sess="$short_dir/ws"
 wrap_id="wrappersession1"
 GAME_ENV_OUT="$fixture_dir/game_audio_out.txt"
 DTACH_ARGS_OUT="$fixture_dir/dtach_args.txt"
@@ -721,14 +725,198 @@ check "LANTHORN_WEB_AUDIO=off: ...without waiting two seconds for a FIFO nobody 
 if command -v python3 >/dev/null 2>&1; then
     python3 -c 'import socket,sys
 s = socket.socket(socket.AF_UNIX)
-s.bind(sys.argv[1])' "$wrap_sess/$wrap_id.sock"
+s.bind(sys.argv[1])' "$wrap_sess/_default/$wrap_id.sock"
     run_wrapper on on "$wrap_id"
     [ "$wrap_seconds" -lt 2 ]
     check "wrapper: a reattach does not wait for a FIFO (took ${wrap_seconds}s)" "$?"
-    rm -f "$wrap_sess/$wrap_id.sock"
+    rm -f "$wrap_sess/_default/$wrap_id.sock"
 else
     echo "SKIP: reattach timing (needs python3 to make a unix socket)"
 fi
+
+# --- proxy mode and per-player sessions (SQ-1318) ---
+#
+# LANTHORN_WEB_AUTH_HEADER makes ttyd trust a header from the reverse proxy and
+# export its value as TTYD_USER; the wrapper turns that into LANTHORN_PLAYER.
+# Lanthorn authenticates nobody, so every case here is about what the shell
+# lets through: a bad name refused, a stray TTYD_USER ignored when proxy mode is
+# off, a client's own `--player` removed, and sessions filed by (player, id).
+
+# valid_player_name: lanthorn's own rule (data_roots::validate_player_name).
+[ "$(valid_player_name 'amy')" = "amy" ] && [ "$(valid_player_name 'a.b_c-9')" = "a.b_c-9" ]
+check "player: ordinary names are accepted" "$?"
+
+bad_ok=0
+for bad in '' '.hidden' '..' 'a b' 'a/b' '../x' 'a:b' 'abcdefghijklmnopqrstuvwxyz0123'; do
+    [ -z "$(valid_player_name "$bad")" ] || { echo "  accepted: '$bad'"; bad_ok=1; }
+done
+[ "$bad_ok" = "0" ]
+check "player: empty, dotted, spaced, slashed and over-29 names are rejected" "$?"
+
+[ -n "$(valid_player_name 'abcdefghijklmnopqrstuvwxyz012')" ]
+check "player: exactly 29 characters is accepted" "$?"
+
+# (player, id) keying: the same id under two players is two different sockets.
+sock_a="$(session_socket /s abcdefgh12345678 amy)"
+sock_b="$(session_socket /s abcdefgh12345678 bob)"
+sock_d="$(session_socket /s abcdefgh12345678)"
+[ "$sock_a" = "/s/amy/abcdefgh12345678.sock" ] && [ "$sock_b" = "/s/bob/abcdefgh12345678.sock" ] && [ "$sock_d" = "/s/_default/abcdefgh12345678.sock" ]
+check "keying: one id under two players and under none gives three different sockets ($sock_a $sock_b $sock_d)" "$?"
+
+[ -z "$(session_socket /s abcdefgh12345678 '../bob')" ]
+check "keying: a player that is not a valid name yields no socket" "$?"
+
+long_id="$(printf 'x%.0s' $(seq 1 64))"
+[ -z "$(session_socket /tmp/lanthorn-sessions "$long_id" 'abcdefghijklmnopqrstuvwxyz012')" ]
+check "keying: a socket path too long for sun_path yields none, so the session does not detach" "$?"
+
+# The wrapper itself, with dtach stubbed to record what it was handed.
+cat > "$stub_dir/dtach" <<'STUB'
+#!/bin/sh
+printf '%s\n' "${LANTHORN_PLAYER:-<unset>}" > "$PLAYER_OUT"
+printf '%s\n' "$@" > "$DTACH_ARGS_OUT"
+STUB
+cat > "$stub_dir/fake-game" <<'STUB'
+#!/bin/sh
+printf '%s\n' "${LANTHORN_PLAYER:-<unset>}" > "$PLAYER_OUT"
+printf '%s\n' "$@" > "$GAME_ARGS_OUT"
+STUB
+chmod +x "$stub_dir/dtach" "$stub_dir/fake-game"
+PLAYER_OUT="$fixture_dir/player_out.txt"
+GAME_ARGS_OUT="$fixture_dir/game_args.txt"
+export PLAYER_OUT GAME_ARGS_OUT
+
+# $1 = LANTHORN_WEB_AUTH_HEADER (empty for off), $2 = TTYD_USER (empty for
+# unset), $3 = LANTHORN_WEB_DETACH, then the wrapper's arguments. Leaves the
+# wrapper's exit status in $px_status and its stderr in $px_err.
+run_proxy_wrapper() {
+    _hdr="$1"; _user="$2"; _det="$3"
+    shift 3
+    rm -f "$PLAYER_OUT" "$GAME_ARGS_OUT" "$DTACH_ARGS_OUT"
+    rm -rf "$short_dir/ps"
+    mkdir -p "$short_dir/ps"
+    px_err="$(
+        PATH="$stub_dir:$PATH"
+        LANTHORN_AUDIO_DIR="$short_dir/pa"
+        LANTHORN_WEB_SESSION_DIR="$short_dir/ps"
+        LANTHORN_WEB_DETACH="$_det"
+        LANTHORN_WEB_AUDIO=off
+        export PATH LANTHORN_AUDIO_DIR LANTHORN_WEB_SESSION_DIR LANTHORN_WEB_DETACH LANTHORN_WEB_AUDIO
+        unset LANTHORN_PLAYER LANTHORN_WEB_AUTH_HEADER TTYD_USER
+        if [ -n "$_hdr" ]; then LANTHORN_WEB_AUTH_HEADER="$_hdr"; export LANTHORN_WEB_AUTH_HEADER; fi
+        if [ -n "$_user" ]; then TTYD_USER="$_user"; export TTYD_USER; fi
+        sh "$repo_root/docker/serve-session.sh" "$@" 2>&1 >/dev/null
+    )"
+    px_status=$?
+}
+sid="--web-session=abcdefgh12345678"
+
+# Proxy on, a good name: the player is set and the socket is under that player.
+run_proxy_wrapper X-Forwarded-User amy on "$sid" fake-game
+[ "$(cat "$PLAYER_OUT" 2>/dev/null)" = "amy" ]
+check "proxy: TTYD_USER=amy runs the game as LANTHORN_PLAYER=amy" "$?"
+grep -qxF -- "$short_dir/ps/amy/abcdefgh12345678.sock" "$DTACH_ARGS_OUT"
+check "proxy: the dtach socket is keyed <session dir>/<player>/<id>.sock" "$?"
+[ -f "$short_dir/ps/amy/abcdefgh12345678.seen" ]
+check "proxy: the stamp file lives in the player's directory too" "$?"
+
+# The same id under another player is a different session.
+run_proxy_wrapper X-Forwarded-User bob on "$sid" fake-game
+grep -qxF -- "$short_dir/ps/bob/abcdefgh12345678.sock" "$DTACH_ARGS_OUT"
+check "proxy: a second player with the same id gets a different socket, not the first's game" "$?"
+
+# Detach off, proxy on: still the player, no dtach.
+run_proxy_wrapper X-Forwarded-User amy off "$sid" fake-game
+[ "$(cat "$PLAYER_OUT" 2>/dev/null)" = "amy" ] && [ ! -f "$DTACH_ARGS_OUT" ]
+check "proxy, detach off: the game runs directly, as the player" "$?"
+
+# Refusals: a name that is not a player name never falls through to the default.
+for bad in '../etc' '.hidden' 'has space' 'abcdefghijklmnopqrstuvwxyz0123'; do
+    run_proxy_wrapper X-Forwarded-User "$bad" on "$sid" fake-game
+    [ "$px_status" != "0" ] && [ ! -f "$DTACH_ARGS_OUT" ] && [ ! -f "$PLAYER_OUT" ]
+    check "proxy: TTYD_USER='$bad' refuses the session (status $px_status)" "$?"
+done
+printf '%s' "$px_err" | grep -q 'not a valid player name'
+check "proxy: the refusal says why, on the terminal" "$?"
+
+run_proxy_wrapper X-Forwarded-User "" on "$sid" fake-game
+[ "$px_status" != "0" ] && [ ! -f "$DTACH_ARGS_OUT" ]
+check "proxy: no TTYD_USER at all is refused, never run as the default player" "$?"
+
+# Proxy off: TTYD_USER means nothing, and the player is never set from it.
+run_proxy_wrapper "" amy on "$sid" fake-game
+[ "$px_status" = "0" ] && [ "$(cat "$PLAYER_OUT" 2>/dev/null)" = "<unset>" ]
+check "no proxy: a TTYD_USER in the environment is ignored, LANTHORN_PLAYER stays unset" "$?"
+grep -qxF -- "$short_dir/ps/_default/abcdefgh12345678.sock" "$DTACH_ARGS_OUT"
+check "no proxy: the session is filed under _default" "$?"
+
+# `?arg=--player` smuggling.
+run_proxy_wrapper X-Forwarded-User amy off "$sid" fake-game --player=bob story.z5
+[ "$(cat "$PLAYER_OUT" 2>/dev/null)" = "amy" ] && ! grep -q 'player' "$GAME_ARGS_OUT" && grep -qxF story.z5 "$GAME_ARGS_OUT"
+check "proxy: a client's --player=bob is stripped and the story argument survives" "$?"
+
+run_proxy_wrapper X-Forwarded-User amy off "$sid" fake-game --player bob story.z5
+! grep -qxF bob "$GAME_ARGS_OUT" && ! grep -q 'player' "$GAME_ARGS_OUT" && grep -qxF story.z5 "$GAME_ARGS_OUT"
+check "proxy: the two-word --player bob is stripped with its value" "$?"
+
+run_proxy_wrapper "" "" off "$sid" fake-game --player=bob story.z5
+grep -qxF -- "--player=bob" "$GAME_ARGS_OUT"
+check "no proxy: --player is left alone, it is the household's own business" "$?"
+
+# The dispatch: ttyd's command line in proxy mode.
+LANTHORN_WEB_AUTH_HEADER=X-Forwarded-User
+export LANTHORN_WEB_AUTH_HEADER
+run_dispatch
+ttyd_has "--auth-header" && ttyd_has "X-Forwarded-User"
+check "dispatch: LANTHORN_WEB_AUTH_HEADER passes --auth-header <name> to ttyd" "$?"
+ttyd_has "--credential"
+[ "$?" != "0" ]
+check "dispatch: ...with no --credential" "$?"
+ttyd_has "--url-arg"
+check "dispatch: ...and the session argument is still accepted" "$?"
+
+# Both set: refused, and ttyd never starts.
+LANTHORN_WEB_CREDENTIAL="u:p"
+export LANTHORN_WEB_CREDENTIAL
+run_dispatch
+[ ! -f "$TTYD_ARGS_OUT" ]
+check "dispatch: AUTH_HEADER together with CREDENTIAL refuses to start ttyd" "$?"
+dispatch_msg="$( ( PATH="$stub_dir:$PATH"; LANTHORN_WEB_SESSION_DIR="$fixture_dir/sessions-live"; export PATH LANTHORN_WEB_SESSION_DIR; sh "$repo_root/docker/entrypoint.sh" serve /stories ) 2>&1 >/dev/null )"
+printf '%s' "$dispatch_msg" | grep -q 'LANTHORN_WEB_CREDENTIAL'
+check "dispatch: ...and says which two settings collide" "$?"
+unset LANTHORN_WEB_CREDENTIAL
+
+# A header name that is not one is refused rather than handed to ttyd.
+LANTHORN_WEB_AUTH_HEADER='X-User; rm'
+run_dispatch
+[ ! -f "$TTYD_ARGS_OUT" ]
+check "dispatch: a malformed header name is refused" "$?"
+
+# Off by default.
+unset LANTHORN_WEB_AUTH_HEADER
+run_dispatch
+ttyd_has "--auth-header"
+[ "$?" != "0" ]
+check "dispatch: without LANTHORN_WEB_AUTH_HEADER ttyd is not told to trust any header" "$?"
+
+# The sweeper in the per-player layout.
+pl_dir="$fixture_dir/sessions-players"
+pl_audio="$fixture_dir/audio-players"
+mkdir -p "$pl_dir/amy" "$pl_dir/bob" "$pl_dir/_default" "$pl_audio"
+printf '%s\n' "$((now - 999999))" > "$pl_dir/amy/sameid000001.seen"
+printf '%s\n' "$now" > "$pl_dir/bob/sameid000001.seen"
+printf '%s\n' "$((now - 999999))" > "$pl_dir/_default/oldid0000001.seen"
+mkfifo "$pl_audio/sameid000001.pcm" "$pl_audio/oldid0000001.pcm"
+stale="$(stale_sessions "$pl_dir" "$now" "$ttl" | sort | tr '\n' ' ')"
+[ "$stale" = "_default/oldid0000001 amy/sameid000001 " ]
+check "reaper: finds stale sessions in every player's directory, keyed player/id (got '$stale')" "$?"
+reap_stale_sessions "$pl_dir" "$now" "$ttl" "$pl_audio"
+[ ! -f "$pl_dir/amy/sameid000001.seen" ] && [ -f "$pl_dir/bob/sameid000001.seen" ]
+check "reaper: ends one player's session and leaves another's with the same id" "$?"
+[ -p "$pl_audio/sameid000001.pcm" ]
+check "reaper: a named player's session never unlinks the audio FIFO of the same id" "$?"
+[ ! -p "$pl_audio/oldid0000001.pcm" ]
+check "reaper: a default session's FIFO is still unlinked" "$?"
 
 if [ "$fail" != "0" ]; then
     echo "docker/test-entrypoint.sh: FAILED" >&2
