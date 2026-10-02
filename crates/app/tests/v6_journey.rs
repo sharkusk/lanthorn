@@ -23,6 +23,8 @@ mod v6_journey_menu_band;
 mod v6_hybrid_chrome_layout;
 #[path = "suites/v6_journey_prose_containment.rs"]
 mod v6_journey_prose_containment;
+#[path = "suites/v6_journey_room_description.rs"]
+mod v6_journey_room_description;
 #[path = "suites/sq1579_journey_no_map.rs"]
 mod sq1579_journey_no_map;
 #[path = "suites/sq1589_journey_combat_party.rs"]

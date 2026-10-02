@@ -22,6 +22,8 @@ mod v6_shogun_declared_columns;
 mod v6_shogun_emphasis_rule;
 #[path = "suites/v6_shogun_gameplay.rs"]
 mod v6_shogun_gameplay;
+#[path = "suites/v6_shogun_room_description.rs"]
+mod v6_shogun_room_description;
 #[path = "suites/v6_hint_clue_wrap.rs"]
 mod v6_hint_clue_wrap;
 #[path = "suites/v6_shogun_menu_ground.rs"]

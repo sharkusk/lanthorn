@@ -64,38 +64,6 @@ fn single_window_zmachine_arrival_and_look_capture_a_description() {
     assert_ne!(desc3, desc1, "a different room's description must not be the old room's leftover text");
 }
 
-/// `stories/zork0-r393-s890714.z6`: a Version 6 story — Zork Zero, one of the four the quest's
-/// own bound names explicitly. Whatever this turn's transcript looks like, the v6 gate must
-/// leave `description` `None` outright: no extraction attempt, no garbage, no panic.
-///
-/// Zork Zero's own opening is a scripted banquet-hall cutscene that always ends in a death
-/// (`****  You have died  ****`) a few turns in, so this drives exactly that far and no
-/// further — real gameplay proper starts only after answering the RESTART/RESTORE/UNDO/QUIT
-/// prompt, which is outside what this bound needs to demonstrate. The decisive falsifying case —
-/// a v6-shaped transcript that WOULD produce a wrong description if the gate were removed — is
-/// `session::tests::zvm_room_description_is_gated_off_for_a_v6_story`, a synthetic unit test:
-/// this game's own opening never happens to hand `detect_location_with` a resolved room at all
-/// (`location` stays `None` throughout the cutscene), which cannot exercise the gate on its own.
-#[test]
-fn v6_zmachine_story_never_captures_a_description() {
-    let Some(bytes) = story("zork0-r393-s890714.z6") else {
-        eprintln!("SKIP: gitignored stories/zork0-r393-s890714.z6 missing");
-        return;
-    };
-    let mut s = GameSession::new_with_trace(bytes, true, false, None, false, Vec::new(), None, None, None)
-        .expect("zork0 boots without a ZError");
-    assert!(s.machine.screen.v6.is_some(), "zork0 is the v6 fixture this bound is about");
-
-    // Advance a few real turns (a keypress past the intro, then a couple of lines through the
-    // banquet-hall cutscene) — the gate must hold on every DRAINED turn, not merely on an
-    // untested boot frame, and must never panic however the cutscene's own windows are laid out.
-    let _ = s.submit_char(b' ');
-    for _ in 0..5 {
-        let r = s.submit("look");
-        assert_eq!(r.description, None, "still gated: {:?}", r.transcript);
-    }
-}
-
 // ── Glulx real-game coverage (SQ-1639) ────────────────────────────────────────
 //
 // Every case above is Z-machine only (see the module doc's own note on that).

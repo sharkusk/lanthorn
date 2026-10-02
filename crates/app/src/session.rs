@@ -2097,9 +2097,9 @@ impl GameSession {
         let detected = detect_location_with(&self.machine, self.player_candidates());
         let location = detected.as_ref().map(location_to_snapshot);
         let location_method = detected.as_ref().map(Location::method);
-        // SQ-1625 Tier 3: see `zvm_room_description`'s own doc for the bound (v6 excluded
-        // outright) and what counts as evidence (the room's name reprinted as its own line).
-        let description = zvm_room_description(&self.machine, &transcript, location.as_ref());
+        // SQ-1625 Tier 3: see `zvm_room_description`'s own doc for what counts as evidence
+        // (the room's name reprinted as its own line).
+        let description = zvm_room_description(&transcript, location.as_ref());
         // SQ-1627: unlike `description`, this is a direct object-tree query, not a transcript
         // heuristic — it works the same for a v6 game as any other version (see the helper's own
         // doc for why no gate is needed here). SQ-1648: this turn's own `transcript` is passed
@@ -5154,26 +5154,18 @@ fn reprinted_room_heading(transcript: &str, name: &str) -> bool {
     !name.is_empty() && transcript.lines().any(|l| line_is_room_heading(l, name))
 }
 
-/// SQ-1625 Tier 3: this turn's room description, for a Z-machine story that keeps to the common
-/// single-window convention — a status-line window plus exactly one scrolling text window, the
-/// vast majority of v1/v3/v5 games.
+/// SQ-1625 Tier 3: this turn's room description for a Z-machine story.
 ///
-/// `None` outright for a v6 story (`machine.screen.v6.is_some()`, the same signal
-/// `zvm::location::detect_location_with` already special-cases for exactly this reason: a v6
-/// game paints into its own window model rather than the v1-v5 status-line grid, so nothing here
-/// is safe to read as "the" scrolling window's transcript). This is a deliberate, permanent gap
-/// per any v6 game (Zork Zero, Arthur, Journey, Shogun…), not an attempt that was tried and
-/// discarded — attempting extraction on a v6 frame and discarding a bad result is exactly what
-/// this function is not allowed to do (see the falsification test that removes this gate).
+/// Version 6 is not special-cased (SQ-1675): only the game's transcript (or input) window
+/// streams into `transcript`; other prose windows are diverted and status text never streams
+/// (`zvm::cpu::exec`, SQ-0585/0746). A v6 game that prints no room heading into that window
+/// (Journey, or Arthur's bare LOOK) simply captures nothing.
 ///
-/// Otherwise defers to [`transcript_room_description`], which is its own evidence for "arrival or
+/// Defers to [`transcript_room_description`], which is its own evidence for "arrival or
 /// an explicit LOOK" — the same reprinted-heading fact [`reprinted_room_heading`] uses for the
 /// mapper edge, just kept as the matched line's INDEX rather than a bool so the text after it can
 /// be sliced out.
-fn zvm_room_description(machine: &Machine, transcript: &str, location: Option<&LocationInfo>) -> Option<String> {
-    if machine.screen.v6.is_some() {
-        return None;
-    }
+fn zvm_room_description(transcript: &str, location: Option<&LocationInfo>) -> Option<String> {
     transcript_room_description(transcript, &location?.name)
 }
 
@@ -6030,7 +6022,7 @@ impl Engine for GameSession {
         let transcript_elems = self.take_transcript_elems();
         let transcript = if transcript_elems.is_empty() { self.take_transcript() } else { String::new() };
         let location = self.current_location();
-        let description = zvm_room_description(&self.machine, &transcript, location.as_ref());
+        let description = zvm_room_description(&transcript, location.as_ref());
         let items = self.zvm_item_observations(location.as_ref(), &transcript);
         TurnResult {
             transcript,
@@ -7271,63 +7263,6 @@ mod tests {
         let transcript = "Forest Path\nThis is a path through a dimly lit forest.\nOn the ground is a pile of leaves.\n\n>";
         let desc = transcript_room_description(transcript, "Forest Path").unwrap();
         assert_eq!(desc, "This is a path through a dimly lit forest.\nOn the ground is a pile of leaves.");
-    }
-
-    /// A minimal valid Machine (same recipe as `headless.rs`'s `minimal_machine`), for the one
-    /// test below that needs a real `&Machine` to flip `screen.v6` on.
-    fn minimal_machine() -> Machine {
-        use zvm::memory::Memory;
-        let mut buf = vec![0u8; 0x0800];
-        buf[0x00] = 3; // version = 3 (the `screen.v6` field is what matters, not the header)
-        buf[0x04] = 0x00; buf[0x05] = 0x40;
-        buf[0x06] = 0x00; buf[0x07] = 0x40;
-        buf[0x0A] = 0x00; buf[0x0B] = 0x80;
-        buf[0x0C] = 0x01; buf[0x0D] = 0x00;
-        buf[0x0E] = 0x03; buf[0x0F] = 0x00;
-        buf[0x08] = 0x04; buf[0x09] = 0x00;
-        buf[0x18] = 0x00; buf[0x19] = 0x60;
-        buf[0x0080] = 0;
-        buf[0x0081] = 4;
-        buf[0x0082] = 0; buf[0x0083] = 0;
-        buf[0x0040] = 0xba;
-        let mem = Memory::new(buf).expect("minimal story");
-        Machine::new(mem)
-    }
-
-    /// SQ-1625: the falsifying case for the v6 gate in [`zvm_room_description`] — a transcript
-    /// shaped exactly like a real v6 frame CAN be (several windows' text flattened into one
-    /// string, with a bare line that happens to equal the detected room name sitting in front of
-    /// text from an ENTIRELY DIFFERENT window) produces a WRONG answer once the gate is removed,
-    /// which is what proves the gate is doing real work rather than guarding against nothing.
-    /// `docs/internals/...`/CLAUDE.md's own v6 geometry conventions single out `screen.v6` as the
-    /// one signal `detect_location_with` already special-cases for exactly this reason.
-    #[test]
-    fn zvm_room_description_is_gated_off_for_a_v6_story() {
-        let mut machine = minimal_machine();
-        let loc = LocationInfo { number: 1, parent: 0, name: "Banquet Hall".to_string() };
-
-        // A transcript shaped like Zork Zero's own opening banquet scene: the room heading,
-        // then several UNRELATED windows' text (a dialogue window, a status strip) flattened
-        // into the one string this engine's non-v6 path treats as "the" scrolling window.
-        let v6_shaped_transcript = "Banquet Hall\n\"Frobnitz! Frobnosia!\" the wizard bellows, and the hall erupts in flame.";
-
-        // Without the gate (`machine.screen.v6` left `None`), the ordinary single-window rule
-        // fires and returns exactly the wrong thing for a v6 frame: text from a scripted
-        // cutscene window, presented as though it were this room's own description.
-        assert_eq!(
-            zvm_room_description(&machine, v6_shaped_transcript, Some(&loc)).as_deref(),
-            Some("\"Frobnitz! Frobnosia!\" the wizard bellows, and the hall erupts in flame."),
-            "sanity: the ungated single-window rule DOES fire on this shape"
-        );
-
-        // With the gate — `screen.v6` set, exactly as a real v6 boot leaves it — the same
-        // transcript and location must yield `None` outright, never the wrong text above.
-        machine.screen.v6 = Some(zvm::screen::V6Windows::new(Default::default(), 0));
-        assert_eq!(
-            zvm_room_description(&machine, v6_shaped_transcript, Some(&loc)),
-            None,
-            "the v6 gate must refuse extraction outright, not merely discard a bad result"
-        );
     }
 
     // ── Object tree ordering ──────────────────────────────────────────────────

@@ -28,6 +28,8 @@ mod v6_arthur_hint_page;
 mod v6_arthur_intro_plates;
 #[path = "suites/v6_arthur_status.rs"]
 mod v6_arthur_status;
+#[path = "suites/v6_arthur_room_description.rs"]
+mod v6_arthur_room_description;
 #[path = "suites/v6_inform_titles.rs"]
 mod v6_inform_titles;
 #[path = "suites/v6_location_mapper.rs"]

@@ -55,3 +55,5 @@ mod sq1620_grid_wider_than_viewport;
 mod v6_zork0_icon_backdrop;
 #[path = "suites/v6_zork0_splash.rs"]
 mod v6_zork0_splash;
+#[path = "suites/v6_zork0_room_description.rs"]
+mod v6_zork0_room_description;

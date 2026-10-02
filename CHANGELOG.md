@@ -27,6 +27,12 @@ goes into the README in place, at its normal destination, marked with the
 visible tag `*Next release:*`. `release.yml` refuses to cut a release
 while any such tag, or this Unreleased section, still exists.*
 
+### Fixed
+
+- The room inspector now shows room descriptions in Zork Zero, Shogun and
+  Arthur too, instead of leaving them blank in every graphical (Version 6) game.
+  Journey prints no room names, so it still has none to show.
+
 ## v0.8.3 — 2026-10-01
 
 ### Fixed
