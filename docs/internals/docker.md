@@ -105,9 +105,11 @@ terminal. Outside proxy mode `TTYD_USER` is never read.
 - **Lanthorn authenticates nobody.** The trust is entirely the proxy's. ttyd's
   port must be reachable only through it, and it must overwrite client copies
   of the header.
-- **With `LANTHORN_WEB_CREDENTIAL` too, the entrypoint exits.** ttyd accepts a
-  request that carries the header *or* the basic-auth password, so keeping both
-  would leave the password as a bypass of the proxy.
+- **With `LANTHORN_WEB_CREDENTIAL` too, the entrypoint exits.** ttyd's
+  `check_auth` (src/protocol.c, 1.7.7) returns the header result immediately
+  when an auth header is configured and never consults the credential, so the
+  password would look like protection while providing none; the proxy is the
+  authentication.
 - **A client `--player` is dropped.** `--player` outranks `LANTHORN_PLAYER`
   inside lanthorn, so the wrapper removes `--player`, `--player=…` from the
   arguments (the page's `?arg=` is unauthenticated) in proxy mode.

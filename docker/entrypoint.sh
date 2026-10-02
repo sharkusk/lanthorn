@@ -24,9 +24,10 @@
 #                             client-sent copy of the header — otherwise
 #                             anyone who can reach ttyd is anyone they like.
 #                             Refuses to start together with
-#                             LANTHORN_WEB_CREDENTIAL (ttyd accepts EITHER the
-#                             header OR the password, so keeping both would
-#                             leave the password as a bypass of the proxy),
+#                             LANTHORN_WEB_CREDENTIAL (ttyd ignores the
+#                             password whenever an auth header is configured,
+#                             so it would look like protection while
+#                             providing none),
 #                             and turns browser sound off: the audio relay is
 #                             a separate port that never sees the header, so
 #                             it cannot tell whose session a socket belongs to.
@@ -332,7 +333,7 @@ if [ "${1:-}" = "serve" ]; then
                 ;;
         esac
         if [ -n "${LANTHORN_WEB_CREDENTIAL:-}" ]; then
-            echo "lanthorn: LANTHORN_WEB_AUTH_HEADER and LANTHORN_WEB_CREDENTIAL are both set. ttyd accepts either one, so the password would let anyone around your proxy. Unset LANTHORN_WEB_CREDENTIAL and let the proxy authenticate." >&2
+            echo "lanthorn: LANTHORN_WEB_AUTH_HEADER and LANTHORN_WEB_CREDENTIAL are both set. ttyd ignores the password whenever an auth header is configured, so it would look like protection while providing none; the proxy is the authentication. Unset LANTHORN_WEB_CREDENTIAL." >&2
             exit 2
         fi
         if [ "${LANTHORN_WEB_AUDIO:-on}" != "off" ]; then

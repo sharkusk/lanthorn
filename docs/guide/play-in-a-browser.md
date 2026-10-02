@@ -179,8 +179,9 @@ and trusts the header completely:
 - **The proxy must overwrite or strip any copy of the header the browser sends.**
   Authelia and Caddy's `forward_auth` replace it; a bare `reverse_proxy` does
   not.
-- **Do not also set `LANTHORN_WEB_CREDENTIAL`.** ttyd accepts the header *or*
-  the password, so the password would be a way round the proxy; the container
+- **Do not also set `LANTHORN_WEB_CREDENTIAL`.** ttyd ignores the password
+  whenever a header is configured, so it would look like protection while
+  providing none; the proxy is the authentication. The container
   refuses to start with both.
 
 A name that is not a valid player name (1-29 letters, digits, `.`, `_`, `-`, not
