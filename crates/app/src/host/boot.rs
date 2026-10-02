@@ -417,8 +417,6 @@ fn pre_boot_host_screen(
     boot_state.pane_sizes = crate::state::PaneSizes {
         split_ratio: cfg.split_ratio,
         band_height: cfg.command_band.height,
-        inv_dock_pct: cfg.inv_dock_pct,
-        room_dock_pct: cfg.room_dock_pct,
     };
     story_screen_in(&boot_state, terminal_size)
 }
@@ -435,7 +433,7 @@ pub fn story_screen_in(state: &AppState, (term_cols, term_rows): (u16, u16)) -> 
     if frame.width == 0 || frame.height == 0 {
         return None;
     }
-    let pane_layout = crate::layout::compute_pane_layout(frame, state, 0);
+    let pane_layout = crate::layout::compute_pane_layout(frame, state);
     crate::render::screen::story_screen_dims(pane_layout.story, state)
 }
 
@@ -1553,8 +1551,6 @@ pub fn boot_story(req: BootRequest<'_>, hooks: &mut dyn BootHooks) -> Result<Boo
     state.pane_sizes = crate::state::PaneSizes {
         split_ratio: cfg.split_ratio,
         band_height: cfg.command_band.height,
-        inv_dock_pct: cfg.inv_dock_pct,
-        room_dock_pct: cfg.room_dock_pct,
     };
     // `[command_panel] auto_open` — open the command panel with the story, for
     // players who want it as their default input surface rather than a thing to
@@ -1698,10 +1694,15 @@ pub fn boot_story(req: BootRequest<'_>, hooks: &mut dyn BootHooks) -> Result<Boo
         None => words,
     };
 
-    // Open whichever panel this story starts with (SQ-1123, widened to a
-    // three-state cycle by SQ-1237): the per-game override, or the global
+    // Open whichever panel this story starts with (SQ-1123): the per-game override, or the global
     // `[command_panel] auto_open` fallback resolved into `initial_panel` above.
     // Instant (no slide) so the first frame is already the settled layout.
+    // The Journal reopens on the tab this story was last left on (SQ-1684). Set
+    // directly, not through `Action::SetJournalTab`, which would write the
+    // sidecar back for a value that just came out of it.
+    if let Some(tab) = crate::styles::read_per_game_journal_tab(&game_dir) {
+        state.journal_tab = tab;
+    }
     match initial_panel {
         crate::state::SidePanel::Command => {
             let mut mapper_noop = mapper::mapper::Mapper::default();
@@ -1711,11 +1712,6 @@ pub fn boot_story(req: BootRequest<'_>, hooks: &mut dyn BootHooks) -> Result<Boo
             // change without the persistence is exactly what this helper is.
             crate::input::open_command_band(&mut state, &mut mapper_noop, true);
             state.band_dock.toggle_to(true, true);
-        }
-        crate::state::SidePanel::Inventory => {
-            // Same non-persisting rule as the command panel above.
-            crate::input::open_inventory_panel(&mut state, true);
-            state.inv_dock.toggle_to(true, true);
         }
         crate::state::SidePanel::None => {}
     }

@@ -280,7 +280,7 @@ fn counterfeit_monkey_refuses_an_avatar_it_cannot_identify_by_name_alone() {
 
 use app::render::command_band::{default_quick, default_verbs, refresh_objects, COL_CARRIED};
 use app::render::inventory_dock::{
-    build_inventory_dock_rows, draw_inventory_dock, inventory_dock_target_height,
+    build_inventory_dock_rows, draw_inventory_dock,
     refresh_inventory_click_words, InventoryDockHits,
 };
 use app::render::transcript::{inventory_click_words, inventory_items_with_keys};
@@ -330,10 +330,10 @@ fn to_first_prompt(s: &mut GlulxSession) {
 /// the command panel's *carried* column)`.
 fn panels(s: &GlulxSession) -> (Vec<String>, String, Vec<String>) {
     let mut state = AppState::default();
-    // Both panels open at once, which the app never does (they are mutually
-    // exclusive) — but each reads its own source, and one case asserting both
-    // cannot let the two drift apart.
-    app::input::open_inventory_panel(&mut state, true);
+    // The Inventory tab up AND the command panel open, which a player can have
+    // at once (SQ-1684 made the inventory a Journal tab) — each reads its own
+    // source, and one case asserting both cannot let the two drift apart.
+    state.set_journal_tab(app::journal::JournalTab::Inventory);
     state.overlays.command_band = Some(CommandBandState::new(default_verbs(), default_quick()));
 
     // `main.rs`'s own line, argument for argument.
@@ -351,7 +351,8 @@ fn panels(s: &GlulxSession) -> (Vec<String>, String, Vec<String>) {
         inventory_items_with_keys(state.player_obj, &state.inventory_fallback, s.introspect(), None);
     let empty_graph = mapper::graph::MapGraph::new();
     let dock_rows = build_inventory_dock_rows(&carried_with_keys, &empty_graph, None);
-    let area = Rect::new(0, 0, 40, inventory_dock_target_height(dock_rows.len(), 40, 100));
+    // A Journal-body-sized rect: the tab draws into whatever it is given.
+    let area = Rect::new(0, 0, 40, (dock_rows.len() as u16 + 2).max(3));
     let mut buf = Buffer::empty(area);
     draw_inventory_dock(
         &dock_rows,

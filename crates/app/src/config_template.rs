@@ -293,17 +293,7 @@ const INTERFACE: &[Row] = &[
             "column headers. Clamped to 1-6.",
         ],
     ),
-    d("split_ratio", "50", &["The story pane's share of the story/map split, as a percentage."]),
-    d("inv_dock_pct", "33", &["Inventory panel height cap, as a percentage of screen height."]),
-    d(
-        "room_dock_pct",
-        "33",
-        &[
-            "Room panel height, as a percentage of screen height. The panel docks",
-            "at the bottom of the map pane and describes the room you are in (or",
-            "the one you clicked).",
-        ],
-    ),
+    d("split_ratio", "50", &["The story pane's share of the story/Journal split, as a percentage."]),
     d(
         "text_margin_x",
         "0",

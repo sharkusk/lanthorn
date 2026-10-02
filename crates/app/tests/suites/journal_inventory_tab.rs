@@ -1,4 +1,4 @@
-//! SQ-1630: the inventory dock's "Carrying"/"Elsewhere" split, end to end through a real
+//! SQ-1630: the Journal Inventory tab's (formerly the inventory dock's) "Carrying"/"Elsewhere" split, end to end through a real
 //! Z-machine session — `render::inventory_dock::build_inventory_dock_rows` fed the SAME two
 //! inputs `main.rs` builds it from: `render::transcript::inventory_items_with_keys` (the live
 //! carried list, with ids) and `mapper::graph::MapGraph` (the whole-game item registry built by

@@ -487,6 +487,13 @@ pub static REGISTRY: std::sync::LazyLock<Vec<RegRow>> = std::sync::LazyLock::new
     row("tidy_progress", Section::Elements, Kind::Style, Some("accent"), Delta::EMPTY),
     row("meta_marker", Section::Elements, Kind::Style, Some("muted"), Delta::EMPTY),
     row("inventory_panel", Section::Elements, Kind::Style, Some("accent"), Delta::EMPTY),
+    // ── The Journal's tab bar (SQ-1684): the row of tab names along the top of the
+    // story pane's right-hand panel. `journal.tabbar` fills the row, `journal.tab`
+    // is an inactive label, `journal.tab:active` the showing one — the same
+    // muted/accent-bold reading `panel.tab` / `panel.tab:active` use.
+    row("journal.tabbar", Section::Elements, Kind::Style, Some("text"), Delta::EMPTY),
+    row("journal.tab", Section::Elements, Kind::Style, Some("muted"), Delta::EMPTY),
+    row("journal.tab:active", Section::Elements, Kind::Style, Some("accent"), mods(true, false, false, false)),
     // The inventory panel's "Carrying:"/"Elsewhere:" section headers (SQ-1630) —
     // same heading role room_panel.header uses, so the two docks' headers read
     // alike.
@@ -831,6 +838,9 @@ mod tests {
         "more_prompt",
         "tidy_progress",
         "meta_marker",
+        "journal.tabbar",
+        "journal.tab",
+        "journal.tab:active",
         "inventory_panel",
         "inventory_panel.header",
         "inventory_panel.meta",

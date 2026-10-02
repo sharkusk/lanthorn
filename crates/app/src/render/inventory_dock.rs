@@ -1,10 +1,6 @@
-//! Inventory dock: a bordered multi-row list panel docked at the very bottom
-//! of the screen (full width, under the input line, above the help row),
-//! reserving layout space and sliding up/down via `state.inv_dock`.
-//!
-//! The caller (`main.rs`) sizes `area` from the animated `PanelSlide` fraction
-//! (see `inventory_dock_height`), so `area` may be shorter than the panel's
-//! target height while a slide is in flight — everything here clips to `area`.
+//! The Journal's Inventory tab: a bordered multi-row list panel drawn into the
+//! Journal's body (SQ-1684; it was a full-width dock above the help row before
+//! that). Everything here clips to the `area` it is given.
 //!
 //! Two sections (SQ-1630), built by [`build_inventory_dock_rows`]: "Carrying:"
 //! — the player's LIVE carried items, cross-referenced against
@@ -25,7 +21,7 @@ use crate::colors::ColorScheme;
 use crate::render::panel::{draw_panel, PanelSpec, PanelStrip};
 use crate::state::AppState;
 
-/// Click targets emitted while drawing the inventory dock, for the event
+/// Click targets emitted while drawing the inventory tab, for the event
 /// loop to hit-test — the panel's own counterpart of
 /// [`crate::render::command_band::CommandBandHits`] (SQ-1244): a left-click
 /// on a CARRIED item composes its word into the prompt the same way a click
@@ -57,7 +53,7 @@ pub struct InventoryDockHits {
 
 /// Refill the inventory dock's clickable words from the engine, once per loop
 /// tick (SQ-1244) — the command band's `refresh_objects` sibling for the
-/// panel that shows exactly when the band is closed (`SidePanel`), so it
+/// Inventory tab, so it
 /// cannot piggyback on the band's own object refresh.
 ///
 /// Reuses the WHAT column's own noun derivation
@@ -65,7 +61,7 @@ pub struct InventoryDockHits {
 /// `crate::vocab::typeable_name`) over the same one-level contents list
 /// [`build_inventory_dock_rows`]'s `carried` argument is built from, so a
 /// click composes the word the story's parser actually accepts. Gated on the
-/// panel actually being visible or sliding — same test `main.rs` uses to
+/// tab actually being on screen — same test `main.rs` uses to
 /// decide whether to compute the dock's content at all — so a closed dock
 /// costs nothing.
 ///
@@ -74,7 +70,7 @@ pub struct InventoryDockHits {
 /// every frame in `main.rs`, same as it always has), so it reports nothing
 /// for `needs_redraw` to OR in.
 pub fn refresh_inventory_click_words(state: &mut AppState, engine: &dyn crate::engine::Engine) {
-    if !(state.show_inventory || state.inv_dock.active()) {
+    if !state.inventory_tab_visible() {
         state.inventory_click_words.clear();
         return;
     }
@@ -85,28 +81,6 @@ pub fn refresh_inventory_click_words(state: &mut AppState, engine: &dyn crate::e
         engine.introspect(),
         vocab,
     );
-}
-
-/// Compute the dock's fully-open target height in rows: one row per content
-/// line (minimum 1, for the "(empty)" line) plus 2 border rows, capped at
-/// `cap_pct`% of the screen height so the dock never swallows the whole
-/// terminal (default 33, ≈ the old fixed 1/3 cap).
-///
-/// `line_count` is the number of LINES the dock will actually draw this frame
-/// — [`build_inventory_dock_rows`]'s result length, headers included, not a
-/// bare item count (SQ-1630 widened this from "one row per carried item" once
-/// the dock grew a second section and section headers of its own).
-pub fn inventory_dock_target_height(line_count: usize, full_height: u16, cap_pct: u16) -> u16 {
-    let cap = ((full_height as u32 * cap_pct as u32) / 100) as u16;
-    ((line_count.max(1) as u16) + 2).min(cap)
-}
-
-/// Compute the reserved dock band height in rows: `target_h` scaled by the
-/// slide's current `fraction` (0.0 closed .. 1.0 fully open), rounded to the
-/// nearest row. Extracted from the layout split so the arithmetic is testable
-/// without a full terminal/main-loop harness.
-pub fn inventory_dock_height(target_h: u16, fraction: f64) -> u16 {
-    (target_h as f64 * fraction).round() as u16
 }
 
 // ── Content rows (SQ-1630) ──────────────────────────────────────────────────
@@ -685,51 +659,6 @@ mod tests {
 
         assert_eq!(hits.area, Rect::default());
         assert!(hits.rows.is_empty());
-    }
-
-    #[test]
-    fn inventory_dock_height_scales_with_fraction() {
-        assert_eq!(inventory_dock_height(4, 0.0), 0);
-        assert_eq!(inventory_dock_height(4, 1.0), 4);
-        assert_eq!(inventory_dock_height(4, 0.5), 2);
-    }
-
-    #[test]
-    fn inventory_dock_target_height_is_items_plus_borders_capped() {
-        // 2 lines + 2 border rows = 4, well under a 30-row screen's 33% cap (9).
-        assert_eq!(inventory_dock_target_height(2, 30, 33), 4);
-        // Empty list still reserves 1 row (for "(empty)") + 2 borders = 3.
-        assert_eq!(inventory_dock_target_height(0, 30, 33), 3);
-        // Capped at 33% of full_height for a very long inventory: 30*33/100 = 9.
-        assert_eq!(inventory_dock_target_height(100, 30, 33), 9);
-    }
-
-    #[test]
-    fn inventory_dock_target_height_content_binds_when_cap_is_generous() {
-        // Cap = 90*33/100 = 29; content (10 items + 2 = 12) is smaller, so
-        // content binds.
-        assert_eq!(inventory_dock_target_height(10, 90, 33), 12);
-    }
-
-    #[test]
-    fn inventory_dock_target_height_cap_binds_when_items_overflow() {
-        // Cap = 90*33/100 = 29; content (100 items + 2 = 102) overflows, so the
-        // cap binds.
-        assert_eq!(inventory_dock_target_height(100, 90, 33), 29);
-    }
-
-    #[test]
-    fn dock_band_closed_is_zero_open_reserves_items_plus_borders() {
-        // Mirrors the layout split in main.rs: closed (show_inventory=false,
-        // inv_dock inactive) reserves 0 rows; fully open with 2 lines reserves
-        // line_count + 2 border rows.
-        let full_height = 30u16;
-        let closed_target = 0u16; // inv_visible == false path in main.rs
-        assert_eq!(inventory_dock_height(closed_target, 0.0), 0);
-
-        let open_target = inventory_dock_target_height(2, full_height, 33);
-        assert_eq!(open_target, 4);
-        assert_eq!(inventory_dock_height(open_target, 1.0), 4);
     }
 
     // ── build_inventory_dock_rows (SQ-1630) ─────────────────────────────────

@@ -482,19 +482,14 @@ pub fn controls_for(state: &AppState) -> Vec<ControlView> {
         ],
     });
 
-    // ── The panel cycle: command panel → inventory panel → none (SQ-1237) ────
-    // Three states, one control, so the glyph and the hint both name the state
-    // it is IN (not the state a click reaches, as the two-way toggles above do)
-    // and the hint's second line says what a click does next. `None` is the
-    // only unlit reading — the other two are a panel actually open, which is
-    // exactly what "lit" means everywhere else in this cluster.
+    // ── The panel cycle: command panel ⇄ none (SQ-1237; the inventory stop
+    // moved into the Journal, SQ-1684) ──────────────────────────────────────────
+    // The glyph and the hint both name the state it is IN (not the state a click
+    // reaches, as the two-way toggles above do). `None` is the only unlit reading.
     let panel = state.current_side_panel();
     let (panel_glyph, panel_hint) = match panel {
         crate::state::SidePanel::Command => {
-            (g.band_hide, "Command panel: open — click for the inventory panel")
-        }
-        crate::state::SidePanel::Inventory => {
-            (g.inventory_open, "Inventory panel: open — click to close")
+            (g.band_hide, "Command panel: open — click to close")
         }
         crate::state::SidePanel::None => {
             (g.band_show, "Closed — click for the command panel")

@@ -6088,7 +6088,7 @@ mod tests {
             let mut state = AppState::default();
             state.config.command_bar = true;
             state.input.set("hi", true);
-            state.room_dock.toggle_to(true, true);
+            state.open_room_dock(crate::state::RoomDockView::Info);
             state.room_dock_view = mode;
             assert!(!state.any_overlay_open(), "the room panel is not an overlay at all…");
             assert!(!state.any_modal_overlay_open(), "…and certainly not a MODAL one");
@@ -6670,10 +6670,10 @@ mod tests {
     #[test]
     fn render_transcript_never_shows_inventory_strip() {
         // The inventory moved to the docked panel (render::inventory_dock); this
-        // pane must never draw an "Inv:" strip regardless of show_inventory.
+        // pane must never draw an "Inv:" strip regardless of the Inventory tab.
         let machine = minimal_machine();
         let mut state = AppState::default();
-        state.show_inventory = true;
+        state.set_journal_tab(crate::journal::JournalTab::Inventory);
         state.inventory_fallback = vec!["brass lamp".to_string(), "sword".to_string()];
 
         let area = Rect::new(0, 0, 40, 10);

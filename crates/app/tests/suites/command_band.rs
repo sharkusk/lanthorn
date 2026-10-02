@@ -423,9 +423,9 @@ fn the_band_carves_a_bottom_strip_without_eating_the_help_row() {
     let mut state = AppState::default();
     let area = Rect::new(0, 0, 100, 40);
 
-    let closed = app::layout::compute_pane_layout(area, &state, 0);
+    let closed = app::layout::compute_pane_layout(area, &state);
     open_band(&mut state);
-    let open = app::layout::compute_pane_layout(area, &state, 0);
+    let open = app::layout::compute_pane_layout(area, &state);
 
     assert_eq!(open.help_row, closed.help_row, "the help row does not move");
     assert!(open.command_band.height > 0);

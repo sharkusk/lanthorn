@@ -322,6 +322,16 @@ impl Default for KeyMap {
         bind!(ctrl(Char('s')), "save-state", Context::Global);
         bind!(ctrl(Char('r')), "restore-state", Context::Global);
 
+        // The Journal's tabs (SQ-1684): Alt+1/2/3, in tab-bar order. Alt+digit is
+        // free everywhere else in the keymap, and — unlike plain Tab, which the
+        // input line's autocomplete owns — is never typed text. (A terminal that
+        // turns Option into a composing key, macOS's default, delivers `¡™£`
+        // rather than Alt+digit; the leader panel's j/k/i reach the same tabs.)
+        let alt = |c| KeySpec { code: Char(c), ctrl: false, shift: false, alt: true };
+        bind!(alt('1'), "journal-tab map", Context::Global);
+        bind!(alt('2'), "journal-tab room", Context::Global);
+        bind!(alt('3'), "journal-tab inventory", Context::Global);
+
         // ── Map ───────────────────────────────────────────────────────────────
         // Deliberately EMPTY of defaults since SQ-0599. `Context::Map` used to
         // carry the map pane's own key set — plain arrows/hjkl to pan, +/-/0 to
@@ -672,7 +682,7 @@ const DEFAULT_GROUPS: &[DefaultGroup] = &[
     ("Map", &[('+', "zoom-map in", "zoom in"), ('-', "zoom-map out", "zoom out"), ('0', "center-map", "centre on selection")]),
     ("Map · Layers", &[('p', "move-region new", "region into a new layer"), ('m', "move-region parent", "region into the parent layer"), ('c', "cycle-layer next", "next map layer"), ('z', "mark-maze-layer", "flag layer as a maze")]),
     ("Map · Edit", &[('r', "rename-room", "rename room"), ('n', "edit-notes", "edit room notes"), ('d', "delete-connection", "delete connection"), ('e', "relabel-edge", "relabel edge")]),
-    ("Map · View", &[('i', "toggle-inventory-panel", "inventory panel"), ('l', "toggle-portal-labels", "portal labels"), ('v', "toggle-command-panel", "command panel"), ('u', "view-map", "drawn / matrix view"), ('k', "toggle-room-panel", "room panel")]),
+    ("Map · View", &[('j', "journal-tab map", "map tab"), ('k', "journal-tab room", "room tab"), ('i', "journal-tab inventory", "inventory tab"), ('l', "toggle-portal-labels", "portal labels"), ('v', "toggle-command-panel", "command panel"), ('u', "view-map", "drawn / matrix view")]),
 ];
 
 /// One leader-panel entry: `(leader letter, command-string, optional label)`.
@@ -1202,24 +1212,45 @@ mod tests {
         let view_group = layout.groups.iter().find(|(title, _)| title == "Map \u{b7} View");
         assert!(view_group.is_some(), "View group should exist");
         let (_, cmds) = view_group.unwrap();
-        assert!(cmds.iter().any(|c| c.1 == "toggle-inventory-panel"), "toggle-inventory-panel should be in View group");
-        // SQ-0692: the room panel is a View-group toggle too — the popups it replaced
-        // were mouse-only, which is why nobody found the diagnostics view.
-        assert!(cmds.iter().any(|c| c.1 == "toggle-room-panel"), "toggle-room-panel should be in View group");
+        // SQ-1684: the inventory and room panels are Journal tabs now; each has its
+        // leader letter in the View group (the room one began as SQ-0692's, whose
+        // popups were mouse-only — which is why nobody found the diagnostics view).
+        for tab in ["map", "room", "inventory"] {
+            let cmd = format!("journal-tab {tab}");
+            assert!(cmds.iter().any(|c| c.1 == cmd), "{cmd} should be in View group");
+        }
     }
 
     #[test]
-    fn apply_action_toggle_inventory_flips_bool() {
+    fn apply_action_set_journal_tab_switches_and_reveals_the_journal() {
         use mapper::mapper::Mapper;
         use crate::input::apply_action;
-        use crate::state::AppState;
+        use crate::journal::JournalTab;
+        use crate::state::{AppState, Layout};
         let mut state = AppState::default();
         let mut mapper = Mapper::default();
-        assert!(!state.show_inventory);
-        apply_action(Action::ToggleInventory, &mut state, &mut mapper);
-        assert!(state.show_inventory);
-        apply_action(Action::ToggleInventory, &mut state, &mut mapper);
-        assert!(!state.show_inventory);
+        assert_eq!(state.journal_tab, JournalTab::Map);
+        apply_action(Action::SetJournalTab(JournalTab::Inventory), &mut state, &mut mapper);
+        assert_eq!(state.journal_tab, JournalTab::Inventory);
+        // Idempotent: the key says "show this tab", not "toggle it".
+        apply_action(Action::SetJournalTab(JournalTab::Inventory), &mut state, &mut mapper);
+        assert_eq!(state.journal_tab, JournalTab::Inventory);
+        // A hidden Journal comes back for the tab.
+        state.layout = Layout::TranscriptFull;
+        apply_action(Action::SetJournalTab(JournalTab::Room), &mut state, &mut mapper);
+        assert_eq!(state.layout, Layout::Split);
+        assert_eq!(state.journal_tab, JournalTab::Room);
+    }
+
+    /// Alt+1/2/3 are the default tab keys (SQ-1684), in tab-bar order, and they
+    /// reach the game's key path — not just the lookup table.
+    #[test]
+    fn alt_digits_select_journal_tabs_by_default() {
+        let km = KeyMap::default();
+        for (digit, cmd) in [('1', "journal-tab map"), ('2', "journal-tab room"), ('3', "journal-tab inventory")] {
+            let spec = KeySpec { code: KeyCode::Char(digit), ctrl: false, shift: false, alt: true };
+            assert_eq!(km.lookup(&spec, Context::Global), Some(cmd), "Alt+{digit}");
+        }
     }
 
     // ── Item 2: ZoomReset command wiring ─────────────────────────────────────
@@ -1383,8 +1414,8 @@ mod tests {
         assert_eq!(letters.len(), unique.len(), "leader letters must be unique");
         assert_eq!(
             letters.len(),
-            18,
-            "expected 18 authored leader letters. It was 21 until three rows left the panel: \
+            19,
+            "expected 19 authored leader letters (SQ-1684 added `j`, the Journal's map tab). It was 21 until three rows left the panel: \
              `t` and `a` with the Layout group (the layout re-tidies itself, so a by-hand pass \
              was not earning a heading) and `h` with open-history (a no-op unless \
              record_turn_history is on, and the panel cannot say so). All three are still \
@@ -1400,7 +1431,7 @@ mod tests {
         assert_eq!(layout.leader_command('c'), Some("cycle-layer next"));
         // SQ-0446 Proposal B mnemonics:
         assert_eq!(layout.leader_command('n'), Some("edit-notes"));
-        assert_eq!(layout.leader_command('i'), Some("toggle-inventory-panel"));
+        assert_eq!(layout.leader_command('i'), Some("journal-tab inventory"));
         assert_eq!(layout.leader_command('l'), Some("toggle-portal-labels"));
         assert_eq!(layout.leader_command('v'), Some("toggle-command-panel"));
         assert_eq!(layout.leader_command('s'), Some("open-settings"));
@@ -1411,7 +1442,7 @@ mod tests {
         // ('z' was resize-panes' letter; SQ-0666 reclaimed the free slot for maZe.)
         assert_eq!(layout.leader_command('z'), Some("mark-maze-layer"));
         // 'k' was free after reset-pane-size left; SQ-0692 gave it the room panel.
-        assert_eq!(layout.leader_command('k'), Some("toggle-room-panel"));
+        assert_eq!(layout.leader_command('k'), Some("journal-tab room"));
         assert_eq!(layout.leader_command('x'), None); // reset-game moved to 'g'
         assert_eq!(layout.leader_command('1'), None);
     }

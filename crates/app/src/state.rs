@@ -159,28 +159,24 @@ impl RoomDockView {
 
 // ── Side panel cycle (SQ-1237) ──────────────────────────────────────────────
 
-/// Which of the two mutually-exclusive panels the story pane's border control
-/// summons is open: the command panel, the inventory panel, or neither.
+/// Whether the command panel the story pane's border control summons is open.
 ///
-/// The two panels never show at once — opening one closes the other — so one
-/// value, not two independent booleans, describes the pair. `/cycle-panel`
-/// (and a click on the border control) walks [`SidePanel::next`]; the value is
-/// what the per-game sidecar persists (`styles::PerGameConfig::panel`), the
-/// same single mechanism the command band's on/off state already used before
-/// the inventory panel joined the cycle.
+/// SQ-1237 made this a three-way cycle with an inventory panel; SQ-1684 moved
+/// the inventory into the Journal (a tab, not a panel), so it is two again.
+/// `/cycle-panel` (and a click on the border control) walks [`SidePanel::next`];
+/// the value is what the per-game sidecar persists
+/// (`styles::PerGameConfig::panel`).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum SidePanel {
     Command,
-    Inventory,
     None,
 }
 
 impl SidePanel {
-    /// The next state in the cycle: Command → Inventory → None → Command.
+    /// The next state in the cycle: Command → None → Command.
     pub fn next(self) -> SidePanel {
         match self {
-            SidePanel::Command => SidePanel::Inventory,
-            SidePanel::Inventory => SidePanel::None,
+            SidePanel::Command => SidePanel::None,
             SidePanel::None => SidePanel::Command,
         }
     }
@@ -189,7 +185,6 @@ impl SidePanel {
     pub fn key(self) -> &'static str {
         match self {
             SidePanel::Command => "command",
-            SidePanel::Inventory => "inventory",
             SidePanel::None => "none",
         }
     }
@@ -200,7 +195,6 @@ impl SidePanel {
     pub fn from_key(s: &str) -> Option<SidePanel> {
         match s {
             "command" => Some(SidePanel::Command),
-            "inventory" => Some(SidePanel::Inventory),
             "none" => Some(SidePanel::None),
             _ => Option::None,
         }
@@ -2348,13 +2342,8 @@ pub enum Layout {
 pub enum ResizeTarget {
     /// The story/map split ratio (`Layout::Split` only).
     StoryMap,
-    /// The inventory dock height.
-    InvDock,
     /// The command band's height (only while the band is open; SQ-0238).
     CommandBand,
-    /// The room dock's height, carved from the map pane's bottom (only while the
-    /// dock is open; SQ-0692).
-    RoomDock,
 }
 
 /// Where the event loop should go when the current story ends. `Exit` leaves
@@ -2392,12 +2381,6 @@ pub struct PaneSizes {
     pub split_ratio: u16,
     /// Command band height in rows, including its frame (default 8).
     pub band_height: u16,
-    /// Inventory dock height cap as % of screen height (default 33).
-    pub inv_dock_pct: u16,
-    /// Room dock height as % of screen height (default 33). Measured against the
-    /// FRAME, like `inv_dock_pct`, even though the dock is carved out of the map
-    /// pane — one unit for both docks, so `dock_pct_for_rows` inverts either.
-    pub room_dock_pct: u16,
 }
 
 /// Zoom levels for the map pane. `Boxes` is the closest/most-detailed view;
@@ -3561,8 +3544,9 @@ pub struct AppState {
 
     // ── Inventory panel state ─────────────────────────────────────────────────
 
-    /// When true, the inventory strip is shown above the input line.
-    pub show_inventory: bool,
+    /// Which tab the Journal shows (SQ-1684). The Journal itself is on screen
+    /// whenever `layout` is `Split`; this is which of its tabs is up.
+    pub journal_tab: crate::journal::JournalTab,
     /// Locked player object number once detected by the heuristic. None until
     /// the player moves between two rooms and exactly one object follows.
     pub player_obj: Option<u16>,
@@ -3793,14 +3777,8 @@ pub struct AppState {
     /// outlives the turn it describes.
     pub game_ended: bool,
 
-    /// Slide-in inventory dock (bottom). Session-only; starts closed.
-    pub inv_dock: crate::anim::PanelSlide,
     /// Slide-in command band (bottom). Session-only; starts closed.
     pub band_dock: crate::anim::PanelSlide,
-    /// Slide-in room dock, at the bottom of the MAP pane (SQ-0692).
-    /// Session-only; starts closed. Deliberately NOT an overlay: the map above
-    /// it stays fully interactive and the story prompt keeps the keyboard.
-    pub room_dock: crate::anim::PanelSlide,
 
     /// The room dock's two bodies scroll independently (SQ-1280), each sharing
     /// [`crate::list_scroll::ListScroll`] with every other scrollable list in the
@@ -3990,8 +3968,6 @@ impl Default for AppState {
             pane_sizes: PaneSizes {
                 split_ratio: 50,
                 band_height: crate::render::command_band::DEFAULT_BAND_ROWS,
-                inv_dock_pct: 33,
-                room_dock_pct: 33,
             },
             pending_config_write: false,
             resize_mode: false,
@@ -4026,7 +4002,7 @@ impl Default for AppState {
             source: crate::archive::SaveSource::default(),
             game_dir: std::path::PathBuf::new(),
             data_roots: None,
-            show_inventory: false,
+            journal_tab: crate::journal::JournalTab::default(),
             player_obj: None,
             inventory_fallback: Vec::new(),
             inventory_click_words: Vec::new(),
@@ -4060,9 +4036,7 @@ impl Default for AppState {
             inline_image_render: std::cell::RefCell::new(Default::default()),
             vm_halted: false,
             game_ended: false,
-            inv_dock: crate::anim::PanelSlide::closed(),
             band_dock: crate::anim::PanelSlide::closed(),
-            room_dock: crate::anim::PanelSlide::closed(),
             room_dock_info_scroll: crate::list_scroll::ListScroll::new(),
             room_dock_diag_scroll: crate::list_scroll::ListScroll::new(),
             room_dock_scroll_room: None,
@@ -4091,9 +4065,7 @@ impl AppState {
             || self.overlays.command_band.as_ref().is_some_and(|b| b.has_active_animation())
             || self.overlays.replay.as_ref().is_some_and(|r| r.scroll.has_active_animation())
             || self.overlays.hints.as_ref().is_some_and(|h| h.has_active_animation())
-            || self.inv_dock.active()
             || self.band_dock.active()
-            || self.room_dock.active()
             || self.notifications.needs_tick()
     }
 
@@ -4130,18 +4102,30 @@ impl AppState {
     pub fn current_side_panel(&self) -> SidePanel {
         if self.band_dock.open {
             SidePanel::Command
-        } else if self.show_inventory {
-            SidePanel::Inventory
         } else {
             SidePanel::None
         }
     }
 
-    /// True while the room dock is on screen — open, or still sliding out
-    /// (SQ-0692). The layout reserves rows for it in both cases, so a close
-    /// animates instead of snapping.
-    pub fn room_dock_visible(&self) -> bool {
-        self.room_dock.open || self.room_dock.active()
+    /// True while the Journal's Room tab is on screen (SQ-0692, SQ-1684).
+    pub fn room_tab_visible(&self) -> bool {
+        self.journal_tab == crate::journal::JournalTab::Room && self.layout == Layout::Split
+    }
+
+    /// True while the Journal's Inventory tab is on screen (SQ-1684). Gates the
+    /// per-frame inventory work the way the dock's visibility used to.
+    pub fn inventory_tab_visible(&self) -> bool {
+        self.journal_tab == crate::journal::JournalTab::Inventory && self.layout == Layout::Split
+    }
+
+    /// Show `tab` in the Journal, revealing the Journal first if the layout had
+    /// hidden it (SQ-1684). Selecting a tab the Journal is already on is a no-op
+    /// apart from that reveal.
+    pub fn set_journal_tab(&mut self, tab: crate::journal::JournalTab) {
+        self.journal_tab = tab;
+        if self.layout == Layout::TranscriptFull {
+            self.layout = Layout::Split;
+        }
     }
 
     /// True when the room dock is PINNED — which is exactly "a room is
@@ -4152,20 +4136,17 @@ impl AppState {
         self.selected_room.is_some()
     }
 
-    /// Open (or re-point) the room dock in `view`, animating the slide.
+    /// Switch the Journal to the Room tab in `view`.
     pub fn open_room_dock(&mut self, view: RoomDockView) {
         self.room_dock_view = view;
-        if !self.room_dock.open {
-            self.room_dock.toggle_to(true, false);
-            self.room_dock.arm(&self.config.animation);
-        }
+        self.set_journal_tab(crate::journal::JournalTab::Room);
     }
 
-    /// Close the room dock, animating the slide. The view is remembered.
+    /// Leave the Room tab for the Map tab. A no-op on any other tab, so an Esc
+    /// aimed at the room panel never yanks you off the inventory.
     pub fn close_room_dock(&mut self) {
-        if self.room_dock.open {
-            self.room_dock.toggle_to(false, false);
-            self.room_dock.arm(&self.config.animation);
+        if self.journal_tab == crate::journal::JournalTab::Room {
+            self.journal_tab = crate::journal::JournalTab::Map;
         }
     }
 
@@ -5129,16 +5110,8 @@ impl AppState {
         if self.layout == Layout::Split {
             targets.push(ResizeTarget::StoryMap);
         }
-        if self.show_inventory {
-            targets.push(ResizeTarget::InvDock);
-        }
         if self.overlays.command_band.is_some() {
             targets.push(ResizeTarget::CommandBand);
-        }
-        // The room dock is carved out of the map pane, so it is only a target
-        // when the map is on screen AND the dock is open (SQ-0692).
-        if self.room_dock.open && self.layout == Layout::Split && self.debug.is_none() {
-            targets.push(ResizeTarget::RoomDock);
         }
         targets
     }
@@ -5167,8 +5140,6 @@ impl AppState {
     pub fn sync_pane_sizes_to_config(&mut self) {
         self.config.split_ratio = self.pane_sizes.split_ratio;
         self.config.command_band.height = self.pane_sizes.band_height;
-        self.config.inv_dock_pct = self.pane_sizes.inv_dock_pct;
-        self.config.room_dock_pct = self.pane_sizes.room_dock_pct;
     }
 
     /// Reset all pane sizes to their config defaults and mirror into `config`.
@@ -5176,8 +5147,6 @@ impl AppState {
         self.pane_sizes = PaneSizes {
             split_ratio: crate::config::default_split_ratio(),
             band_height: crate::config::default_band_height(),
-            inv_dock_pct: crate::config::default_inv_dock_pct(),
-            room_dock_pct: crate::config::default_room_dock_pct(),
         };
         self.sync_pane_sizes_to_config();
     }
@@ -7266,9 +7235,9 @@ mod tests {
             scroll_ms: 100,
             ..Default::default()
         };
-        s.inv_dock.toggle_to(true, false);
-        s.inv_dock.arm(&cfg);
-        assert!(s.has_active_animation(), "arming inv_dock open counts as active");
+        s.band_dock.toggle_to(true, false);
+        s.band_dock.arm(&cfg);
+        assert!(s.has_active_animation(), "arming band_dock open counts as active");
     }
 
     #[test]
@@ -7654,16 +7623,15 @@ mod tests {
         assert!(s.any_overlay_open(), "hotkey_dialog true => any_overlay_open true");
         s.overlays.hotkey_dialog = false;
 
-        // room dock — deliberately NOT an overlay (SQ-0692). It reserves rows out
-        // of the map pane instead of covering it, so the story prompt and caret
-        // must survive it; the room panel it replaced counted here and blanked
-        // both.
-        s.room_dock.toggle_to(true, true);
+        // Room tab — deliberately NOT an overlay (SQ-0692). It takes the Journal's
+        // body instead of covering anything, so the story prompt and caret must
+        // survive it; the room panel it replaced counted here and blanked both.
+        s.set_journal_tab(crate::journal::JournalTab::Room);
         s.selected_room = Some(1);
         assert!(!s.any_overlay_open(), "the room panel is not an overlay, pinned or not");
         s.selected_room = None;
         assert!(!s.any_overlay_open());
-        s.room_dock.toggle_to(false, true);
+        s.journal_tab = crate::journal::JournalTab::Map;
 
         // tidy_anim
         s.tidy_anim = Some(TidyAnim::new(vec![TidyFrame {

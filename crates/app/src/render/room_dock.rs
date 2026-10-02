@@ -1,11 +1,11 @@
-//! The room dock: one panel, docked at the bottom of the map pane, describing
-//! one room (SQ-0692).
+//! The Journal's Room tab: one panel describing one room (SQ-0692, SQ-1684).
 //!
-//! It replaced two floating corner dialogs — Room Info (left-click) and the
-//! diagnostics Inspector (right-click / `/toggle-inspector`) — which each
-//! obscured the map they described, counted as a modal overlay, and never
-//! followed the player. The dock reserves its own rows out of the map pane
-//! instead, so it covers nothing, and it has two BODIES rather than two panels:
+//! It started as a dock under the map, replacing two floating corner dialogs —
+//! Room Info (left-click) and the diagnostics Inspector (right-click /
+//! `/toggle-inspector`) — which each obscured the map they described, counted
+//! as a modal overlay, and never followed the player. It is now the Journal's
+//! Room tab and gets the Journal's whole body. It has two BODIES rather than
+//! two panels:
 //!
 //! - **Info** — the room's notes, its exit card in the matrix vocabulary, and
 //!   (for the current room only) the objects the engine can see there.
@@ -17,9 +17,8 @@
 //! IS the selection (`state.selected_room`), so the map highlight, the matrix
 //! cross-highlight and the dock header always agree.
 //!
-//! Like the inventory dock, the caller sizes `area` from the animated
-//! `PanelSlide` fraction, so `area` may be shorter than the target height while
-//! a slide is in flight — everything here clips to `area`.
+//! Everything here clips to `area`, so a Journal too short to hold the panel
+//! draws what fits and no more.
 
 use mapper::graph::{MapGraph, RoomId};
 use ratatui::buffer::Buffer;
@@ -31,36 +30,6 @@ use crate::colors::ColorScheme;
 use crate::render::panel::{draw_panel, PanelSpec, PanelStrip};
 use crate::state::RoomDockView;
 use crate::symbols::SymbolSet;
-
-/// Rows the dock refuses to shrink below: 2 border rows, the header line and two
-/// body lines. Below that it says nothing a glance can use.
-pub const MIN_ROOM_DOCK_ROWS: u16 = 5;
-
-/// Rows the MAP pane keeps no matter how tall the dock is asked to be: its two
-/// border rows plus one row of map. A dock that can starve the pane it lives in
-/// is a dock you cannot drag back.
-pub const MIN_MAP_ROWS: u16 = 3;
-
-
-/// The dock's fully-open target height in rows: `pct`% of the frame, floored at
-/// [`MIN_ROOM_DOCK_ROWS`] and capped so the map pane keeps [`MIN_MAP_ROWS`].
-///
-/// A map pane too short to host both is left to the map entirely — the dock
-/// reports zero rather than squeezing into a sliver.
-pub fn room_dock_target_height(map_height: u16, frame_height: u16, pct: u16) -> u16 {
-    if map_height <= MIN_MAP_ROWS + MIN_ROOM_DOCK_ROWS {
-        return 0;
-    }
-    let want = ((frame_height as u32 * pct as u32) / 100) as u16;
-    want.max(MIN_ROOM_DOCK_ROWS)
-        .min(map_height.saturating_sub(MIN_MAP_ROWS))
-}
-
-/// The reserved dock band height: `target_h` scaled by the slide's current
-/// `fraction` (0.0 closed .. 1.0 fully open), rounded to the nearest row.
-pub fn room_dock_height(target_h: u16, fraction: f64) -> u16 {
-    (target_h as f64 * fraction).round() as u16
-}
 
 /// Which room the dock describes: the selected (pinned) room, else the room the
 /// player is standing in. `None` when neither exists — the map has not placed
@@ -104,15 +73,11 @@ pub fn header_line(
     }
 }
 
-/// The dock's hit-rects from one draw: the title-strip tabs, and the close box
-/// (SQ-1265) when the frame was wide enough to draw one.
+/// The panel's hit-rects from one draw: the title-strip tabs.
 pub struct RoomDockRects {
     /// A click on "Room"/"Diagnostics" switches the view the same way a click
     /// on a layer tab switches layers.
     pub tabs: Vec<(RoomDockView, Rect)>,
-    /// A click here closes the dock — the same effect as `toggle-room-panel`
-    /// while it is open. `None` when the frame was too narrow to draw one.
-    pub close: Option<Rect>,
     /// The ACTIVE body's total row count this frame (SQ-1280) — 0 when no body was
     /// drawn (missing room, zero area). The caller syncs its `ListScroll` against
     /// this after the draw returns, the same way it already tracks
@@ -128,16 +93,16 @@ pub struct RoomDockRects {
 /// - `room` is the resolved room ([`dock_room`]); `pinned` is `selected_room.is_some()`.
 /// - `room_objects` are the engine's live objects for the CURRENT room (empty
 ///   when introspection is unavailable); `current_room` gates their display.
-/// - `highlighted` is true when resize mode targets this dock or the pointer is
-///   on its top edge — the same accent every other pane boundary uses.
+/// - `highlighted` draws the border in the focus accent (the Journal has the
+///   keyboard).
 /// - `scroll_offset` is the ACTIVE body's scroll position in rows (SQ-1280),
 ///   already read from the caller's `ListScroll` for `view` — the body draw
 ///   clamps it defensively, so a stale offset (the room just changed, say)
 ///   never draws garbage.
 ///
 /// Returns the title-strip hit-rects, so a click on "Room"/"Diagnostics" switches
-/// the view the same way a click on a layer tab switches layers, plus the close
-/// box's rect and the active body's row totals for the caller's scroll sync.
+/// the view the same way a click on a layer tab switches layers, plus the active
+/// body's row totals for the caller's scroll sync.
 #[allow(clippy::too_many_arguments)]
 pub fn draw_room_dock(
     graph: &MapGraph,
@@ -154,7 +119,7 @@ pub fn draw_room_dock(
     buf: &mut Buffer,
 ) -> RoomDockRects {
     if area.width == 0 || area.height == 0 {
-        return RoomDockRects { tabs: Vec::new(), close: None, body_total: 0, body_viewport: 0 };
+        return RoomDockRects { tabs: Vec::new(), body_total: 0, body_viewport: 0 };
     }
     let style = colors.theme.get("room_panel").style;
     let header_style = colors
@@ -208,24 +173,9 @@ pub fn draw_room_dock(
         .zip(frame.tab_rects)
         .collect();
 
-    // The close box: same glyph, same "just inside the top-right border" spot,
-    // and the same reused border style `draw_dialog`'s `show_close` uses rather
-    // than a selector of its own (SQ-1265) — drawn LAST so it always wins the
-    // corner cell over the tab strip's own border fill.
-    let close = if area.width >= 3 {
-        let cx = area.right().saturating_sub(2);
-        let cy = area.y;
-        if let Some(cell) = buf.cell_mut((cx, cy)) {
-            cell.set_symbol("✕").set_style(border_color);
-        }
-        Some(Rect::new(cx, cy, 1, 1))
-    } else {
-        None
-    };
-
     let content = frame.content;
     if content.height == 0 || content.width == 0 {
-        return RoomDockRects { tabs, close, body_total: 0, body_viewport: 0 };
+        return RoomDockRects { tabs, body_total: 0, body_viewport: 0 };
     }
 
     draw_str_clipped(
@@ -244,7 +194,7 @@ pub fn draw_room_dock(
         content.height.saturating_sub(1),
     );
     if body.height == 0 {
-        return RoomDockRects { tabs, close, body_total: 0, body_viewport: 0 };
+        return RoomDockRects { tabs, body_total: 0, body_viewport: 0 };
     }
 
     let Some(id) = room.filter(|id| graph.room(*id).is_some()) else {
@@ -256,7 +206,7 @@ pub fn draw_room_dock(
             style,
             body,
         );
-        return RoomDockRects { tabs, close, body_total: 0, body_viewport: 0 };
+        return RoomDockRects { tabs, body_total: 0, body_viewport: 0 };
     };
 
     let body_total = match view {
@@ -287,7 +237,7 @@ pub fn draw_room_dock(
             .unwrap_or(0),
     };
 
-    RoomDockRects { tabs, close, body_total, body_viewport: body.height }
+    RoomDockRects { tabs, body_total, body_viewport: body.height }
 }
 
 // ── Tests ─────────────────────────────────────────────────────────────────────
@@ -348,26 +298,6 @@ mod tests {
         g.add_edge(2, Direction::W, 1);
         g.set_current(1);
         g
-    }
-
-    #[test]
-    fn target_height_floors_at_min_rows_and_caps_so_the_map_survives() {
-        // 33% of a 40-row frame is 13, and a 30-row map pane can spare it.
-        assert_eq!(room_dock_target_height(30, 40, 33), 13);
-        // A tiny percentage still gets the readable minimum.
-        assert_eq!(room_dock_target_height(30, 40, 1), MIN_ROOM_DOCK_ROWS);
-        // A greedy percentage is capped so the map keeps MIN_MAP_ROWS.
-        assert_eq!(room_dock_target_height(20, 40, 80), 20 - MIN_MAP_ROWS);
-        // A map pane with no room for both keeps every row.
-        assert_eq!(room_dock_target_height(MIN_MAP_ROWS + MIN_ROOM_DOCK_ROWS, 40, 33), 0);
-        assert_eq!(room_dock_target_height(0, 40, 33), 0);
-    }
-
-    #[test]
-    fn height_scales_with_the_slide_fraction() {
-        assert_eq!(room_dock_height(10, 0.0), 0);
-        assert_eq!(room_dock_height(10, 0.5), 5);
-        assert_eq!(room_dock_height(10, 1.0), 10);
     }
 
     #[test]
@@ -453,32 +383,6 @@ mod tests {
         assert!(tabs[0].1.right() <= tabs[1].1.x, "the two tabs do not overlap");
     }
 
-    /// The close box (SQ-1265) sits at the strip's right edge — the same spot
-    /// `draw_dialog`'s `show_close` uses, "just inside the top-right border" —
-    /// and is a real hit-rect on the header row, like the tabs beside it.
-    #[test]
-    fn the_dock_returns_a_hit_rect_for_the_close_box() {
-        let g = graph_with_current();
-        let area = Rect::new(0, 0, 60, 12);
-        let mut buf = Buffer::empty(area);
-        let rects = draw_room_dock(&g, Some(1), false, RoomDockView::Info, &[], Some(1), area,
-            &ColorScheme::default(), &SymbolSet::default(), false, 0, &mut buf);
-
-        let close = rects.close.expect("a 60-wide frame has room for the close box");
-        assert_eq!(close.y, area.y, "the close box sits on the header row, like the tabs");
-        assert_eq!(close.right(), area.right() - 1, "just inside the top-right border");
-        assert!(
-            close.x >= rects.tabs[1].1.right(),
-            "the close box does not overlap the Diagnostics tab: {close:?} vs {:?}",
-            rects.tabs[1].1,
-        );
-        assert_eq!(
-            buf.cell((close.x, close.y)).unwrap().symbol(),
-            "\u{2715}",
-            "the close glyph is drawn where the rect says it is",
-        );
-    }
-
     /// A click on each tab rect flips the dock to that view — driven through the SAME routing
     /// function the run loop calls, on the SAME rects the draw returned, so this is the real
     /// gesture and not a restatement of the router's `match`.
@@ -503,14 +407,14 @@ mod tests {
 
         let mut st = crate::state::AppState::default();
         let mut m = mapper::mapper::Mapper::default();
-        st.room_dock.toggle_to(true, true);
+        st.open_room_dock(RoomDockView::Info);
         assert_eq!(st.room_dock_view, RoomDockView::Info);
 
         // Every cell of each tab is a target, not just its first column.
         for (view, r) in tabs {
             for col in r.x..r.right() {
                 st.room_dock_view = view.flipped();
-                let action = room_dock_mouse_action(area, tabs, rects.close, &click(col, r.y), false)
+                let action = room_dock_mouse_action(area, tabs, &click(col, r.y), false)
                     .unwrap_or_else(|| panic!("a click inside the dock is always claimed"));
                 assert_eq!(action, Action::SetRoomDockView(*view), "col {col} of the {view:?} tab");
                 apply_action(action, &mut st, &mut m);
@@ -522,59 +426,15 @@ mod tests {
         // the click never falls through to the map or the story pane behind it.
         st.room_dock_view = RoomDockView::Info;
         let body = click(area.x + 3, area.bottom() - 2);
-        assert_eq!(room_dock_mouse_action(area, tabs, rects.close, &body, false), Some(Action::None));
+        assert_eq!(room_dock_mouse_action(area, tabs, &body, false), Some(Action::None));
         assert_eq!(st.room_dock_view, RoomDockView::Info);
 
         // A click OUTSIDE the dock is not the dock's business at all.
         assert_eq!(
-            room_dock_mouse_action(area, tabs, rects.close, &click(area.x, area.bottom() + 1), false),
+            room_dock_mouse_action(area, tabs, &click(area.x, area.bottom() + 1), false),
             None,
             "an event outside the dock rect falls through to normal routing"
         );
-    }
-
-    /// A click on the close box closes the dock — the same effect
-    /// `toggle-room-panel` has while it is open — and the "remembered" state
-    /// (the animated slide's own open flag) flips with it, so the next frame's
-    /// layout actually gives the rows back to the map. A click just outside the
-    /// box (one column short) is claimed by the tab strip's own rect at most,
-    /// never mistaken for the close box.
-    #[test]
-    fn clicking_the_close_box_closes_the_dock() {
-        use crate::input::{apply_action, room_dock_mouse_action, Action};
-        use crossterm::event::{KeyModifiers, MouseButton, MouseEvent, MouseEventKind};
-
-        let g = graph_with_current();
-        let area = Rect::new(0, 0, 60, 12);
-        let mut buf = Buffer::empty(area);
-        let rects = draw_room_dock(&g, Some(1), false, RoomDockView::Info, &[], Some(1), area,
-            &ColorScheme::default(), &SymbolSet::default(), false, 0, &mut buf);
-        let close = rects.close.expect("a 60-wide frame has room for the close box");
-
-        let click = |col: u16, row: u16| MouseEvent {
-            kind: MouseEventKind::Down(MouseButton::Left),
-            column: col,
-            row,
-            modifiers: KeyModifiers::NONE,
-        };
-
-        let mut st = crate::state::AppState::default();
-        let mut m = mapper::mapper::Mapper::default();
-        st.room_dock.toggle_to(true, true);
-        assert!(st.room_dock.open, "starts open");
-
-        let action = room_dock_mouse_action(area, &rects.tabs, rects.close, &click(close.x, close.y), false)
-            .unwrap_or_else(|| panic!("a click on the close box is always claimed"));
-        assert_eq!(action, Action::CloseRoomDock);
-        apply_action(action, &mut st, &mut m);
-        assert!(!st.room_dock.open, "the dock's remembered open flag flips");
-
-        // One column short of the box: claimed by the dock (it is still inside
-        // its rect) but never read as the close gesture.
-        st.room_dock.toggle_to(true, true);
-        let beside = room_dock_mouse_action(area, &rects.tabs, rects.close, &click(close.x - 1, close.y), false)
-            .unwrap_or_else(|| panic!("still inside the dock's own rect"));
-        assert_ne!(beside, Action::CloseRoomDock, "a miss beside the box is not the close gesture");
     }
 
     /// The strip is drawn by the shared component, so it wears the shared grammar: bracketed
@@ -648,7 +508,7 @@ mod tests {
     /// override must actually reach the buffer.
     ///
     /// (The `honor_game_colours` pairing for this dock lives in
-    /// `tests/room_dock_render.rs`, which drives it from a real `AppState`: the
+    /// `tests/suites/journal_room_tab.rs`, which drives it from a real `AppState`: the
     /// game's palette must not reach app chrome in EITHER mode, and only a state
     /// carrying that flag can show it.)
     #[test]
@@ -717,7 +577,7 @@ mod tests {
 
     /// A wheel notch anywhere inside the dock scrolls the active body — mapped to
     /// `Action::RoomDockScroll` with the sign `wheel_delta` resolves, `mouse_wheel_invert` and
-    /// all — and the tab/close routing above it is untouched.
+    /// all — and the tab routing above it is untouched.
     #[test]
     fn room_dock_mouse_action_maps_a_wheel_notch_to_room_dock_scroll() {
         use crate::input::{room_dock_mouse_action, Action};
@@ -732,22 +592,22 @@ mod tests {
         };
 
         assert_eq!(
-            room_dock_mouse_action(area, &[], None, &wheel(MouseEventKind::ScrollDown), false),
+            room_dock_mouse_action(area, &[], &wheel(MouseEventKind::ScrollDown), false),
             Some(Action::RoomDockScroll(1)),
         );
         assert_eq!(
-            room_dock_mouse_action(area, &[], None, &wheel(MouseEventKind::ScrollUp), false),
+            room_dock_mouse_action(area, &[], &wheel(MouseEventKind::ScrollUp), false),
             Some(Action::RoomDockScroll(-1)),
         );
         // `mouse_wheel_invert` flips it, same as every other wheel handler.
         assert_eq!(
-            room_dock_mouse_action(area, &[], None, &wheel(MouseEventKind::ScrollDown), true),
+            room_dock_mouse_action(area, &[], &wheel(MouseEventKind::ScrollDown), true),
             Some(Action::RoomDockScroll(-1)),
         );
 
         // A wheel event OUTSIDE the dock is still not the dock's business.
         let outside = MouseEvent { kind: MouseEventKind::ScrollDown, column: area.x, row: area.bottom() + 1, modifiers: KeyModifiers::NONE };
-        assert_eq!(room_dock_mouse_action(area, &[], None, &outside, false), None);
+        assert_eq!(room_dock_mouse_action(area, &[], &outside, false), None);
     }
 
     /// Applying `RoomDockScroll` actually moves the right body's `ListScroll` — Info and

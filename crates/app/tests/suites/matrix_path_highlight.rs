@@ -383,7 +383,7 @@ fn a_room_with_no_known_route_selects_and_says_so() {
     apply_action(Action::PinRoomDock(building, RoomDockView::Info), &mut st, &mut m);
 
     assert_eq!(st.selected_room, Some(building), "the room is selected exactly as usual");
-    assert!(st.room_dock.open, "and the dock still opens on it");
+    assert_eq!(st.journal_tab, app::journal::JournalTab::Map, "and the map stays up (pinning never swaps the tab)");
     assert!(st.room_path.is_empty(), "there is no route to draw");
     assert!(highlighted(&m.graph, &st, ADVENT_MAIN, WIDE).is_empty(), "so nothing is highlighted");
     assert!(
@@ -415,8 +415,8 @@ fn clicking_the_room_you_are_standing_in_is_not_a_refusal() {
     );
 }
 
-/// Esc walks back out the way you came in: the route first, then the pin, then the dock — the same
-/// ladder the room dock already had, with one rung added ahead of it.
+/// Esc walks back out the way you came in: the route first, then the pin, then the Room tab — the
+/// same ladder the room dock already had, with one rung added ahead of it.
 #[test]
 fn esc_clears_the_route_first_and_the_selection_second() {
     use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
@@ -432,7 +432,7 @@ fn esc_clears_the_route_first_and_the_selection_second() {
     apply_action(key_to_action(&st, esc), &mut st, &mut m);
     assert!(st.room_path.is_empty(), "the route is cleared");
     assert_eq!(st.selected_room, Some(dead_end), "…but the room is still selected");
-    assert!(st.room_dock.open, "…and the dock is still up");
+    assert_eq!(st.journal_tab, app::journal::JournalTab::Map, "…and the map is still up");
     let buf = draw(&m.graph, &st, WIDE);
     let maze4 = id_of(&m.graph, ADVENT_MAZE, "Maze 4");
     let r = cell_rect(&m.graph, ADVENT_MAZE, WIDE, maze4, Direction::S);
@@ -447,9 +447,14 @@ fn esc_clears_the_route_first_and_the_selection_second() {
     assert!(matches!(key_to_action(&st, esc), Action::UnpinRoomDock));
     apply_action(key_to_action(&st, esc), &mut st, &mut m);
     assert_eq!(st.selected_room, None, "the second Esc unpins");
-    assert!(st.room_dock.open, "…and still leaves the dock up");
+    assert_eq!(st.journal_tab, app::journal::JournalTab::Map, "…and still leaves the map up");
+    assert!(
+        !matches!(key_to_action(&st, esc), Action::CloseRoomDock | Action::UnpinRoomDock),
+        "with nothing left to back out of, Esc on the Map tab is not the panel's business"
+    );
 
-    // Rung 3: unchanged from before — the dock closes.
+    // Rung 3: with the Room tab up (the player went there by key), Esc leaves it for the map.
+    st.open_room_dock(RoomDockView::Info);
     assert!(matches!(key_to_action(&st, esc), Action::CloseRoomDock));
 }
 

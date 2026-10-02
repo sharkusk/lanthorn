@@ -1,5 +1,5 @@
 //! Group binary: The automap and its UI — matrix view and path highlighting, maze layers,
-//! the room dock, the command band, and room detection/corroboration.
+//! the Journal tabs, the command band, and room detection/corroboration.
 //!
 //! Each member below used to be its own test binary. The suites now live in
 //! `tests/suites/`, which cargo does not auto-build, and are pulled in here as
@@ -36,8 +36,8 @@ mod declared_exit;
 mod room_description;
 #[path = "suites/item_tracking.rs"]
 mod item_tracking;
-#[path = "suites/inventory_dock_registry.rs"]
-mod inventory_dock_registry;
+#[path = "suites/journal_inventory_tab.rs"]
+mod journal_inventory_tab;
 #[path = "suites/matrix_path_highlight.rs"]
 mod matrix_path_highlight;
 #[path = "suites/matrix_view.rs"]
@@ -56,8 +56,10 @@ mod mysterious_room_detection;
 mod nameonly_room_corroboration;
 #[path = "suites/retired_exit_surfaces.rs"]
 mod retired_exit_surfaces;
-#[path = "suites/room_dock_render.rs"]
-mod room_dock_render;
+#[path = "suites/journal_tabs.rs"]
+mod journal_tabs;
+#[path = "suites/journal_room_tab.rs"]
+mod journal_room_tab;
 #[path = "suites/sq1264_forest_randomization.rs"]
 mod sq1264_forest_randomization;
 #[path = "suites/sq1287_advent_map_layout.rs"]

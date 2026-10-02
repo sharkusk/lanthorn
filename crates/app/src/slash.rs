@@ -341,7 +341,7 @@ pub static COMMANDS: &[CommandSpec] = &[
         usage: "toggle-command-panel", description: "open or close the command panel; remembered per story",
         dispatch: |_| SlashOutcome::Action(crate::input::Action::OpenCommandBand) },
     CommandSpec { name: "cycle-panel", category: Category::Game, context: Context::Global,
-        usage: "cycle-panel", description: "cycle command panel → inventory panel → none; persisted per-game",
+        usage: "cycle-panel", description: "cycle command panel → none; persisted per-game",
         dispatch: |_| SlashOutcome::Action(crate::input::Action::CyclePanel) },
     CommandSpec { name: "toggle-timed-input", category: Category::Game, context: Context::Global,
         usage: "toggle-timed-input", description: "toggle honoring the game's timed-input timers",
@@ -452,11 +452,8 @@ pub static COMMANDS: &[CommandSpec] = &[
         // the EMPTY remainder — bare `move-region` auto-picks the seam and the destination when
         // each has only one possibility, which only the graph can answer (SQ-0439).
         dispatch: |a| SlashOutcome::Action(crate::input::Action::MoveRegion(a.join(" "))) },
-    CommandSpec { name: "toggle-room-panel", category: Category::Map, context: Context::Map,
-        usage: "toggle-room-panel", description: "open or close the room panel under the map",
-        dispatch: |_| SlashOutcome::Action(crate::input::Action::ToggleRoomDock) },
     CommandSpec { name: "toggle-inspector", category: Category::Map, context: Context::Map,
-        usage: "toggle-inspector", description: "show the room panel's diagnostics view (flips back to info when open)",
+        usage: "toggle-inspector", description: "show the Journal's Room tab on its diagnostics view (flips back to info when already there)",
         dispatch: |_| SlashOutcome::Action(crate::input::Action::ToggleRoomDiagnostics) },
     CommandSpec { name: "load-map", category: Category::Map, context: Context::Global,
         usage: "load-map <path>", description: "load a standalone map file into the current session",
@@ -490,16 +487,28 @@ pub static COMMANDS: &[CommandSpec] = &[
         dispatch: |_| SlashOutcome::Action(crate::input::Action::TogglePortalLabels) },
     // ── View ──────────────────────────────────────────────────────────────
     CommandSpec { name: "toggle-map", category: Category::View, context: Context::Global,
-        usage: "toggle-map", description: "show or hide the map panel; persisted per-game",
+        usage: "toggle-map", description: "show or hide the Journal (the map's panel); persisted per-game",
         dispatch: |_a| SlashOutcome::Action(crate::input::Action::ToggleMap) },
     CommandSpec { name: "toggle-focus", category: Category::View, context: Context::Global,
         usage: "toggle-focus", description: "switch focus between panes",
         dispatch: |_| SlashOutcome::Action(crate::input::Action::ToggleFocus) },
-    CommandSpec { name: "toggle-inventory-panel", category: Category::View, context: Context::Global,
-        usage: "toggle-inventory-panel", description: "open or close the inventory panel; remembered per story",
-        dispatch: |_| SlashOutcome::Action(crate::input::Action::ToggleInventory) },
+    CommandSpec { name: "journal-tab", category: Category::View, context: Context::Global,
+        usage: "journal-tab <map|room|inventory>", description: "show a tab of the Journal (the right-hand panel), revealing it if hidden; remembered per story",
+        dispatch: |a| match a.first().copied() {
+            None => err("journal-tab: a tab name is required (map | room | inventory)".to_string()),
+            Some(name) => match crate::journal::JournalTab::from_name(name) {
+                Some(tab) => SlashOutcome::Action(crate::input::Action::SetJournalTab(tab)),
+                None => err(format!("journal-tab: '{name}' is not a tab (map | room | inventory)")),
+            },
+        } },
+    CommandSpec { name: "journal-next-tab", category: Category::View, context: Context::Global,
+        usage: "journal-next-tab", description: "show the Journal's next tab, wrapping",
+        dispatch: |_| SlashOutcome::Action(crate::input::Action::JournalStepTab(true)) },
+    CommandSpec { name: "journal-prev-tab", category: Category::View, context: Context::Global,
+        usage: "journal-prev-tab", description: "show the Journal's previous tab, wrapping",
+        dispatch: |_| SlashOutcome::Action(crate::input::Action::JournalStepTab(false)) },
     CommandSpec { name: "filter-items", category: Category::View, context: Context::Global,
-        usage: "filter-items [query]", description: "filter the inventory panel (both Carrying and Elsewhere) to items matching query; no query clears the filter",
+        usage: "filter-items [query]", description: "filter the Journal's Inventory tab (both Carrying and Elsewhere) to items matching query; no query clears the filter",
         dispatch: |a| SlashOutcome::Action(crate::input::Action::SetInventoryFilter(
             if a.is_empty() { None } else { Some(a.join(" ")) }
         )) },
@@ -1165,7 +1174,9 @@ mod tests {
         // and `mark-maze-layer` arrived with the matrix view.
         // SQ-0692 added `toggle-room-panel` (as `toggle-room-dock`, renamed by
         // SQ-1237); `toggle-inspector` kept its name and now flips the SAME
-        // panel to its diagnostics body.
+        // panel to its diagnostics body. SQ-1684 folded the room and inventory
+        // docks into the Journal: `toggle-room-panel` and `toggle-inventory-panel`
+        // went, and `journal-tab`, `journal-next-tab` and `journal-prev-tab` came.
         // SQ-0761 added `dump-cells`, the cell-buffer half of `dump-windows`.
         // SQ-0994 added `dump-terminal`, the terminal-and-traffic half of the same
         // family: what was detected about the terminal, and which of those numbers
@@ -1204,7 +1215,7 @@ mod tests {
         // SQ-1680 added `download-documents`: the one command that lives in both the
         // game and the story browser (`in_both_worlds`) — the chooser over a game's
         // IFDB document links.
-        assert_eq!(COMMANDS.len(), 95, "registry must match the spec's Full command table");
+        assert_eq!(COMMANDS.len(), 96, "registry must match the spec's Full command table");
     }
 
     /// SQ-1237 unified the panel vocabulary — `command band` became `command

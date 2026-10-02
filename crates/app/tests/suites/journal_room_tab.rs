@@ -1,11 +1,13 @@
-//! The room dock rendered end to end, against real player data (SQ-0692).
+//! The Journal's Room tab rendered end to end, against real player data (SQ-0692, SQ-1684).
 //!
 //! `unit_tests/advent_maze_map.json` is a verbatim copy of the `map.json` from a lanthorn
-//! archive: one player's partial mapping of Colossal Cave. Driving the dock from a real graph is
+//! archive: one player's partial mapping of Colossal Cave. Driving the tab from a real graph is
 //! what makes "does the header name the room the way the matrix does" a meaningful question.
 //!
-//! Every colour assertion runs in BOTH `honor_game_colours` modes, per CLAUDE.md: the dock is app
+//! Every colour assertion runs in BOTH `honor_game_colours` modes, per CLAUDE.md: the tab is app
 //! chrome, so the game's palette must never reach it — and a single-mode suite could not show it.
+//! (The suite began as the room DOCK's; the dock became this tab, and its rect is now the
+//! Journal's body.)
 
 use mapper::graph::{MapGraph, RoomId};
 use ratatui::buffer::Buffer;
@@ -35,20 +37,19 @@ fn id_of(g: &MapGraph, label: &str) -> RoomId {
         .unwrap_or_else(|| panic!("no room labelled {label:?}"))
 }
 
-/// A state with the dock open (instantly, no slide), `honor_game_colours` pinned.
+/// A state with the Room tab up, `honor_game_colours` pinned.
 fn dock_state(honor: bool, view: RoomDockView) -> AppState {
     let mut st = AppState::default();
     st.config.honor_game_colours = honor;
-    st.room_dock.toggle_to(true, true);
-    st.room_dock_view = view;
+    st.open_room_dock(view);
     st
 }
 
-/// Render the dock exactly where the frame layout puts it, and return the buffer
-/// plus the dock's rect.
+/// Render the tab exactly where the frame layout puts it, and return the buffer
+/// plus the tab's rect (the Journal's body).
 fn draw(g: &MapGraph, st: &AppState) -> (Buffer, Rect) {
-    let pl = compute_pane_layout(FRAME, st, 0);
-    assert!(pl.room_dock.height > 0, "the layout must reserve dock rows for this test");
+    let pl = compute_pane_layout(FRAME, st);
+    assert!(pl.journal_body.height > 0, "the layout must give the Journal a body for this test");
     let mut buf = Buffer::empty(FRAME);
     let room = dock_room(st.selected_room, g);
     draw_room_dock(
@@ -58,14 +59,14 @@ fn draw(g: &MapGraph, st: &AppState) -> (Buffer, Rect) {
         st.room_dock_view,
         &[],
         g.current(),
-        pl.room_dock,
+        pl.journal_body,
         &st.colors,
         &st.symbols,
         false,
         0,
         &mut buf,
     );
-    (buf, pl.room_dock)
+    (buf, pl.journal_body)
 }
 
 fn text_in(buf: &Buffer, r: Rect) -> String {
@@ -205,65 +206,52 @@ fn the_dock_selectors_apply_in_both_colour_modes() {
     }
 }
 
-/// The dock docks below the map WHATEVER the layer draws as — including the matrix table, which
-/// has its own full-pane geometry. The map pane simply gets fewer rows.
+/// The Map tab draws the matrix table into the Journal's body — the table has its own full-pane
+/// geometry — and the Room tab hands the map rect back as nothing, so no map hit-test can fire
+/// while another tab is showing.
 #[test]
-fn the_dock_docks_below_the_matrix_view_too() {
+fn the_matrix_view_fills_the_map_tab_and_the_room_tab_takes_the_map_rect_away() {
     use mapper::layer::MapView;
 
     let m = advent();
     let mut st = AppState::default();
-    st.room_dock.toggle_to(true, true);
     st.set_viewed_layer(Some(1));
+    let map_tab = compute_pane_layout(FRAME, &st);
+    assert_eq!(map_tab.map, map_tab.journal_body, "the Map tab IS the Journal body");
+    assert!(map_tab.journal_body.height > 0);
 
-    let closed = {
-        let mut s = AppState::default();
-        s.set_viewed_layer(Some(1));
-        compute_pane_layout(FRAME, &s, 0)
-    };
-    let open = compute_pane_layout(FRAME, &st, 0);
-
-    assert!(open.room_dock.height > 0);
-    assert_eq!(open.room_dock.y, open.map.bottom(), "directly under the map pane");
-    assert_eq!(
-        open.map.height + open.room_dock.height,
-        closed.map.height,
-        "the rows come out of the map pane, whatever it is drawing"
-    );
-
-    // And the matrix simply renders into the shorter pane.
     let mut m2 = m;
     m2.graph.set_layer_view(1, Some(MapView::Matrix));
     let rm = mapper::render::render_layer(&m2.graph, 1);
     let mut buf = Buffer::empty(FRAME);
-    let hits = app::render::map::render_map_layered(&rm, &m2.graph, &st, open.map, &mut buf);
-    assert!(!hits.room_rects.is_empty(), "the matrix still publishes click targets in the shortened pane");
+    let hits = app::render::map::render_map_layered(&rm, &m2.graph, &st, map_tab.map, &mut buf);
+    assert!(!hits.room_rects.is_empty(), "the matrix publishes click targets in the Journal body");
     for (_, r) in &hits.room_rects {
-        assert!(r.bottom() <= open.room_dock.y, "nothing the matrix draws reaches into the dock");
+        assert!(
+            r.y >= map_tab.journal_body.y && r.bottom() <= map_tab.journal_body.bottom(),
+            "nothing the matrix draws leaves the Journal body"
+        );
     }
+
+    st.open_room_dock(RoomDockView::Info);
+    let room_tab = compute_pane_layout(FRAME, &st);
+    assert_eq!(room_tab.map, Rect::default(), "no map rect while the Room tab is up");
+    assert_eq!(room_tab.journal_body, map_tab.journal_body, "the tabs share one body rect");
 }
 
 /// SQ-0694: the whole Info body — header, objects, the twelve-direction card — fits inside the
-/// dock at its SHIPPED default height, at the map width a split-pane layout actually gives it.
-///
-/// This is the test that sets `room_dock_pct`'s default. The card used to be a fixed thirteen
-/// rows, which no default a 40-row terminal could spare would admit; spending columns instead
-/// brings the natural body down to about nine, so the default went back to the inventory dock's
-/// 33 rather than the 40 it needed before.
+/// Journal's body at the map width a split-pane layout actually gives it, and the card lays
+/// directions out three across rather than as twelve rows. (The tab has the Journal's whole
+/// height now, so the old dock-height default this test used to set is gone.)
 #[test]
-fn the_whole_info_body_fits_at_the_default_dock_height() {
+fn the_whole_info_body_fits_the_journal_body() {
     let mut m = advent();
     let here = id_of(&m.graph, "Inside Building");
     m.graph.set_current(here);
 
     let st = dock_state(true, RoomDockView::Info);
-    assert_eq!(
-        st.pane_sizes.room_dock_pct,
-        app::config::Config::default().room_dock_pct,
-        "this test is about the DEFAULT height"
-    );
 
-    let pl = compute_pane_layout(FRAME, &st, 0);
+    let pl = compute_pane_layout(FRAME, &st);
     let mut buf = Buffer::empty(FRAME);
     let objects = ["a brass lantern".to_string(), "a small mat".to_string()];
     draw_room_dock(
@@ -273,20 +261,20 @@ fn the_whole_info_body_fits_at_the_default_dock_height() {
         RoomDockView::Info,
         &objects,
         Some(here),
-        pl.room_dock,
+        pl.journal_body,
         &st.colors,
         &st.symbols,
         false,
         0,
         &mut buf,
     );
-    let text = text_in(&buf, pl.room_dock);
+    let text = text_in(&buf, pl.journal_body);
 
     assert!(text.contains("Inside Building"), "the header: {text}");
     assert!(text.contains("Here:") && text.contains("a brass lantern"), "the objects: {text}");
     assert!(text.contains("Exits:"), "the card's label: {text}");
     for d in ["N ", "S ", "E ", "W ", "NE", "NW", "SE", "SW", "Up", "Dn", "In", "Out"] {
-        assert!(text.contains(d), "every direction is on screen at the default height; {d} is not:\n{text}");
+        assert!(text.contains(d), "every direction is on screen; {d} is not:\n{text}");
     }
 
     // …and it is a GRID, not twelve rows: three directions from three different groups share one.
@@ -295,9 +283,9 @@ fn the_whole_info_body_fits_at_the_default_dock_height() {
         "the card lays out three across at this width:\n{text}"
     );
 
-    // Nothing spilled past the dock: the body ends inside its own rows.
+    // Nothing spilled past the tab: the body ends inside its own rows.
     let used = text.lines().filter(|l| !l.trim_matches(['│', ' ']).is_empty()).count();
-    assert!(used <= pl.room_dock.height as usize, "the body fits its rect");
+    assert!(used <= pl.journal_body.height as usize, "the body fits its rect");
 }
 
 // ── Real-game smoke (gitignored fixture; skips vacuously) ────────────────────
@@ -341,7 +329,7 @@ fn the_info_body_lists_the_current_rooms_objects_from_a_real_engine() {
     m.observe(here, &loc.name, None);
     let st = dock_state(true, RoomDockView::Info);
 
-    let pl = compute_pane_layout(FRAME, &st, 0);
+    let pl = compute_pane_layout(FRAME, &st);
     let mut buf = Buffer::empty(FRAME);
     draw_room_dock(
         &m.graph,
@@ -350,14 +338,14 @@ fn the_info_body_lists_the_current_rooms_objects_from_a_real_engine() {
         RoomDockView::Info,
         &objects,
         Some(here),
-        pl.room_dock,
+        pl.journal_body,
         &st.colors,
         &st.symbols,
         false,
         0,
         &mut buf,
     );
-    let text = text_in(&buf, pl.room_dock);
+    let text = text_in(&buf, pl.journal_body);
     assert!(text.contains("Here:"), "the current room gets an objects section: {text}");
     assert!(
         objects.iter().any(|o| text.contains(o.as_str())),
@@ -375,13 +363,13 @@ fn the_info_body_lists_the_current_rooms_objects_from_a_real_engine() {
         RoomDockView::Info,
         &objects,
         Some(here),
-        pl.room_dock,
+        pl.journal_body,
         &st.colors,
         &st.symbols,
         false,
         0,
         &mut buf,
     );
-    let text = text_in(&buf, pl.room_dock);
+    let text = text_in(&buf, pl.journal_body);
     assert!(!text.contains("Here:"), "a room the player is not in gets no object list: {text}");
 }

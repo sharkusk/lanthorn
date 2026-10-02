@@ -12602,11 +12602,11 @@ mod tests {
         let mut state = frameless_state();
 
         state.layout = crate::state::Layout::Split;
-        let split = crate::layout::compute_pane_layout(frame, &state, 0);
+        let split = crate::layout::compute_pane_layout(frame, &state);
         let (_, with_map) = story_screen_dims(split.story, &state).expect("a split pane");
 
         state.layout = crate::state::Layout::TranscriptFull;
-        let full = crate::layout::compute_pane_layout(frame, &state, 0);
+        let full = crate::layout::compute_pane_layout(frame, &state);
         let (_, without_map) = story_screen_dims(full.story, &state).expect("a full pane");
 
         assert!(

@@ -1,6 +1,6 @@
 //! Mouse drag-resize for the pane boundaries (SQ-0669).
 //!
-//! Resize mode (`/resize-panes`) moves the same three sizes with the arrow keys;
+//! Resize mode (`/resize-panes`) moves the same two sizes with the arrow keys;
 //! this is the direct-manipulation path for them. The two agree by construction:
 //! both clamp to the limits in [`crate::layout`] and both mirror into
 //! `state.config` through [`AppState::sync_pane_sizes_to_config`].
@@ -19,7 +19,7 @@ use crossterm::event::{MouseButton, MouseEvent, MouseEventKind};
 use ratatui::layout::Rect;
 
 use crate::layout::{
-    boundary_at, dock_pct_for_rows, split_pct_for_story_width, Boundary, BoundaryZone, PaneLayout,
+    boundary_at, split_pct_for_story_width, Boundary, BoundaryZone, PaneLayout,
 };
 use crate::render::controls::{control_at, BorderControl};
 use crate::render::command_band::{MAX_BAND_ROWS, MIN_BAND_ROWS};
@@ -39,11 +39,10 @@ pub struct PaneDrag {
     /// horizontal edges.
     pub origin: u16,
     /// The size the boundary had at Down, in cells: the story pane's width for
-    /// the splitter, the band's height for the horizontal edges.
+    /// the splitter, the band's height for the band's edge.
     pub start_cells: u16,
-    /// The area the conversion inverts against: the story+map region for the
-    /// splitter, the whole frame for the inventory dock (whose height is a
-    /// percentage of it). Unused by the command band, which is sized in rows.
+    /// The area the conversion inverts against: the story+Journal region for the
+    /// splitter. Unused by the command band, which is sized in rows.
     pub area: Rect,
 }
 
@@ -66,10 +65,10 @@ pub enum DragOutcome {
 /// alongside the other hit-rects). `controls` are the story pane's border
 /// toggles, which OVERLAP a grab zone and take priority inside their own cells —
 /// see [`on_mouse`]'s Down arm. `chrome` is every OTHER clickable rect that
-/// overlaps a grab zone but isn't a `BorderControl` — the room dock's view tabs
-/// and its close box sit on `Boundary::RoomDockTop`'s own row (SQ-1265), and
-/// without this a Down on a tab label started a resize drag instead of
-/// reaching `room_dock_mouse_action`, so the tab click never arrived.
+/// overlaps a grab zone but isn't a `BorderControl` — the Journal's tab bar sits
+/// against the splitter, and at a wide `grab_zone_cells` the zone reaches over
+/// the first tab label; without this a Down on that label started a resize drag
+/// instead of switching tabs.
 pub fn on_mouse(
     state: &mut AppState,
     m: &MouseEvent,
@@ -109,9 +108,9 @@ pub fn on_mouse(
                 return DragOutcome::Ignored;
             }
             // A border control owns its own cell (SQ-1123). The bottom-border
-            // cluster shares its row with the command band's and the inventory
-            // dock's grab zone — the layout puts each band's first row directly
-            // under the story pane, so `band.y - 1` IS the pane's bottom border —
+            // cluster shares its row with the command band's grab zone — the
+            // layout puts the band's first row directly under the story pane,
+            // so `band.y - 1` IS the pane's bottom border —
             // and a click on a toggle has to toggle rather than start a one-row
             // resize it would then commit unchanged, swallowing the click whole.
             //
@@ -128,8 +127,8 @@ pub fn on_mouse(
                 return DragOutcome::Ignored;
             }
             // Same trade as `control_at` above, for chrome that isn't a
-            // `BorderControl`: a tab label or the close box owns its own cell,
-            // and the edge stays grabbable everywhere else in the row.
+            // `BorderControl`: a tab label owns its own cell, and the edge stays
+            // grabbable everywhere else.
             if chrome_at(chrome, m.column, m.row) {
                 return DragOutcome::Ignored;
             }
@@ -190,25 +189,10 @@ fn anchor(boundary: Boundary, pl: &PaneLayout, col: u16, row: u16) -> PaneDrag {
             start_cells: pl.story.width,
             area: pl.panes_area(),
         },
-        Boundary::InvDockTop => PaneDrag {
-            boundary,
-            origin: row,
-            start_cells: pl.inv_dock.height,
-            area: pl.frame,
-        },
         Boundary::CommandBandTop => PaneDrag {
             boundary,
             origin: row,
             start_cells: pl.command_band.height,
-            area: pl.frame,
-        },
-        // The room dock lives inside the map pane but is SIZED against the frame
-        // (see `PaneSizes::room_dock_pct`), so the inversion area is the frame —
-        // the same one `dock_pct_for_rows` is asked about at layout time.
-        Boundary::RoomDockTop => PaneDrag {
-            boundary,
-            origin: row,
-            start_cells: pl.room_dock.height,
             area: pl.frame,
         },
     }
@@ -226,21 +210,11 @@ fn track(state: &mut AppState, col: u16, row: u16) {
                 .clamp(0, d.area.width as i32) as u16;
             state.pane_sizes.split_ratio = split_pct_for_story_width(d.area, want);
         }
-        // The docks grow UPWARD, so a pointer moving up (smaller row) adds rows.
-        Boundary::InvDockTop => {
-            let want = (d.start_cells as i32 + (d.origin as i32 - row as i32))
-                .clamp(0, d.area.height as i32) as u16;
-            state.pane_sizes.inv_dock_pct = dock_pct_for_rows(d.area.height, want);
-        }
+        // The band grows UPWARD, so a pointer moving up (smaller row) adds rows.
         Boundary::CommandBandTop => {
             let want = (d.start_cells as i32 + (d.origin as i32 - row as i32))
                 .clamp(MIN_BAND_ROWS as i32, MAX_BAND_ROWS as i32) as u16;
             state.pane_sizes.band_height = want;
-        }
-        Boundary::RoomDockTop => {
-            let want = (d.start_cells as i32 + (d.origin as i32 - row as i32))
-                .clamp(0, d.area.height as i32) as u16;
-            state.pane_sizes.room_dock_pct = dock_pct_for_rows(d.area.height, want);
         }
     }
     state.sync_pane_sizes_to_config();
@@ -294,15 +268,10 @@ mod tests {
         state.band_dock.toggle_to(true, true);
     }
 
-    fn open_dock(state: &mut AppState) {
-        state.show_inventory = true;
-        state.inv_dock.toggle_to(true, true);
-    }
-
     /// Re-derive the frame's geometry + zones from the current state, the way
     /// the run loop does each frame.
-    fn frame(state: &AppState, a: Rect, items: usize) -> (PaneLayout, Vec<BoundaryZone>) {
-        let pl = compute_pane_layout(a, state, items);
+    fn frame(state: &AppState, a: Rect, _unused: usize) -> (PaneLayout, Vec<BoundaryZone>) {
+        let pl = compute_pane_layout(a, state);
         let zones = pl.boundary_zones();
         (pl, zones)
     }
@@ -336,24 +305,6 @@ mod tests {
         assert!(zones.iter().all(|z| z.boundary != Boundary::StoryMapSplit));
     }
 
-    #[test]
-    fn dock_zone_is_the_pane_border_plus_the_docks_own_border() {
-        let mut s = AppState::default();
-        open_dock(&mut s);
-        let (pl, zones) = frame(&s, area(80, 24), 3);
-        assert!(pl.inv_dock.height > 0);
-        let z = zones
-            .iter()
-            .find(|z| z.boundary == Boundary::InvDockTop)
-            .expect("an open dock has a top edge");
-        assert_eq!(z.rect.y, pl.inv_dock.y - 1, "the story pane's bottom border row");
-        assert_eq!(z.rect.height, 2, "plus the dock's own top border row");
-        assert_eq!(z.rect.width, pl.inv_dock.width, "full width");
-        assert_eq!(boundary_at(&zones, 10, pl.inv_dock.y), Some(Boundary::InvDockTop));
-        assert_eq!(boundary_at(&zones, 10, pl.inv_dock.y - 1), Some(Boundary::InvDockTop));
-        assert_eq!(boundary_at(&zones, 10, pl.inv_dock.y + 1), None, "inside the dock");
-    }
-
     /// The band is borderless (SQ-0667), so its zone is only the pane-border row
     /// above it — the band's own first row belongs to its column headers.
     #[test]
@@ -367,13 +318,6 @@ mod tests {
             .expect("an open band has a top edge");
         assert_eq!(z.rect, Rect::new(pl.command_band.x, pl.command_band.y - 1, pl.command_band.width, 1));
         assert_eq!(boundary_at(&zones, 10, pl.command_band.y), None, "the header row stays clickable");
-    }
-
-    #[test]
-    fn closed_docks_have_no_zones() {
-        let s = AppState::default();
-        let (_, zones) = frame(&s, area(80, 24), 0);
-        assert!(zones.iter().all(|z| z.boundary == Boundary::StoryMapSplit));
     }
 
     // ── Down claims the drag; other Downs do not ─────────────────────────────
@@ -435,7 +379,7 @@ mod tests {
                 on_mouse(&mut s, &down(start_x, 6), &pl, &zones, NO_CONTROLS, NO_CHROME);
                 let to = (start_x as i32 + step) as u16;
                 on_mouse(&mut s, &drag(to, 6), &pl, &zones, NO_CONTROLS, NO_CHROME);
-                let after = compute_pane_layout(area(w, 24), &s, 0);
+                let after = compute_pane_layout(area(w, 24), &s);
                 assert_eq!(
                     after.story.width as i32,
                     start_w as i32 + step,
@@ -481,7 +425,7 @@ mod tests {
         // Both panes survive either extreme.
         for pct in [20u16, 80] {
             s.pane_sizes.split_ratio = pct;
-            let pl = compute_pane_layout(area(80, 24), &s, 0);
+            let pl = compute_pane_layout(area(80, 24), &s);
             assert!(pl.story.width > 0 && pl.map.width > 0, "pct={pct}");
         }
     }
@@ -565,7 +509,7 @@ mod tests {
         on_mouse(&mut s, &down(10, y), &pl, &zones, NO_CONTROLS, NO_CHROME);
         on_mouse(&mut s, &drag(10, y - 2), &pl, &zones, NO_CONTROLS, NO_CHROME);
         assert_eq!(s.pane_sizes.band_height, start + 2, "up two rows grows it two rows");
-        assert_eq!(compute_pane_layout(area(80, 24), &s, 0).command_band.height, start + 2);
+        assert_eq!(compute_pane_layout(area(80, 24), &s).command_band.height, start + 2);
         on_mouse(&mut s, &drag(10, y + 1), &pl, &zones, NO_CONTROLS, NO_CHROME);
         assert_eq!(s.pane_sizes.band_height, start - 1, "and back down shrinks it");
         on_mouse(&mut s, &up(10, y + 1), &pl, &zones, NO_CONTROLS, NO_CHROME);
@@ -585,71 +529,6 @@ mod tests {
         on_mouse(&mut s, &up(10, 39), &pl, &zones, NO_CONTROLS, NO_CHROME);
     }
 
-    /// The dock's height is a percentage of the frame, so the drag inverts that
-    /// percentage: pulling the edge up by n rows must show n more rows of dock
-    /// (while the item list has rows left to show).
-    #[test]
-    fn dragging_the_dock_edge_grows_it_by_the_rows_dragged() {
-        let items = 20; // plenty, so the cap binds rather than the content
-        // Frame heights a percentage does NOT divide evenly, so a conversion
-        // that rounded the wrong way would land a row short.
-        for h in [24u16, 30, 40] {
-            for step in [1u16, 2, 3] {
-                let mut s = AppState::default();
-                open_dock(&mut s);
-                let (pl, zones) = frame(&s, area(80, h), items);
-                let start = pl.inv_dock.height;
-                let y = pl.inv_dock.y;
-                on_mouse(&mut s, &down(10, y), &pl, &zones, NO_CONTROLS, NO_CHROME);
-                on_mouse(&mut s, &drag(10, y - step), &pl, &zones, NO_CONTROLS, NO_CHROME);
-                let after = compute_pane_layout(area(80, h), &s, items);
-                assert_eq!(after.inv_dock.height, start + step, "height {h}, up {step}");
-                on_mouse(&mut s, &up(10, y - step), &pl, &zones, NO_CONTROLS, NO_CHROME);
-            }
-        }
-    }
-
-    /// Holding the dock edge still must hold the DOCK still: the pct is
-    /// recomputed from the pointer every event, so a conversion that rounded
-    /// down would shave a row off a drag that went nowhere.
-    #[test]
-    fn a_dock_drag_that_goes_nowhere_changes_nothing() {
-        for h in [24u16, 27, 30, 33, 40] {
-            let mut s = AppState::default();
-            open_dock(&mut s);
-            let (pl, zones) = frame(&s, area(80, h), 20);
-            let start = pl.inv_dock.height;
-            let y = pl.inv_dock.y;
-            on_mouse(&mut s, &down(10, y), &pl, &zones, NO_CONTROLS, NO_CHROME);
-            on_mouse(&mut s, &drag(10, y), &pl, &zones, NO_CONTROLS, NO_CHROME);
-            on_mouse(&mut s, &up(10, y), &pl, &zones, NO_CONTROLS, NO_CHROME);
-            assert_eq!(
-                compute_pane_layout(area(80, h), &s, 20).inv_dock.height,
-                start,
-                "height {h}"
-            );
-        }
-    }
-
-    #[test]
-    fn dock_drag_clamps_to_the_dock_pct_limits() {
-        let mut s = AppState::default();
-        open_dock(&mut s);
-        let (pl, zones) = frame(&s, area(80, 40), 40);
-        let y = pl.inv_dock.y;
-        // Again the literals are resize mode's arrow-key limits.
-        assert_eq!(
-            (crate::layout::MIN_INV_DOCK_PCT, crate::layout::MAX_INV_DOCK_PCT),
-            (10, 80)
-        );
-        on_mouse(&mut s, &down(10, y), &pl, &zones, NO_CONTROLS, NO_CHROME);
-        on_mouse(&mut s, &drag(10, 0), &pl, &zones, NO_CONTROLS, NO_CHROME);
-        assert_eq!(s.pane_sizes.inv_dock_pct, 80);
-        on_mouse(&mut s, &drag(10, 39), &pl, &zones, NO_CONTROLS, NO_CHROME);
-        assert_eq!(s.pane_sizes.inv_dock_pct, 10);
-        on_mouse(&mut s, &up(10, 39), &pl, &zones, NO_CONTROLS, NO_CHROME);
-    }
-
     /// A drag that ends where it began leaves the layout where it began — the
     /// anchors are captured at Down, so no rounding accumulates.
     #[test]
@@ -662,7 +541,7 @@ mod tests {
             on_mouse(&mut s, &drag(to, 6), &pl, &zones, NO_CONTROLS, NO_CHROME);
         }
         on_mouse(&mut s, &up(x, 6), &pl, &zones, NO_CONTROLS, NO_CHROME);
-        assert_eq!(compute_pane_layout(area(80, 24), &s, 0).story, pl.story);
+        assert_eq!(compute_pane_layout(area(80, 24), &s).story, pl.story);
     }
 
     // ── Commit / interrupt ───────────────────────────────────────────────────
@@ -684,7 +563,7 @@ mod tests {
     }
 
     #[test]
-    fn band_and_dock_sizes_mirror_to_their_own_config_keys() {
+    fn band_size_mirrors_to_its_config_key() {
         let mut s = AppState::default();
         open_band(&mut s);
         let (pl, zones) = frame(&s, area(80, 24), 0);
@@ -694,126 +573,38 @@ mod tests {
         on_mouse(&mut s, &up(10, y - 2), &pl, &zones, NO_CONTROLS, NO_CHROME);
         assert_eq!(s.config.command_band.height, s.pane_sizes.band_height);
         assert!(s.pending_config_write);
-
-        let mut s = AppState::default();
-        open_dock(&mut s);
-        let (pl, zones) = frame(&s, area(80, 40), 20);
-        let y = pl.inv_dock.y;
-        on_mouse(&mut s, &down(10, y), &pl, &zones, NO_CONTROLS, NO_CHROME);
-        on_mouse(&mut s, &drag(10, y - 3), &pl, &zones, NO_CONTROLS, NO_CHROME);
-        on_mouse(&mut s, &up(10, y - 3), &pl, &zones, NO_CONTROLS, NO_CHROME);
-        assert_eq!(s.config.inv_dock_pct, s.pane_sizes.inv_dock_pct);
-        assert!(s.pending_config_write);
     }
 
-    // ── Room dock (SQ-0692) ──────────────────────────────────────────────────
+    // ── The Journal's tab bar and the splitter (SQ-1684) ─────────────────────
 
-    fn open_room_dock(state: &mut AppState) {
-        state.room_dock.toggle_to(true, true);
-    }
-
-    /// A Down that lands on the room dock's own chrome — a view tab, or its
-    /// close box — must not start a resize drag. The tab strip is drawn on
-    /// the SAME row `Boundary::RoomDockTop`'s zone grabs
-    /// (`the_dock_returns_a_hit_rect_for_each_view_tab` asserts `r.y ==
-    /// area.y`, and the zone's own rect is `band.y - 1 ..= band.y`), so
-    /// without excluding it here a click on "Room"/"Diagnostics" started a
-    /// drag instead of reaching `room_dock_mouse_action`, and the tab click
-    /// never arrived (SQ-1265).
+    /// At a wide `grab_zone_cells` the splitter's zone reaches over the Journal's
+    /// first tab label. A Down on the label must reach the tab click, not start
+    /// a resize — the tab bar's rects are passed as `chrome` — while the story
+    /// side of the same zone stays grabbable.
     #[test]
-    fn a_dock_tab_keeps_its_own_cell_out_of_the_drag() {
+    fn a_journal_tab_keeps_its_own_cell_out_of_the_drag() {
         let mut s = AppState::default();
-        open_room_dock(&mut s);
-        let (pl, zones) = frame(&s, area(80, 40), 0);
-        let y = pl.room_dock.y;
-        let tab_x = pl.room_dock.x + 2;
-        let chrome: &[Rect] = &[Rect::new(tab_x, y, 6, 1)];
+        s.config.grab_zone_cells = crate::layout::MAX_GRAB_ZONE_CELLS;
+        let (pl, zones) = frame(&s, area(80, 24), 0);
+        let y = pl.journal_tabs.y;
+        let tab = Rect::new(pl.journal.x, y, 5, 1);
+        let chrome: &[Rect] = &[tab];
+        assert_eq!(boundary_at(&zones, tab.x + 1, y), Some(Boundary::StoryMapSplit), "the zone does reach the label");
 
-        // On the tab: declined, so the click path downstream gets the event.
         assert_eq!(
-            on_mouse(&mut s, &down(tab_x + 1, y), &pl, &zones, NO_CONTROLS, chrome),
+            on_mouse(&mut s, &down(tab.x + 1, y), &pl, &zones, NO_CONTROLS, chrome),
             DragOutcome::Ignored,
         );
         assert!(s.pane_drag.is_none(), "no drag was started under the tab");
-
-        // A few cells to the side, same row: the edge is still draggable.
-        let x = pl.room_dock.right() - 5;
         assert_eq!(
-            on_mouse(&mut s, &down(x, y), &pl, &zones, NO_CONTROLS, chrome),
+            on_mouse(&mut s, &down(pl.story.right() - 1, y), &pl, &zones, NO_CONTROLS, chrome),
             DragOutcome::Consumed,
-            "the dock edge is still draggable beside the tab",
+            "the splitter is still draggable on the story side",
         );
-        on_mouse(&mut s, &up(x, y), &pl, &zones, NO_CONTROLS, chrome);
+        on_mouse(&mut s, &up(pl.story.right() - 1, y), &pl, &zones, NO_CONTROLS, chrome);
     }
 
-    /// Dragging the room dock's top edge upward grows the dock by that many
-    /// rows out of the map pane — the same direct-manipulation contract the
-    /// inventory dock has, on the boundary inside the map.
-    #[test]
-    fn dragging_the_room_dock_edge_up_grows_it_by_that_many_rows() {
-        let mut s = AppState::default();
-        open_room_dock(&mut s);
-        let a = area(80, 40);
-        let (pl0, _) = frame(&s, a, 0);
-        let start = pl0.room_dock.height;
-        let y = pl0.room_dock.y;
-        let x = pl0.room_dock.x + 5;
-
-        for step in [1u16, 2, 4] {
-            let (pl, zones) = frame(&s, a, 0);
-            let start = pl.room_dock.height;
-            let y = pl.room_dock.y;
-            on_mouse(&mut s, &down(x, y), &pl, &zones, NO_CONTROLS, NO_CHROME);
-            on_mouse(&mut s, &drag(x, y - step), &pl, &zones, NO_CONTROLS, NO_CHROME);
-            assert_eq!(
-                compute_pane_layout(a, &s, 0).room_dock.height,
-                start + step,
-                "up {step}"
-            );
-            on_mouse(&mut s, &up(x, y - step), &pl, &zones, NO_CONTROLS, NO_CHROME);
-        }
-
-        // …and a drag that goes nowhere leaves it exactly where it was.
-        let (pl, zones) = frame(&s, a, 0);
-        let held = pl.room_dock.height;
-        on_mouse(&mut s, &down(x, pl.room_dock.y), &pl, &zones, NO_CONTROLS, NO_CHROME);
-        on_mouse(&mut s, &drag(x, pl.room_dock.y), &pl, &zones, NO_CONTROLS, NO_CHROME);
-        on_mouse(&mut s, &up(x, pl.room_dock.y), &pl, &zones, NO_CONTROLS, NO_CHROME);
-        assert_eq!(compute_pane_layout(a, &s, 0).room_dock.height, held);
-        let _ = (start, y, zones);
-    }
-
-    /// The drag clamps to the same percentage limits resize mode's arrows use,
-    /// and the map pane survives even at the maximum.
-    #[test]
-    fn room_dock_drag_clamps_and_leaves_the_map_alive() {
-        let mut s = AppState::default();
-        open_room_dock(&mut s);
-        // A SHORT frame, so the map's own floor is what stops the drag rather than
-        // the percentage ceiling — on a tall frame the two never disagree and the
-        // floor assertion below would be vacuous.
-        let a = area(80, 12);
-        let (pl, zones) = frame(&s, a, 0);
-        let y = pl.room_dock.y;
-        let x = pl.room_dock.x + 5;
-        assert_eq!(
-            (crate::layout::MIN_ROOM_DOCK_PCT, crate::layout::MAX_ROOM_DOCK_PCT),
-            (10, 80)
-        );
-        on_mouse(&mut s, &down(x, y), &pl, &zones, NO_CONTROLS, NO_CHROME);
-        on_mouse(&mut s, &drag(x, 0), &pl, &zones, NO_CONTROLS, NO_CHROME);
-        assert_eq!(s.pane_sizes.room_dock_pct, 80);
-        assert_eq!(
-            compute_pane_layout(a, &s, 0).map.height,
-            crate::render::room_dock::MIN_MAP_ROWS,
-            "the map pane keeps its floor even at the maximum dock"
-        );
-        on_mouse(&mut s, &drag(x, 11), &pl, &zones, NO_CONTROLS, NO_CHROME);
-        assert_eq!(s.pane_sizes.room_dock_pct, 10);
-        on_mouse(&mut s, &up(x, 11), &pl, &zones, NO_CONTROLS, NO_CHROME);
-        assert_eq!(s.config.room_dock_pct, s.pane_sizes.room_dock_pct, "mirrored to config");
-        assert!(s.pending_config_write);
-    }
+    // ── Room dock (SQ-0692) ──────────────────────────────────────────────────
 
     /// A release the terminal never delivered (button let go off-window, so the
     /// next thing we see is plain motion) commits — it must not wedge the

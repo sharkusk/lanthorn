@@ -967,17 +967,8 @@ fn default_history_turns() -> usize { 500 }
 pub const FALLBACK_SCREEN_COLS: u16 = 80;
 pub const FALLBACK_SCREEN_ROWS: u16 = 24;
 pub(crate) fn default_split_ratio() -> u16 { 50 }
-pub(crate) fn default_inv_dock_pct() -> u16 { 33 }
-/// The room dock's height as a percentage of the frame (SQ-0692, retuned SQ-0694).
-///
-/// Back to `inv_dock_pct`'s 33 now that the exit card spends COLUMNS instead of
-/// rows: at a typical split-pane map width the twelve directions lay out three
-/// across in four rows, so the whole Info body — header, objects, card — wants
-/// about eleven rows rather than the sixteen the single column needed. 33% of a
-/// 40-row terminal is thirteen, which admits all of it with room to spare.
-pub(crate) fn default_room_dock_pct() -> u16 { 33 }
 /// Matches the zones lanthorn has always drawn for a mouse (one cell either
-/// side of the splitter, or above a dock edge); see `grab_zone_cells`.
+/// side of the splitter); see `grab_zone_cells`.
 pub(crate) fn default_grab_zone_cells() -> u16 { 2 }
 pub(crate) fn default_band_height() -> u16 {
     crate::render::command_band::DEFAULT_BAND_ROWS
@@ -1888,17 +1879,8 @@ pub struct Config {
     /// TOML section it (de)serialises to is `command_panel` (SQ-1237).
     #[serde(default, rename = "command_panel")]
     pub command_band: CommandBandConfig,
-    /// Inventory panel height cap as a percentage of screen height (default 33,
-    /// ≈ the old fixed 1/3 cap).
-    #[serde(default = "default_inv_dock_pct")]
-    pub inv_dock_pct: u16,
-    /// Room panel height as a percentage of screen height (default 33). The
-    /// panel is carved out of the MAP pane's bottom, but its size is measured
-    /// against the frame so both panels share one unit (SQ-0692).
-    #[serde(default = "default_room_dock_pct")]
-    pub room_dock_pct: u16,
-    /// How many cells wide (the story/map splitter) or tall (a dock's top edge)
-    /// each draggable pane boundary's grab zone is. Default 2 — one cell either
+    /// How many cells wide (the story/Journal splitter) or tall (the command
+    /// panel's top edge) each draggable pane boundary's grab zone is. Default 2 — one cell either
     /// side of the divider, matching the zones lanthorn has always drawn for a
     /// mouse. Raise it for a touchscreen session (e.g. the Docker web image on
     /// a tablet), where a finger cannot land on so narrow a target. Clamped to
@@ -2432,8 +2414,6 @@ impl Default for Config {
             virtual_screen_rows: None,
             split_ratio: default_split_ratio(),
             command_band: CommandBandConfig::default(),
-            inv_dock_pct: default_inv_dock_pct(),
-            room_dock_pct: default_room_dock_pct(),
             grab_zone_cells: default_grab_zone_cells(),
             text_margin_x: 0,
             text_margin_y: 0,
@@ -2776,8 +2756,6 @@ fn resolve_config_layers(
             cfg.virtual_screen_rows = from_file.virtual_screen_rows;
             cfg.split_ratio = from_file.split_ratio;
             cfg.command_band = from_file.command_band;
-            cfg.inv_dock_pct = from_file.inv_dock_pct;
-            cfg.room_dock_pct = from_file.room_dock_pct;
             cfg.grab_zone_cells = from_file.grab_zone_cells;
             cfg.text_margin_x = from_file.text_margin_x;
             cfg.text_margin_y = from_file.text_margin_y;
@@ -3106,8 +3084,6 @@ pub fn write_config_at(config_path: &std::path::Path, cfg: &Config) -> std::io::
     doc.put_or_remove("virtual_screen_cols", cfg.virtual_screen_cols.map(|n| i64::from(n).into()), def.virtual_screen_cols.map(|n| i64::from(n).into()));
     doc.put_or_remove("virtual_screen_rows", cfg.virtual_screen_rows.map(|n| i64::from(n).into()), def.virtual_screen_rows.map(|n| i64::from(n).into()));
     doc.put("split_ratio", i64::from(cfg.split_ratio).into(), cfg.split_ratio == def.split_ratio);
-    doc.put("inv_dock_pct", i64::from(cfg.inv_dock_pct).into(), cfg.inv_dock_pct == def.inv_dock_pct);
-    doc.put("room_dock_pct", i64::from(cfg.room_dock_pct).into(), cfg.room_dock_pct == def.room_dock_pct);
     doc.put(
         "grab_zone_cells",
         i64::from(cfg.grab_zone_cells).into(),
@@ -3451,11 +3427,19 @@ mod tests {
     fn pane_size_pcts_default_and_parse() {
         let d = Config::default();
         assert_eq!(d.split_ratio, 50);
-        assert_eq!(d.inv_dock_pct, 33);
 
-        let cfg: Config = toml::from_str("split_ratio = 70\ninv_dock_pct = 25\n").unwrap();
+        let cfg: Config = toml::from_str("split_ratio = 70\n").unwrap();
         assert_eq!(cfg.split_ratio, 70);
-        assert_eq!(cfg.inv_dock_pct, 25);
+    }
+
+    /// SQ-1684: the inventory and room docks are Journal tabs, so their height
+    /// keys are gone. Pre-release, retired keys are dropped outright — a file
+    /// still carrying them must load, with both ignored.
+    #[test]
+    fn retired_dock_pct_keys_are_no_longer_keys() {
+        let cfg: Config = toml::from_str("inv_dock_pct = 25\nroom_dock_pct = 25\nsplit_ratio = 70\n")
+            .expect("stale keys do not break the file");
+        assert_eq!(cfg.split_ratio, 70);
     }
 
     /// SQ-0664: `verb_dock_pct` sized the left verb dock, which no longer
@@ -4338,8 +4322,6 @@ use_defaults = false
             virtual_screen_rows: None,
             split_ratio: 70,
             command_band: CommandBandConfig::default(),
-            inv_dock_pct: 25,
-            room_dock_pct: 25,
             grab_zone_cells: 3,
             text_margin_x: 0,
             text_margin_y: 0,
@@ -4359,8 +4341,6 @@ use_defaults = false
         assert_eq!(doc["auto_save"].as_bool(), Some(false));
         assert_eq!(doc["background_tidy"].as_str(), Some("on_overlap"));
         assert_eq!(doc["split_ratio"].as_integer(), Some(70));
-        assert_eq!(doc["inv_dock_pct"].as_integer(), Some(25));
-        assert_eq!(doc["room_dock_pct"].as_integer(), Some(25), "the room panel's height persists too");
         assert_eq!(doc["grab_zone_cells"].as_integer(), Some(3), "the touch grab-zone knob persists too");
         // SQ-0573: `mouse` is at its DEFAULT and the pre-existing file did not carry
         // it, so it is deliberately not written — a default belongs in the commented

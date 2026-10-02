@@ -42,6 +42,7 @@ use app::hints;
 use app::keymap::Context;
 use app::render::hintbar::{hint_bar, ANIM_HINTS, GAME_HINTS};
 use app::slash;
+use app::journal::JournalTab;
 use app::state::{AppState, FbMode, FileBrowserState, Focus, Layout, SavesState};
 
 mod lifecycle;
@@ -489,20 +490,23 @@ struct PaneRects {
     /// tooltip, the drawn view's boxes do not — this is what tells the mouse
     /// handler which behaviour `room_rects` is standing in for.
     map_view: mapper::layer::MapView,
-    /// The room dock's rect this frame (SQ-0692), zero-area when it is closed.
-    /// Mouse routing needs it as its own rect: the dock is carved OUT of the map
-    /// pane, so a click inside it is neither a map click nor a story click, and
-    /// must not fall through to either (nor to v6 mouse delivery).
-    room_dock: Rect,
-    /// Hit-rects for the dock's two view tabs. A click switches the body, the way
-    /// a click on a layer tab switches layers.
+    /// The Room tab's rect this frame (SQ-0692, SQ-1684), zero-area on every
+    /// other tab. Mouse routing needs it as its own rect: a click inside it is
+    /// neither a map click nor a story click, and must not fall through to
+    /// either (nor to v6 mouse delivery).
+    room_tab: Rect,
+    /// Hit-rects for the Journal's tab bar (SQ-1684): a click shows that tab, or
+    /// steps to the neighbour on the narrow form's ‹ › markers. Empty while the
+    /// Journal is hidden or the debug inspector holds its slot.
+    journal_tabs: Vec<(app::journal::TabBarHit, Rect)>,
+    /// Hit-rects for the Room tab's two view tabs. A click switches the body, the
+    /// way a click on a layer tab switches layers.
     room_dock_tabs: Vec<(app::state::RoomDockView, Rect)>,
-    /// Hit-rect for the dock's close box (SQ-1265), when the frame drew one.
-    room_dock_close: Option<Rect>,
-    /// The room the dock's active body actually described this frame (SQ-1280) —
-    /// `None` whenever no body was drawn (closed, or too short). The run loop
-    /// compares this against `AppState::room_dock_scroll_room` after the frame to
-    /// decide whether the displayed room changed and both scrolls reset.
+    /// The room the Room tab's active body actually described this frame
+    /// (SQ-1280) — `None` whenever no body was drawn (another tab, or too
+    /// short). The run loop compares this against
+    /// `AppState::room_dock_scroll_room` after the frame to decide whether the
+    /// displayed room changed and both scrolls reset.
     room_dock_room: Option<RoomId>,
     /// The active body's total row count and viewport height this frame (SQ-1280),
     /// both 0 alongside `room_dock_room == None`. Synced into
@@ -555,9 +559,9 @@ struct PaneRects {
     /// Hit-rects for the command band (when open): its own rect, the column
     /// headers, the item rows and the quick words (rose block or flat row).
     pub command_band: app::render::command_band::CommandBandHits,
-    /// Hit-rects for the inventory dock (when open): its own rect and one row
-    /// rect per item (SQ-1244) — a click composes the row's word into the
-    /// prompt the same way a command-band WHAT-column click does.
+    /// Hit-rects for the Inventory tab (when up): its own rect and one row rect
+    /// per item (SQ-1244) — a click composes the row's word into the prompt the
+    /// same way a command-band WHAT-column click does.
     pub inventory_dock: app::render::inventory_dock::InventoryDockHits,
     /// Hit-rects for the command palette's candidate rows, as `(cmd_index, rect)`;
     /// the mouse handler hit-tests these to execute a command on click. (SQ-0419)
@@ -669,7 +673,7 @@ fn draw_frame(
     // does not.
     let mut map_control_view = mapper::layer::MapView::Drawn;
     let mut room_dock_tabs_out: Vec<(app::state::RoomDockView, Rect)> = Vec::new();
-    let mut room_dock_close_out: Option<Rect> = None;
+    let mut journal_tabs_out: Vec<(app::journal::TabBarHit, Rect)> = Vec::new();
     let mut room_dock_room_out: Option<RoomId> = None;
     let mut room_dock_body_total_out: u16 = 0;
     let mut room_dock_body_viewport_out: u16 = 0;
@@ -747,13 +751,11 @@ fn draw_frame(
             }
         };
 
-        // ── Inventory dock: reserve a bottom band (above the help row) that
-        // slides up when toggled, sized from the content-row list + slide
-        // fraction (SQ-1630: "Carrying" cross-referenced against the mapper's
-        // whole-game item registry, plus "Elsewhere" for everything else it
-        // has ever tracked — see `render::inventory_dock`'s own doc).
-        let inv_visible = state.show_inventory || state.inv_dock.active();
-        let inv_rows: Vec<app::render::inventory_dock::ItemDockRow> = if inv_visible {
+        // ── Inventory tab content (SQ-1630): "Carrying" cross-referenced against
+        // the mapper's whole-game item registry, plus "Elsewhere" for everything
+        // else it has ever tracked — see `render::inventory_dock`'s own doc. Only
+        // built while the tab is on screen.
+        let inv_rows: Vec<app::render::inventory_dock::ItemDockRow> = if state.inventory_tab_visible() {
             let carried = app::render::transcript::inventory_items_with_keys(
                 state.player_obj,
                 &state.inventory_fallback,
@@ -764,7 +766,7 @@ fn draw_frame(
         } else {
             Vec::new()
         };
-        let pane_layout = app::layout::compute_pane_layout(full, state, inv_rows.len());
+        let pane_layout = app::layout::compute_pane_layout(full, state);
         pane_layout_out = pane_layout;
 
         // While any background map job is in flight — a tidy relayout or the
@@ -916,87 +918,168 @@ fn draw_frame(
                     win_rects_out = m.win_rects;
                     story_area = story_fp.content;
 
-                    // The tab strip names every layer, so it reads the LIVE graph — never an
-                    // animation frame. A frame is a `layer_subgraph`, whose `layers()` is always
-                    // main-only, so asking it made the tidied layer's own tab vanish mid-animation
-                    // (SQ-0359). `layer` (from `frame_layer`) marks the active tab. Build the
-                    // segments before drawing — `draw_panel` renders the strip and returns the
-                    // per-tab hit-rects.
-                    let map_focused = resize_split_hl || state.focus == Focus::Map;
-                    let graph = if let Some(g) = &replay_graph { g } else { &mapper.graph };
-                    let layer_ids: Vec<LayerId> = graph.layers().keys().copied().collect();
-                    let active_layer = layer;
-                    let owned_segs = build_layer_segments(&layer_ids, active_layer,
-                        |id| app::render::map::layer_tab_title(graph, id));
-                    let inset_segs: Vec<_> = owned_segs.iter().map(|s| s.as_inset()).collect();
-                    // The map pane's OWN cluster, on its bottom border (SQ-1148):
-                    // room numbers, centre, zoom out, zoom in, view. Same enum,
-                    // same dispatch and the same hit-rect vec as the story pane's
-                    // — `BorderControl::pane` is what keeps the two apart. Every
-                    // one of them acts on a map that is on screen, which is why
-                    // they can live on a pane that disappears where the return
-                    // probe could not (SQ-1107).
-                    map_control_view = graph.layer_view(active_layer);
-                    let map_views = app::render::controls::map_controls_for(state, map_control_view);
-                    let (map_fp, map_ctls) = app::render::controls::draw_pane_with_controls(buf, &PanelSpec {
-                        area: pane_layout.map,
-                        border_selector: if map_focused { "panel.border:active" } else { "panel.border" },
-                        border_color: Some(map_border_color),
-                        border_style: None,
-                        glyphs: &state.colors.map_border_glyphs,
-                        header_on: state.colors.map_header_on,
-                        strip: Some(PanelStrip {
-                            segments: &inset_segs,
-                            base: state.colors.theme.get("panel.tab").style,
-                            active: state.colors.theme.get("panel.tab:active").style,
-                        }),
-                        // SQ-1170: the map canvas's own ground. `map.background`
-                        // has been a documented, parsed, resolved selector that
-                        // no renderer read since it landed — the map pane simply
-                        // never painted a ground, where the debug pane has always
-                        // painted `panel.background`. Transparent by default (its
-                        // registry Delta is empty), so this is inert until a
-                        // player sets a `bg`, and then it is the one thing the
-                        // key's own comment always promised.
-                        body_fill: Some(state.colors.theme.get("map.background").style),
-                    }, &state.colors.theme, &map_views);
-                    border_controls_out.extend(map_ctls);
-                    layer_tabs_out = layer_ids.into_iter().zip(map_fp.tab_rects).collect();
+                    // ── The Journal (SQ-1684): a tab bar over the active tab's body.
+                    journal_tabs_out = app::journal::draw_tab_bar(
+                        pane_layout.journal_tabs, state.journal_tab, &state.colors, buf,
+                    );
+                    match state.journal_tab {
+                        JournalTab::Map => {
+                        // The tab strip names every layer, so it reads the LIVE graph — never an
+                        // animation frame. A frame is a `layer_subgraph`, whose `layers()` is always
+                        // main-only, so asking it made the tidied layer's own tab vanish mid-animation
+                        // (SQ-0359). `layer` (from `frame_layer`) marks the active tab. Build the
+                        // segments before drawing — `draw_panel` renders the strip and returns the
+                        // per-tab hit-rects.
+                        let map_focused = resize_split_hl || state.focus == Focus::Map;
+                        let graph = if let Some(g) = &replay_graph { g } else { &mapper.graph };
+                        let layer_ids: Vec<LayerId> = graph.layers().keys().copied().collect();
+                        let active_layer = layer;
+                        let owned_segs = build_layer_segments(&layer_ids, active_layer,
+                            |id| app::render::map::layer_tab_title(graph, id));
+                        let inset_segs: Vec<_> = owned_segs.iter().map(|s| s.as_inset()).collect();
+                        // The map pane's OWN cluster, on its bottom border (SQ-1148):
+                        // room numbers, centre, zoom out, zoom in, view. Same enum,
+                        // same dispatch and the same hit-rect vec as the story pane's
+                        // — `BorderControl::pane` is what keeps the two apart. Every
+                        // one of them acts on a map that is on screen, which is why
+                        // they can live on a pane that disappears where the return
+                        // probe could not (SQ-1107).
+                        map_control_view = graph.layer_view(active_layer);
+                        let map_views = app::render::controls::map_controls_for(state, map_control_view);
+                        let (map_fp, map_ctls) = app::render::controls::draw_pane_with_controls(buf, &PanelSpec {
+                            area: pane_layout.map,
+                            border_selector: if map_focused { "panel.border:active" } else { "panel.border" },
+                            border_color: Some(map_border_color),
+                            border_style: None,
+                            glyphs: &state.colors.map_border_glyphs,
+                            header_on: state.colors.map_header_on,
+                            strip: Some(PanelStrip {
+                                segments: &inset_segs,
+                                base: state.colors.theme.get("panel.tab").style,
+                                active: state.colors.theme.get("panel.tab:active").style,
+                            }),
+                            // SQ-1170: the map canvas's own ground. `map.background`
+                            // has been a documented, parsed, resolved selector that
+                            // no renderer read since it landed — the map pane simply
+                            // never painted a ground, where the debug pane has always
+                            // painted `panel.background`. Transparent by default (its
+                            // registry Delta is empty), so this is inert until a
+                            // player sets a `bg`, and then it is the one thing the
+                            // key's own comment always promised.
+                            body_fill: Some(state.colors.theme.get("map.background").style),
+                        }, &state.colors.theme, &map_views);
+                        border_controls_out.extend(map_ctls);
+                        layer_tabs_out = layer_ids.into_iter().zip(map_fp.tab_rects).collect();
 
-                    map_hits = Some(render_map_layered(&rm, &mapper.graph, state, map_fp.content, buf));
-                    if let Some(anim) = &state.tidy_anim {
-                        let tidy_ds = make_dialog_style(state);
-                        if let Some(dr) = draw_tidy_panel(anim.current(), map_fp.content, buf, &tidy_ds) {
-                            dialog_rects_out = Some(dr);
+                        map_hits = Some(render_map_layered(&rm, &mapper.graph, state, map_fp.content, buf));
+                        if let Some(anim) = &state.tidy_anim {
+                            let tidy_ds = make_dialog_style(state);
+                            if let Some(dr) = draw_tidy_panel(anim.current(), map_fp.content, buf, &tidy_ds) {
+                                dialog_rects_out = Some(dr);
+                            }
                         }
-                    }
-                    map_area = map_fp.content;
-                    // Apply pulsing border color overlay when a tidy job is in flight
-                    if let Some(pulse_color) = map_border_override {
-                        let pulse_style = Style::default().fg(pulse_color);
-                        for cy in pane_layout.map.y..pane_layout.map.bottom() {
-                            if let Some(c) = buf.cell_mut((pane_layout.map.x, cy)) { c.set_style(pulse_style); }
-                            if let Some(c) = buf.cell_mut((pane_layout.map.right().saturating_sub(1), cy)) { c.set_style(pulse_style); }
+                        map_area = map_fp.content;
+                        // Apply pulsing border color overlay when a tidy job is in flight
+                        if let Some(pulse_color) = map_border_override {
+                            let pulse_style = Style::default().fg(pulse_color);
+                            for cy in pane_layout.map.y..pane_layout.map.bottom() {
+                                if let Some(c) = buf.cell_mut((pane_layout.map.x, cy)) { c.set_style(pulse_style); }
+                                if let Some(c) = buf.cell_mut((pane_layout.map.right().saturating_sub(1), cy)) { c.set_style(pulse_style); }
+                            }
+                            for cx in pane_layout.map.x..pane_layout.map.right() {
+                                if let Some(c) = buf.cell_mut((cx, pane_layout.map.y)) { c.set_style(pulse_style); }
+                                if let Some(c) = buf.cell_mut((cx, pane_layout.map.bottom().saturating_sub(1))) { c.set_style(pulse_style); }
+                            }
                         }
-                        for cx in pane_layout.map.x..pane_layout.map.right() {
-                            if let Some(c) = buf.cell_mut((cx, pane_layout.map.y)) { c.set_style(pulse_style); }
-                            if let Some(c) = buf.cell_mut((cx, pane_layout.map.bottom().saturating_sub(1))) { c.set_style(pulse_style); }
-                        }
-                    }
 
-                    // While the async map-render worker runs, list each phase it has
-                    // started in the map's top-right corner so the source of any map
-                    // update delay is visible; the trace clears when the job lands
-                    // (SQ-0379). The inner content rect keeps it off the pulsing border.
-                    if state.map_render_in_flight() {
-                        let area = map_fp.content;
-                        let style = state.colors.theme.get("panel.tab").style;
-                        for (i, step) in state.render_steps_snapshot().iter().enumerate() {
-                            let y = area.y + i as u16;
-                            if y >= area.bottom() { break; }
-                            let w = (step.chars().count() as u16).min(area.width);
-                            let x = area.right().saturating_sub(w);
-                            buf.set_stringn(x, y, step, w as usize, style);
+                        // While the async map-render worker runs, list each phase it has
+                        // started in the map's top-right corner so the source of any map
+                        // update delay is visible; the trace clears when the job lands
+                        // (SQ-0379). The inner content rect keeps it off the pulsing border.
+                        if state.map_render_in_flight() {
+                            let area = map_fp.content;
+                            let style = state.colors.theme.get("panel.tab").style;
+                            for (i, step) in state.render_steps_snapshot().iter().enumerate() {
+                                let y = area.y + i as u16;
+                                if y >= area.bottom() { break; }
+                                let w = (step.chars().count() as u16).min(area.width);
+                                let x = area.right().saturating_sub(w);
+                                buf.set_stringn(x, y, step, w as usize, style);
+                            }
+                        }
+                        }
+                        JournalTab::Room => {
+                            // ── Room tab (SQ-0692, SQ-1684) ───────────────────────
+                            // It describes the SELECTED room when one is pinned, else
+                            // the room the player is standing in — which is why it
+                            // updates every move without being told.
+                            let graph = if let Some(g) = &replay_graph {
+                                g
+                            } else {
+                                match &state.tidy_anim {
+                                    Some(anim) => &anim.current().graph,
+                                    None => &mapper.graph,
+                                }
+                            };
+                            let room = app::render::room_dock::dock_room(state.selected_room, graph);
+                            let current_room = graph.current();
+                            // Objects in the room come from the engine's introspection
+                            // (unavailable during tidy-anim playback → empty), and only
+                            // ever for the room the player is actually in.
+                            let room_objects: Vec<String> = match (room, state.tidy_anim.is_none()) {
+                                (Some(id), true) if Some(id) == current_room => {
+                                    engine
+                                        .introspect()
+                                        .map(|i| i.room_objects(id).iter().filter_map(|o| o.display_name()).collect())
+                                        .unwrap_or_default()
+                                }
+                                _ => Vec::new(),
+                            };
+                            // SQ-1280: the active body's scroll offset, read from its
+                            // `ListScroll` — unless the room this frame describes
+                            // differs from the one those offsets were last synced to,
+                            // in which case a reset is coming right after this draw
+                            // returns (see the post-render sync) and drawing at the
+                            // STALE offset for one frame would show a scrolled window
+                            // into the wrong room's content.
+                            let dock_scroll_offset = if state.room_dock_scroll_room == room {
+                                match state.room_dock_view {
+                                    app::state::RoomDockView::Info => state.room_dock_info_scroll.display_offset() as u16,
+                                    app::state::RoomDockView::Diagnostics => state.room_dock_diag_scroll.display_offset() as u16,
+                                }
+                            } else {
+                                0
+                            };
+                            let dock_rects = app::render::room_dock::draw_room_dock(
+                                graph,
+                                room,
+                                state.room_dock_pinned(),
+                                state.room_dock_view,
+                                &room_objects,
+                                current_room,
+                                pane_layout.journal_body,
+                                &state.colors,
+                                &state.symbols,
+                                resize_split_hl || state.focus == Focus::Map,
+                                dock_scroll_offset,
+                                buf,
+                            );
+                            room_dock_tabs_out = dock_rects.tabs;
+                            room_dock_room_out = room;
+                            room_dock_body_total_out = dock_rects.body_total;
+                            room_dock_body_viewport_out = dock_rects.body_viewport;
+                        }
+                        JournalTab::Inventory => {
+                            let scroll_offset = state.inv_dock_scroll.display_offset() as u16;
+                            app::render::inventory_dock::draw_inventory_dock(
+                                &inv_rows,
+                                pane_layout.journal_body,
+                                &state.colors,
+                                resize_split_hl || state.focus == Focus::Map,
+                                scroll_offset,
+                                buf,
+                                &mut inv_hits,
+                            );
                         }
                     }
 
@@ -1023,88 +1106,6 @@ fn draw_frame(
         } else {
             (Vec::new(), Vec::new())
         };
-
-        // ── Room dock (SQ-0692) ───────────────────────────────────────────────
-        // Not an overlay: the layout already reserved these rows out of the map
-        // pane, so nothing is covered and the map above stays interactive. It
-        // describes the SELECTED room when one is pinned, else the room the player
-        // is standing in — which is why it updates every move without being told.
-        if pane_layout.room_dock.height > 0 {
-            let graph = if let Some(g) = &replay_graph {
-                g
-            } else {
-                match &state.tidy_anim {
-                    Some(anim) => &anim.current().graph,
-                    None => &mapper.graph,
-                }
-            };
-            let room = app::render::room_dock::dock_room(state.selected_room, graph);
-            let current_room = graph.current();
-            // Objects in the room come from the engine's introspection
-            // (unavailable during tidy-anim playback → empty), and only ever for
-            // the room the player is actually in.
-            let room_objects: Vec<String> = match (room, state.tidy_anim.is_none()) {
-                (Some(id), true) if Some(id) == current_room => {
-                    engine
-                        .introspect()
-                        .map(|i| i.room_objects(id).iter().filter_map(|o| o.display_name()).collect())
-                        .unwrap_or_default()
-                }
-                _ => Vec::new(),
-            };
-            let dock_resize_hl = (state.resize_mode
-                && state.resize_target == app::state::ResizeTarget::RoomDock)
-                || state.boundary_active(app::layout::Boundary::RoomDockTop);
-            // SQ-1280: the active body's scroll offset, read from its `ListScroll` —
-            // unless the room this frame describes differs from the one those
-            // offsets were last synced to, in which case a reset is coming right
-            // after this draw returns (see the post-render sync below) and drawing
-            // at the STALE offset for one frame would show a scrolled window into
-            // the wrong room's content.
-            let dock_scroll_offset = if state.room_dock_scroll_room == room {
-                match state.room_dock_view {
-                    app::state::RoomDockView::Info => state.room_dock_info_scroll.display_offset() as u16,
-                    app::state::RoomDockView::Diagnostics => state.room_dock_diag_scroll.display_offset() as u16,
-                }
-            } else {
-                0
-            };
-            let dock_rects = app::render::room_dock::draw_room_dock(
-                graph,
-                room,
-                state.room_dock_pinned(),
-                state.room_dock_view,
-                &room_objects,
-                current_room,
-                pane_layout.room_dock,
-                &state.colors,
-                &state.symbols,
-                dock_resize_hl,
-                dock_scroll_offset,
-                buf,
-            );
-            room_dock_tabs_out = dock_rects.tabs;
-            room_dock_close_out = dock_rects.close;
-            room_dock_room_out = room;
-            room_dock_body_total_out = dock_rects.body_total;
-            room_dock_body_viewport_out = dock_rects.body_viewport;
-        }
-
-        // ── Inventory dock panel ──────────────────────────────────────────────
-        if pane_layout.inv_dock.height > 0 {
-            let inv_resize_hl = (state.resize_mode && state.resize_target == app::state::ResizeTarget::InvDock)
-                || state.boundary_active(app::layout::Boundary::InvDockTop);
-            let inv_scroll_offset = state.inv_dock_scroll.display_offset() as u16;
-            app::render::inventory_dock::draw_inventory_dock(
-                &inv_rows,
-                pane_layout.inv_dock,
-                &state.colors,
-                inv_resize_hl,
-                inv_scroll_offset,
-                buf,
-                &mut inv_hits,
-            );
-        }
 
         // ── Command band ───────────────────────────────────────────────────────
         if pane_layout.command_band.height > 0 {
@@ -1143,10 +1144,8 @@ fn draw_frame(
         } else if state.resize_mode {
             use app::state::ResizeTarget;
             let t = match state.resize_target {
-                ResizeTarget::StoryMap => "story/map",
-                ResizeTarget::InvDock => "inventory",
+                ResizeTarget::StoryMap => "story/journal",
                 ResizeTarget::CommandBand => "command panel",
-                ResizeTarget::RoomDock => "room panel",
             };
             format!("Resize [{t}] | Tab: pane | arrows: adjust | 0: reset | Esc: done")
         } else {
@@ -1291,7 +1290,7 @@ fn draw_frame(
 
     // The draw closure runs exactly once, so the overlay ladder always ran.
     let overlay_rects = overlay_rects.expect("draw_frame closure runs exactly once");
-    Ok(PaneRects { map: map_area, story: story_area, boundaries: pane_layout_out.boundary_zones(), pane_layout: pane_layout_out, room_rects: room_rects_out, map_marker_rects: map_marker_rects_out, map_view: map_control_view, room_dock: pane_layout_out.room_dock, room_dock_tabs: room_dock_tabs_out, room_dock_close: room_dock_close_out, room_dock_room: room_dock_room_out, room_dock_body_total: room_dock_body_total_out, room_dock_body_viewport: room_dock_body_viewport_out, room_menu_area: room_menu_area_out, room_menu_items: room_menu_items_out, layer_tabs: layer_tabs_out, border_controls: border_controls_out, debug_tabs: debug_tabs_out, dialog: overlay_rects.dialog, aux_dialog: overlay_rects.aux_dialog, history_prompt: overlay_rects.history_prompt, font_check: overlay_rects.font_check, fetch_keep: overlay_rects.fetch_keep, reset_dialog: overlay_rects.reset_dialog, region_prompt: overlay_rects.region_prompt, game_over: overlay_rects.game_over, save_name_dialog: overlay_rects.save_name_dialog, text_entry: overlay_rects.text_entry, confirm_delete: overlay_rects.confirm_delete, confirm_overwrite: overlay_rects.confirm_overwrite, quit_dialog: overlay_rects.quit_dialog, launch_dialog: overlay_rects.launch_dialog, hints_panel: overlay_rects.hints_panel, command_band: band_hits, inventory_dock: inv_hits, palette: palette_hits, transcript_links: transcript_links_out, win_rects: win_rects_out, transcript_max_scroll, transcript_viewport_rows, transcript_prompt_rows, transcript_total_rows, transcript_surface, transcript_top_anchored_fits, modal_list_viewport })
+    Ok(PaneRects { map: map_area, story: story_area, boundaries: pane_layout_out.boundary_zones(), pane_layout: pane_layout_out, room_rects: room_rects_out, map_marker_rects: map_marker_rects_out, map_view: map_control_view, room_tab: if state.room_tab_visible() && state.debug.is_none() { pane_layout_out.journal_body } else { Rect::default() }, journal_tabs: journal_tabs_out, room_dock_tabs: room_dock_tabs_out, room_dock_room: room_dock_room_out, room_dock_body_total: room_dock_body_total_out, room_dock_body_viewport: room_dock_body_viewport_out, room_menu_area: room_menu_area_out, room_menu_items: room_menu_items_out, layer_tabs: layer_tabs_out, border_controls: border_controls_out, debug_tabs: debug_tabs_out, dialog: overlay_rects.dialog, aux_dialog: overlay_rects.aux_dialog, history_prompt: overlay_rects.history_prompt, font_check: overlay_rects.font_check, fetch_keep: overlay_rects.fetch_keep, reset_dialog: overlay_rects.reset_dialog, region_prompt: overlay_rects.region_prompt, game_over: overlay_rects.game_over, save_name_dialog: overlay_rects.save_name_dialog, text_entry: overlay_rects.text_entry, confirm_delete: overlay_rects.confirm_delete, confirm_overwrite: overlay_rects.confirm_overwrite, quit_dialog: overlay_rects.quit_dialog, launch_dialog: overlay_rects.launch_dialog, hints_panel: overlay_rects.hints_panel, command_band: band_hits, inventory_dock: inv_hits, palette: palette_hits, transcript_links: transcript_links_out, win_rects: win_rects_out, transcript_max_scroll, transcript_viewport_rows, transcript_prompt_rows, transcript_total_rows, transcript_surface, transcript_top_anchored_fits, modal_list_viewport })
 }
 
 // ── Command-band mouse routing ───────────────────────────────────────────────
@@ -1365,11 +1364,10 @@ fn band_mouse_action(
     }
 }
 
-/// Resolve a mouse event against the inventory dock's hit rects (SQ-1244) —
-/// the panel's own counterpart of `band_mouse_action`. The two panels are
-/// mutually exclusive (`SidePanel`), so this never competes with the band for
-/// the same click; it claims exactly the dock's own rect, the same way the
-/// band claims its own, so a click never falls through to the story pane.
+/// Resolve a mouse event against the Inventory tab's hit rects (SQ-1244) —
+/// the tab's own counterpart of `band_mouse_action`. It claims exactly the
+/// tab's own rect, the same way the band claims its own, so a click never falls
+/// through to the story pane.
 fn inventory_mouse_action(
     state: &AppState,
     panes: &PaneRects,
@@ -2132,9 +2130,9 @@ fn run_event_loop(boot: startup::BootResult, launched_from_library: bool) -> Run
         // every tick, so a take/drop moves an object between *here* and
         // *carried* on the very next frame (SQ-0664).
         needs_redraw |= loop_tick::refresh_command_band(&mut state, &*session);
-        // The inventory dock's clickable words are LIVE too, and independent of
-        // the command band (SQ-1244): the two panels are mutually exclusive, so
-        // the dock cannot piggyback on the band's own object refresh.
+        // The Inventory tab's clickable words are LIVE too, and independent of
+        // the command band (SQ-1244): the tab cannot piggyback on the band's own
+        // object refresh.
         app::render::inventory_dock::refresh_inventory_click_words(&mut state, &*session);
         needs_redraw |= loop_tick::expire_sound_and_settle_dock(&mut state);
         // One collector for the shared shadow, routing each answer to whoever
@@ -2357,14 +2355,12 @@ fn run_event_loop(boot: startup::BootResult, launched_from_library: bool) -> Run
             }
             if let Some(r) = &mut state.overlays.replay { needs_redraw |= r.scroll.finalize_if_done(); }
             if let Some(h) = &mut state.overlays.hints { needs_redraw |= h.finalize_scroll_if_done(); }
-            // Docks slide via a Tween that goes inactive (not dropped) at done();
+            // The band slides via a Tween that goes inactive (not dropped) at done();
             // finalize drops the finished tween and forces the settle frame so a
-            // just-opened dock paints fully and a closing inv_dock loses its last
+            // just-opened band paints fully and a closing one loses its last
             // sliver. (the band's CLOSE is separately covered by settle_command_band
             // dropping the drawer content next iteration.) (SQ-0305)
-            needs_redraw |= state.inv_dock.finalize_if_done();
             needs_redraw |= state.band_dock.finalize_if_done();
-            needs_redraw |= state.room_dock.finalize_if_done();
             // The story pane's scrollbar fade needs the same settle frame: the
             // last frame the fade itself asks for still paints the bar (at the
             // dregs of its opacity), so without this it never actually leaves
@@ -2503,18 +2499,16 @@ fn run_event_loop(boot: startup::BootResult, launched_from_library: bool) -> Run
         // it, then goes on to be handled normally.
         if let Event::Mouse(m) = &event {
             use app::pane_drag::DragOutcome;
-            // The room dock's view tabs (SQ-1265) sit on `Boundary::RoomDockTop`'s
-            // own grab row (the dock's top border IS the pane's bottom border),
-            // so they must be excluded from the drag the same way a border
-            // control is — otherwise a Down on "Room"/"Diagnostics" starts a
-            // resize instead of ever reaching `room_dock_mouse_action`.
+            // The Journal's tab bar and the Room tab's view tabs sit against the
+            // splitter's grab zone (the zone reaches over them when
+            // `grab_zone_cells` is wide), so they must be excluded from the drag
+            // the same way a border control is — otherwise a Down on a tab starts
+            // a resize instead of ever reaching its click handler.
             let dock_chrome: Vec<Rect> = last_panes
-                .room_dock_tabs
+                .journal_tabs
                 .iter()
                 .map(|(_, r)| *r)
-                // The close box sits on the same border row as the tabs and needs
-                // the same exclusion, or a click on it starts a resize too.
-                .chain(last_panes.room_dock_close)
+                .chain(last_panes.room_dock_tabs.iter().map(|(_, r)| *r))
                 .collect();
             match app::pane_drag::on_mouse(&mut state, m, &last_panes.pane_layout, &last_panes.boundaries, &last_panes.border_controls, &dock_chrome) {
                 DragOutcome::Ignored => {}
@@ -3631,17 +3625,28 @@ fn run_event_loop(boot: startup::BootResult, launched_from_library: bool) -> Run
                     }
                     continue 'event_loop;
                 }
-                // Room dock (SQ-0692): the dock owns every mouse event inside its
+                // Journal tab bar (SQ-1684): a left-click on a tab label shows that
+                // tab; on the narrow form's ‹ › it steps to the neighbour.
+                if !state.any_modal_overlay_open() {
+                    if let crossterm::event::MouseEventKind::Down(crossterm::event::MouseButton::Left) = m.kind {
+                        let pt = ratatui::layout::Position { x: m.column, y: m.row };
+                        if let Some((hit, _)) = last_panes.journal_tabs.iter().find(|(_, r)| r.contains(pt)) {
+                            let action = app::input::journal_tab_click_action(*hit);
+                            apply_action(action, &mut state, &mut mapper);
+                            continue 'event_loop;
+                        }
+                    }
+                }
+                // Room tab (SQ-0692): the tab owns every mouse event inside its
                 // rect. A left-click on one of its two view tabs switches the body;
                 // a wheel notch scrolls the active body (SQ-1280); anything else
-                // inside it is simply swallowed, because the dock is carved out of
-                // the map pane and a click there is neither a map click nor a story
-                // selection — and must never reach the v6 mouse delivery path below.
+                // inside it is simply swallowed, because a click there is neither a
+                // map click nor a story selection — and must never reach the v6
+                // mouse delivery path below.
                 if !state.any_modal_overlay_open() {
                     if let Some(action) = app::input::room_dock_mouse_action(
-                        last_panes.room_dock,
+                        last_panes.room_tab,
                         &last_panes.room_dock_tabs,
-                        last_panes.room_dock_close,
                         &m,
                         state.config.mouse_wheel_invert,
                     ) {

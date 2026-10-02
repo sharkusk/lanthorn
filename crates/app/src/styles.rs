@@ -62,12 +62,16 @@ pub struct PerGameConfig {
     /// The v6 render mode for this story, as its config-file spelling
     /// (`hybrid` / `raster` / `extended`) — SQ-1123.
     pub v6_render: Option<String>,
-    /// Which panel opens with this story — command, inventory, or none
-    /// (SQ-1123, widened to a three-state cycle by SQ-1237). `None` here means
+    /// Whether the command panel opens with this story (SQ-1123; the inventory
+    /// stop SQ-1237 added moved into the Journal, SQ-1684). `None` here means
     /// no override at all (inherit `[command_panel] auto_open`), which is a
     /// different thing from `Some(SidePanel::None)` (this story is pinned to
-    /// neither panel).
+    /// no panel).
     pub panel: Option<crate::state::SidePanel>,
+    /// Which Journal tab was showing when this story was last played (SQ-1684):
+    /// `map` / `room` / `inventory`. `None` = no override, so the Journal opens
+    /// on the Map tab.
+    pub journal_tab: Option<crate::journal::JournalTab>,
     /// Whether the return probe runs for this story (SQ-0785).
     pub return_probe: Option<bool>,
     /// ScottFree's `-y`/`YOUARE` option for this Scott Adams story (SQ-1413):
@@ -127,6 +131,7 @@ impl PerGameConfig {
         "v6_pixel_lock",
         "guidance",
         "panel",
+        "journal_tab",
         "return_probe",
         "pictures",
         "v6_render",
@@ -172,6 +177,7 @@ impl PerGameConfig {
             guidance: b("guidance"),
             v6_render: s("v6_render"),
             panel: s("panel").as_deref().and_then(crate::state::SidePanel::from_key),
+            journal_tab: s("journal_tab").as_deref().and_then(crate::journal::JournalTab::from_name),
             return_probe: b("return_probe"),
             scott_you_are: b("scott_you_are"),
             scott_light: b("scott_light"),
@@ -202,6 +208,7 @@ impl PerGameConfig {
             put_bool(doc, "v6_pixel_lock", self.v6_pixel_lock);
             put_bool(doc, "guidance", self.guidance);
             put_str(doc, "panel", self.panel.map(|p| p.key()));
+            put_str(doc, "journal_tab", self.journal_tab.map(|t| t.name()));
             put_bool(doc, "return_probe", self.return_probe);
             put_str(doc, "pictures", self.pictures.as_deref());
             put_str(doc, "v6_render", self.v6_render.as_deref());
@@ -629,6 +636,21 @@ pub fn write_per_game_panel(
     edit(game_dir, |c| c.panel = value)
 }
 
+/// Read the per-game `journal_tab` (SQ-1684). `None` = no override: the Journal
+/// opens on the Map tab.
+pub fn read_per_game_journal_tab(game_dir: &Path) -> Option<crate::journal::JournalTab> {
+    PerGameConfig::read(game_dir).journal_tab
+}
+
+/// Persist (or clear) the per-game `journal_tab` (SQ-1684), preserving every
+/// sibling key.
+pub fn write_per_game_journal_tab(
+    game_dir: &Path,
+    value: Option<crate::journal::JournalTab>,
+) -> std::io::Result<()> {
+    edit(game_dir, |c| c.journal_tab = value)
+}
+
 /// Persist (or clear) the per-game `quick` override (SQ-1552), preserving
 /// every sibling key. `None` clears it back to inheriting the global list.
 pub fn write_per_game_quick(game_dir: &Path, value: Option<Vec<String>>) -> std::io::Result<()> {
@@ -710,6 +732,7 @@ mod tests {
             guidance: Some(true),
             v6_render: Some("raster".into()),
             panel: Some(crate::state::SidePanel::Command),
+            journal_tab: Some(crate::journal::JournalTab::Room),
             return_probe: Some(true),
             scott_you_are: Some(true),
             scott_light: Some(true),
