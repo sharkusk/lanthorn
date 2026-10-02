@@ -19,6 +19,11 @@
 //! and falls back to the paced sink when there is none, so a page without the
 //! audio script (or a script the browser blocked) plays silently as before.
 //!
+//! **Proxy mode** (SQ-1318): with `LANTHORN_WEB_AUTH_HEADER` set, a reverse
+//! proxy authenticates the page and routes `/lanthorn-audio/<id>` here with the
+//! header it sets for ttyd. The relay requires that header, takes the player
+//! from it alone, and files the session and its FIFO under `<player>/<id>`.
+//!
 //! **The FIFO belongs to the SESSION, not to the socket** (SQ-1328). A served
 //! game outlives its browser connection — `docker/serve-session.sh` runs it
 //! under `dtach`, keyed by the same id — so a FIFO that died with the socket
@@ -88,16 +93,65 @@ pub fn header_json() -> String {
 /// anything else. An id is 8 to 64 characters of `[A-Za-z0-9_-]`: it names a
 /// file, so nothing that could be a path component is accepted, and the page
 /// mints 16 random characters, so a shorter one is not one of ours.
+///
+/// Two prefixes name the same thing: `/audio/` is what a browser dials on the
+/// relay's own port, and `/lanthorn-audio/` is the path a reverse proxy routes
+/// to the relay in proxy mode (SQ-1318), where the page dials its own origin.
 pub fn session_id(path: &str) -> Option<&str> {
-    let id = path.strip_prefix("/audio/")?;
+    let id = path.strip_prefix("/audio/").or_else(|| path.strip_prefix("/lanthorn-audio/"))?;
     let ok_len = (8..=64).contains(&id.len());
     let ok_chars = id.chars().all(|c| c.is_ascii_alphanumeric() || c == '_' || c == '-');
     (ok_len && ok_chars).then_some(id)
 }
 
-/// Where a session's FIFO lives under `dir`.
-pub fn fifo_path(dir: &Path, id: &str) -> PathBuf {
-    dir.join(format!("{id}.pcm"))
+/// The directory name sessions with no player live under, in both the FIFO and
+/// the dtach-socket layouts (`docker/serve-session.sh` spells it the same).
+pub const DEFAULT_PLAYER_DIR: &str = "_default";
+
+/// Where a session's FIFO lives under `dir`: `<dir>/<player|_default>/<id>.pcm`,
+/// the same shape as the session sockets (SQ-1318), so one id under two players
+/// is two FIFOs.
+pub fn fifo_path(dir: &Path, player: Option<&str>, id: &str) -> PathBuf {
+    dir.join(player.unwrap_or(DEFAULT_PLAYER_DIR)).join(format!("{id}.pcm"))
+}
+
+/// A player name: 1 to 29 characters of `[A-Za-z0-9._-]`, no leading `.`.
+/// A copy of `data_roots::validate_player_name` in `crates/app` (this crate
+/// takes no dependency on the app), which is the source of truth;
+/// `docker/serve-session.sh`'s `valid_player_name` is the third copy.
+pub fn valid_player_name(name: &str) -> bool {
+    !name.is_empty()
+        && name.len() <= 29
+        && !name.starts_with('.')
+        && name.chars().all(|c| c.is_ascii_alphanumeric() || matches!(c, '.' | '_' | '-'))
+}
+
+/// The proxy-mode header name: `LANTHORN_WEB_AUTH_HEADER`, or `None` when unset
+/// or empty. Set, the relay takes the player from that request header and from
+/// nowhere else.
+pub fn auth_header() -> Option<String> {
+    std::env::var("LANTHORN_WEB_AUTH_HEADER").ok().filter(|h| !h.is_empty())
+}
+
+/// Who a websocket upgrade is for. Without proxy mode (`header` is `None`) there
+/// is no player: `Ok(None)`. With it, the header MUST be present and a valid
+/// player name, or the connection is refused — a missing header means the
+/// request did not come through the proxy. Neither the path nor the query can
+/// say who the player is; only the header decides.
+pub fn player_from_headers(
+    header: Option<&str>,
+    headers: &tungstenite::http::HeaderMap,
+) -> Result<Option<String>, String> {
+    let Some(name) = header else { return Ok(None) };
+    let value = headers
+        .get(name)
+        .ok_or_else(|| format!("no {name} header (not routed through the proxy?)"))?
+        .to_str()
+        .map_err(|_| format!("{name} is not text"))?;
+    if !valid_player_name(value) {
+        return Err(format!("{name} {value:?} is not a valid player name"));
+    }
+    Ok(Some(value.to_string()))
 }
 
 /// Where FIFOs live: `LANTHORN_AUDIO_DIR`, or `/tmp/lanthorn-audio`. The
@@ -122,7 +176,7 @@ pub fn detach_enabled() -> bool {
 }
 
 #[cfg(unix)]
-pub use unix::{drain_paced, serve, serve_sessions, SessionStats};
+pub use unix::{drain_paced, serve, serve_sessions, serve_with, SessionStats};
 
 #[cfg(unix)]
 mod unix {
@@ -171,13 +225,25 @@ mod unix {
 
     /// Accept connections forever, attaching each to its session.
     pub fn serve(listener: TcpListener, dir: PathBuf) -> io::Result<()> {
-        serve_sessions(listener, dir, detach_enabled())
+        serve_with(listener, dir, detach_enabled(), auth_header())
     }
 
     /// `serve`, with the detach policy stated rather than read from the
     /// environment — which is what the tests drive, since the environment is
     /// process-global and they share a process under `cargo test`.
     pub fn serve_sessions(listener: TcpListener, dir: PathBuf, keep_when_detached: bool) -> io::Result<()> {
+        serve_with(listener, dir, keep_when_detached, None)
+    }
+
+    /// `serve_sessions` with proxy mode stated too: `Some(header)` makes every
+    /// connection name its player in that request header (see
+    /// [`player_from_headers`]).
+    pub fn serve_with(
+        listener: TcpListener,
+        dir: PathBuf,
+        keep_when_detached: bool,
+        auth_header: Option<String>,
+    ) -> io::Result<()> {
         std::fs::create_dir_all(&dir)?;
         let registry = Arc::new(Registry::default());
         for stream in listener.incoming() {
@@ -190,8 +256,9 @@ mod unix {
             };
             let dir = dir.clone();
             let registry = Arc::clone(&registry);
+            let auth_header = auth_header.clone();
             std::thread::spawn(move || {
-                if let Err(e) = handle(stream, &dir, &registry, keep_when_detached) {
+                if let Err(e) = handle(stream, &dir, &registry, keep_when_detached, auth_header.as_deref()) {
                     eprintln!("audio-relay: {e}");
                 }
             });
@@ -202,17 +269,39 @@ mod unix {
     /// One connection: shake hands, name the session, hand the socket over.
     /// Returns as soon as it is attached — from there the SESSION owns the
     /// socket, because the session is what outlives it.
-    fn handle(stream: TcpStream, dir: &Path, registry: &Arc<Registry>, keep_when_detached: bool) -> io::Result<()> {
+    fn handle(
+        stream: TcpStream,
+        dir: &Path,
+        registry: &Arc<Registry>,
+        keep_when_detached: bool,
+        auth_header: Option<&str>,
+    ) -> io::Result<()> {
         let peer = stream.peer_addr().map(|a| a.to_string()).unwrap_or_default();
         let mut path = String::new();
+        let mut player: Result<Option<String>, String> = Ok(None);
         // The callback's error type is tungstenite's whole HTTP response; the
         // closure never builds one, and the lint is about the type, not a cost.
         #[allow(clippy::result_large_err)]
-        let mut ws = tungstenite::accept_hdr(stream, |req: &tungstenite::handshake::server::Request, resp| {
+        let handshake = tungstenite::accept_hdr(stream, |req: &tungstenite::handshake::server::Request, resp| {
             path = req.uri().path().to_string();
+            player = player_from_headers(auth_header, req.headers());
+            if player.is_err() {
+                // Refused at the handshake: a 401, and no session is made.
+                return Err(tungstenite::http::Response::builder()
+                    .status(401)
+                    .body(None)
+                    .expect("a static response"));
+            }
             Ok(resp)
-        })
-        .map_err(|e| io::Error::other(format!("handshake from {peer}: {e}")))?;
+        });
+        // Flattened to text first: the error carries the callback, which still
+        // borrows `player`.
+        let handshake = handshake.map_err(|e| e.to_string());
+        let mut ws = handshake.map_err(|e| match &player {
+            Err(why) => io::Error::other(format!("refused {peer}: {why}")),
+            Ok(_) => io::Error::other(format!("handshake from {peer}: {e}")),
+        })?;
+        let player = player.unwrap_or(None);
         let Some(id) = session_id(&path) else {
             return Err(io::Error::other(format!("{peer} asked for {path:?}, which is not /audio/<id>")));
         };
@@ -220,7 +309,7 @@ mod unix {
         // reconnected has a new socket and a new decoder, and has been told
         // nothing about the format yet.
         ws.send(Message::Text(header_json().into())).map_err(io::Error::other)?;
-        let fresh = attach(registry, dir, id, ws, keep_when_detached)?;
+        let fresh = attach(registry, dir, player.as_deref(), id, ws, keep_when_detached)?;
         eprintln!(
             "audio-relay: {peer} listening to session {id} ({})",
             if fresh { "new" } else { "reattached" }
@@ -233,23 +322,30 @@ mod unix {
     fn attach(
         registry: &Arc<Registry>,
         dir: &Path,
+        player: Option<&str>,
         id: &str,
         ws: WebSocket<TcpStream>,
         keep_when_detached: bool,
     ) -> io::Result<bool> {
+        // Sessions are keyed by (player, id): the same id under another player
+        // is another game and another FIFO.
+        let key = format!("{}/{id}", player.unwrap_or(DEFAULT_PLAYER_DIR));
         let mut map = lock(&registry.map);
-        if let Some(session) = map.get(id) {
+        if let Some(session) = map.get(&key) {
             // A reconnect that beat the old socket's failing send: the new one
             // wins, and dropping the old closes it.
             *lock(&session.attached) = Some(ws);
             return Ok(false);
         }
         let session = Arc::new(Session {
-            id: id.to_string(),
-            fifo: fifo_path(dir, id),
+            id: key.clone(),
+            fifo: fifo_path(dir, player, id),
             attached: Mutex::new(Some(ws)),
             keep_when_detached,
         });
+        if let Some(parent) = session.fifo.parent() {
+            std::fs::create_dir_all(parent)?;
+        }
         make_fifo(&session.fifo)?;
         let pipe: File = OpenOptions::new().read(true).write(true).open(&session.fifo)?;
         map.insert(session.id.clone(), Arc::clone(&session));
@@ -505,6 +601,11 @@ mod tests {
         assert_eq!(session_id("/audio/../../etc/passwd"), None, "no path characters");
         assert_eq!(session_id("/audio/has space here"), None);
         assert_eq!(session_id("/other/abcdefgh12345678"), None, "only /audio/");
+        assert_eq!(
+            session_id("/lanthorn-audio/abcdefgh12345678"),
+            Some("abcdefgh12345678"),
+            "the proxy's path names the same session"
+        );
         assert_eq!(session_id(&format!("/audio/{}", "x".repeat(65))), None, "too long");
     }
 
@@ -536,7 +637,19 @@ mod tests {
 
     #[test]
     fn fifo_paths_live_under_the_dir_by_id() {
-        assert_eq!(fifo_path(Path::new("/tmp/x"), "abcdefgh12345678"), PathBuf::from("/tmp/x/abcdefgh12345678.pcm"));
+        assert_eq!(
+            fifo_path(Path::new("/tmp/x"), None, "abcdefgh12345678"),
+            PathBuf::from("/tmp/x/_default/abcdefgh12345678.pcm")
+        );
+        assert_eq!(
+            fifo_path(Path::new("/tmp/x"), Some("amy"), "abcdefgh12345678"),
+            PathBuf::from("/tmp/x/amy/abcdefgh12345678.pcm")
+        );
+        assert_ne!(
+            fifo_path(Path::new("/tmp/x"), Some("amy"), "abcdefgh12345678"),
+            fifo_path(Path::new("/tmp/x"), Some("bob"), "abcdefgh12345678"),
+            "one id under two players is two FIFOs"
+        );
     }
 
     /// The sink consumes at the format's rate: a writer pushing a second of
@@ -642,7 +755,7 @@ mod tests {
         let id = "testsession_0001";
         let mut client = attach_to(port, id);
 
-        let fifo = fifo_path(&dir, id);
+        let fifo = fifo_path(&dir, None, id);
         assert!(wait_for(&fifo, true), "the relay created the FIFO on connect");
         let payload: Vec<u8> = (0..20_000u32).map(|i| (i % 251) as u8).collect();
         {
@@ -682,7 +795,7 @@ mod tests {
         let id = "detachsession01";
 
         let client = attach_to(port, id);
-        let fifo = fifo_path(&dir, id);
+        let fifo = fifo_path(&dir, None, id);
         assert!(wait_for(&fifo, true), "the relay created the FIFO on connect");
         // The game's ALSA output: opened once, and it outlives every socket.
         let mut game = std::fs::OpenOptions::new().write(true).open(&fifo).unwrap();
@@ -750,7 +863,7 @@ mod tests {
         let id = "reapedsession01";
 
         let mut client = attach_to(port, id);
-        let fifo = fifo_path(&dir, id);
+        let fifo = fifo_path(&dir, None, id);
         assert!(wait_for(&fifo, true), "the relay created the FIFO on connect");
 
         // Long enough that the session is inside its poll wait rather than on
@@ -789,6 +902,116 @@ mod tests {
         let next = attach_to(port, id);
         assert!(wait_for(&fifo, true), "a reaped id can be used again");
         drop(next);
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    fn headers_with(name: &str, value: &str) -> tungstenite::http::HeaderMap {
+        let mut h = tungstenite::http::HeaderMap::new();
+        h.insert(
+            tungstenite::http::HeaderName::from_bytes(name.as_bytes()).unwrap(),
+            tungstenite::http::HeaderValue::from_str(value).unwrap(),
+        );
+        h
+    }
+
+    #[test]
+    fn player_names_follow_the_apps_rule() {
+        for ok in ["amy", "a.b_c-9", "abcdefghijklmnopqrstuvwxyz012"] {
+            assert!(valid_player_name(ok), "{ok}");
+        }
+        for bad in ["", ".hidden", "..", "a b", "a/b", "../x", "a:b", "\u{fc}ber", "abcdefghijklmnopqrstuvwxyz0123"] {
+            assert!(!valid_player_name(bad), "{bad:?}");
+        }
+    }
+
+    #[test]
+    fn proxy_mode_takes_the_player_from_the_header_alone() {
+        let h = headers_with("x-forwarded-user", "amy");
+        assert_eq!(player_from_headers(Some("X-Forwarded-User"), &h), Ok(Some("amy".to_string())));
+        assert_eq!(player_from_headers(None, &h), Ok(None), "without proxy mode the header means nothing");
+        assert!(player_from_headers(Some("X-Forwarded-User"), &tungstenite::http::HeaderMap::new()).is_err(), "required");
+        assert!(player_from_headers(Some("X-Forwarded-User"), &headers_with("x-forwarded-user", "../etc")).is_err());
+        assert!(player_from_headers(Some("X-Forwarded-User"), &headers_with("x-forwarded-user", "")).is_err());
+        assert!(
+            player_from_headers(Some("X-Forwarded-User"), &headers_with("x-other", "amy")).is_err(),
+            "only the configured header counts"
+        );
+    }
+
+    #[cfg(unix)]
+    fn start_proxy_relay(dir: &Path) -> u16 {
+        let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        let port = listener.local_addr().unwrap().port();
+        let dir = dir.to_path_buf();
+        std::thread::spawn(move || serve_with(listener, dir, true, Some("X-Forwarded-User".to_string())));
+        port
+    }
+
+    /// Dial `url` with an optional player header, as the proxy would.
+    #[cfg(unix)]
+    #[allow(clippy::type_complexity, clippy::result_large_err)]
+    fn dial(
+        url: String,
+        user: Option<&str>,
+    ) -> Result<
+        tungstenite::WebSocket<tungstenite::stream::MaybeTlsStream<std::net::TcpStream>>,
+        tungstenite::Error,
+    > {
+        use tungstenite::client::IntoClientRequest;
+        let mut req = url.into_client_request().unwrap();
+        if let Some(u) = user {
+            req.headers_mut().insert("X-Forwarded-User", u.parse().unwrap());
+        }
+        tungstenite::connect(req).map(|(ws, _)| ws)
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn proxy_mode_refuses_a_missing_or_invalid_header_and_makes_no_fifo() {
+        let dir = scratch("proxy-refuse");
+        let port = start_proxy_relay(&dir);
+        let id = "proxysession0001";
+        let url = format!("ws://127.0.0.1:{port}/lanthorn-audio/{id}");
+        assert!(dial(url.clone(), None).is_err(), "no header: refused");
+        assert!(dial(url.clone(), Some("../etc")).is_err(), "invalid name: refused");
+        // The URL cannot name the player in its stead.
+        assert!(dial(format!("{url}?player=amy"), None).is_err(), "a query is not an identity");
+        std::thread::sleep(Duration::from_millis(100));
+        assert!(!dir.join("amy").exists() && !dir.join("_default").exists(), "nothing was created");
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn proxy_mode_gives_two_players_with_one_id_two_fifos() {
+        let dir = scratch("proxy-keyed");
+        let port = start_proxy_relay(&dir);
+        let id = "proxysession0002";
+        let url = format!("ws://127.0.0.1:{port}/lanthorn-audio/{id}");
+        let mut amy = dial(url.clone(), Some("amy")).unwrap();
+        let mut bob = dial(url.clone(), Some("bob")).unwrap();
+        // A `?player=bob` in the query changes nothing: the header says amy.
+        let mut sneaky = dial(format!("{url}?player=bob"), Some("amy")).unwrap();
+        for ws in [&mut amy, &mut bob, &mut sneaky] {
+            assert_eq!(ws.read().unwrap().into_text().unwrap().as_str(), header_json());
+        }
+        assert!(wait_for(&fifo_path(&dir, Some("amy"), id), true));
+        assert!(wait_for(&fifo_path(&dir, Some("bob"), id), true));
+        assert!(!fifo_path(&dir, None, id).exists(), "no default-player FIFO in proxy mode");
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn without_proxy_mode_the_default_layout_and_old_path_still_work() {
+        let dir = scratch("proxy-off");
+        let port = start_relay(&dir, true);
+        let id = "proxysession0003";
+        // An X-Forwarded-User header is ignored when proxy mode is off.
+        let mut ws = dial(format!("ws://127.0.0.1:{port}/audio/{id}"), Some("amy")).unwrap();
+        assert_eq!(ws.read().unwrap().into_text().unwrap().as_str(), header_json());
+        assert!(wait_for(&fifo_path(&dir, None, id), true));
+        assert!(!dir.join("amy").exists());
         let _ = std::fs::remove_dir_all(&dir);
     }
 }

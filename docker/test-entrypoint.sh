@@ -590,18 +590,18 @@ unset LANTHORN_WEB_GRAB_ZONE
 
 reap_dir="$fixture_dir/sessions-reap"
 reap_audio="$fixture_dir/audio-reap"
-mkdir -p "$reap_dir/_default" "$reap_audio"
+mkdir -p "$reap_dir/_default" "$reap_audio/_default"
 printf '%s\n' "$now" > "$reap_dir/_default/freshsession01.seen"
 printf '%s\n' "$((now - 999999))" > "$reap_dir/_default/ancientone01.seen"
-mkfifo "$reap_audio/freshsession01.pcm"
-mkfifo "$reap_audio/ancientone01.pcm"
+mkfifo "$reap_audio/_default/freshsession01.pcm"
+mkfifo "$reap_audio/_default/ancientone01.pcm"
 
 reap_stale_sessions "$reap_dir" "$now" "$ttl" "$reap_audio"
 
-[ ! -p "$reap_audio/ancientone01.pcm" ]
+[ ! -p "$reap_audio/_default/ancientone01.pcm" ]
 check "reaper: an ended session's audio FIFO is unlinked, which is how the relay hears about it" "$?"
 
-[ -p "$reap_audio/freshsession01.pcm" ]
+[ -p "$reap_audio/_default/freshsession01.pcm" ]
 check "reaper: a live session's FIFO is left exactly where its game is writing" "$?"
 
 [ ! -f "$reap_dir/_default/ancientone01.seen" ]
@@ -678,14 +678,14 @@ wrap_says() {
 }
 
 rm -rf "$wrap_audio" "$wrap_sess"
-mkdir -p "$wrap_audio" "$wrap_sess"
+mkdir -p "$wrap_audio/_default" "$wrap_sess"
 mkfifo "$wrap_audio/null.pcm"
-mkfifo "$wrap_audio/$wrap_id.pcm"
+mkfifo "$wrap_audio/_default/$wrap_id.pcm"
 
 # 1. Detachable, with the relay's FIFO already there: the game plays into it.
 #    This is the whole quest — before SQ-1328 this case chose the paced sink.
 run_wrapper on on "$wrap_id"
-wrap_says "$wrap_audio/$wrap_id.pcm"
+wrap_says "$wrap_audio/_default/$wrap_id.pcm"
 check "wrapper: a detachable session is pointed at its own FIFO, not at the sink" "$?"
 
 grep -qxF -- "/usr/local/bin/lanthorn-session-run" "$DTACH_ARGS_OUT"
@@ -693,7 +693,7 @@ check "wrapper: ...and it is still a dtach session, started through session-run"
 
 # 2. One game per websocket: the same FIFO, chosen the same way.
 run_wrapper off on "$wrap_id"
-wrap_says "$wrap_audio/$wrap_id.pcm"
+wrap_says "$wrap_audio/_default/$wrap_id.pcm"
 check "LANTHORN_WEB_DETACH=off: the game still plays into the session's FIFO" "$?"
 
 [ ! -f "$DTACH_ARGS_OUT" ]
@@ -708,7 +708,7 @@ check "wrapper: a session with no id plays into the paced sink" "$?"
 
 # 4. Audio switched off for the whole container: the sink, and no waiting about
 #    for a FIFO that no relay is going to create.
-rm -f "$wrap_audio/$wrap_id.pcm"
+rm -f "$wrap_audio/_default/$wrap_id.pcm"
 run_wrapper on off "$wrap_id"
 wrap_says "$wrap_audio/null.pcm"
 check "LANTHORN_WEB_AUDIO=off: the session plays into the paced sink" "$?"
@@ -779,13 +779,18 @@ STUB
 cat > "$stub_dir/fake-game" <<'STUB'
 #!/bin/sh
 printf '%s\n' "${LANTHORN_PLAYER:-<unset>}" > "$PLAYER_OUT"
+printf '%s\n' "${LANTHORN_AUDIO_OUT:-<unset>}" > "$AUDIO_OUT_FILE"
 printf '%s\n' "$@" > "$GAME_ARGS_OUT"
 STUB
 chmod +x "$stub_dir/dtach" "$stub_dir/fake-game"
 PLAYER_OUT="$fixture_dir/player_out.txt"
 GAME_ARGS_OUT="$fixture_dir/game_args.txt"
-export PLAYER_OUT GAME_ARGS_OUT
+AUDIO_OUT_FILE="$fixture_dir/audio_out_file.txt"
+export PLAYER_OUT GAME_ARGS_OUT AUDIO_OUT_FILE
 
+# $PX_AUDIO is the LANTHORN_WEB_AUDIO the wrapper runs with (default off, which
+# keeps these cases from waiting for a FIFO).
+PX_AUDIO=off
 # $1 = LANTHORN_WEB_AUTH_HEADER (empty for off), $2 = TTYD_USER (empty for
 # unset), $3 = LANTHORN_WEB_DETACH, then the wrapper's arguments. Leaves the
 # wrapper's exit status in $px_status and its stderr in $px_err.
@@ -800,7 +805,7 @@ run_proxy_wrapper() {
         LANTHORN_AUDIO_DIR="$short_dir/pa"
         LANTHORN_WEB_SESSION_DIR="$short_dir/ps"
         LANTHORN_WEB_DETACH="$_det"
-        LANTHORN_WEB_AUDIO=off
+        LANTHORN_WEB_AUDIO="$PX_AUDIO"
         export PATH LANTHORN_AUDIO_DIR LANTHORN_WEB_SESSION_DIR LANTHORN_WEB_DETACH LANTHORN_WEB_AUDIO
         unset LANTHORN_PLAYER LANTHORN_WEB_AUTH_HEADER TTYD_USER
         if [ -n "$_hdr" ]; then LANTHORN_WEB_AUTH_HEADER="$_hdr"; export LANTHORN_WEB_AUTH_HEADER; fi
@@ -863,6 +868,18 @@ run_proxy_wrapper "" "" off "$sid" fake-game --player=bob story.z5
 grep -qxF -- "--player=bob" "$GAME_ARGS_OUT"
 check "no proxy: --player is left alone, it is the household's own business" "$?"
 
+# Sound in proxy mode: the game plays into the FIFO under ITS player's directory,
+# the one the relay creates from the same header; another player's FIFO of the
+# same id is not it.
+mkdir -p "$short_dir/pa/amy" "$short_dir/pa/bob"
+mkfifo "$short_dir/pa/amy/abcdefgh12345678.pcm" "$short_dir/pa/bob/abcdefgh12345678.pcm"
+PX_AUDIO=on
+run_proxy_wrapper X-Forwarded-User amy off "$sid" fake-game
+PX_AUDIO=off
+[ "$(cat "$PLAYER_OUT" 2>/dev/null)" = "amy" ] && [ "$(cat "$AUDIO_OUT_FILE" 2>/dev/null)" = "$short_dir/pa/amy/abcdefgh12345678.pcm" ]
+check "proxy: the game is pointed at <audio dir>/<player>/<id>.pcm, not another player's" "$?"
+rm -rf "$short_dir/pa"
+
 # The dispatch: ttyd's command line in proxy mode.
 LANTHORN_WEB_AUTH_HEADER=X-Forwarded-User
 export LANTHORN_WEB_AUTH_HEADER
@@ -892,6 +909,18 @@ run_dispatch
 [ ! -f "$TTYD_ARGS_OUT" ]
 check "dispatch: a malformed header name is refused" "$?"
 
+# The page: proxy mode tells web-audio.js to dial its own origin.
+LANTHORN_WEB_AUTH_HEADER=X-Forwarded-User
+export LANTHORN_WEB_AUTH_HEADER
+proxy_page="$(build_index 7682 'IosevkaTerm Nerd Font Mono' 16)"
+printf '%s' "$proxy_page" | grep -q "window.LANTHORN_WEB_AUDIO_PATH='/lanthorn-audio/'"
+check "page: proxy mode injects the same-origin audio path" "$?"
+unset LANTHORN_WEB_AUTH_HEADER
+plain_page="$(build_index 7682 'IosevkaTerm Nerd Font Mono' 16)"
+printf '%s' "$plain_page" | grep -q "window.LANTHORN_WEB_AUDIO_PATH='"
+[ "$?" != "0" ]
+check "page: without proxy mode the audio path is not injected (the :7682 behaviour is unchanged)" "$?"
+
 # Off by default.
 unset LANTHORN_WEB_AUTH_HEADER
 run_dispatch
@@ -902,20 +931,22 @@ check "dispatch: without LANTHORN_WEB_AUTH_HEADER ttyd is not told to trust any 
 # The sweeper in the per-player layout.
 pl_dir="$fixture_dir/sessions-players"
 pl_audio="$fixture_dir/audio-players"
-mkdir -p "$pl_dir/amy" "$pl_dir/bob" "$pl_dir/_default" "$pl_audio"
+mkdir -p "$pl_dir/amy" "$pl_dir/bob" "$pl_dir/_default" "$pl_audio/amy" "$pl_audio/bob" "$pl_audio/_default"
 printf '%s\n' "$((now - 999999))" > "$pl_dir/amy/sameid000001.seen"
 printf '%s\n' "$now" > "$pl_dir/bob/sameid000001.seen"
 printf '%s\n' "$((now - 999999))" > "$pl_dir/_default/oldid0000001.seen"
-mkfifo "$pl_audio/sameid000001.pcm" "$pl_audio/oldid0000001.pcm"
+mkfifo "$pl_audio/amy/sameid000001.pcm" "$pl_audio/bob/sameid000001.pcm" "$pl_audio/_default/oldid0000001.pcm"
 stale="$(stale_sessions "$pl_dir" "$now" "$ttl" | sort | tr '\n' ' ')"
 [ "$stale" = "_default/oldid0000001 amy/sameid000001 " ]
 check "reaper: finds stale sessions in every player's directory, keyed player/id (got '$stale')" "$?"
 reap_stale_sessions "$pl_dir" "$now" "$ttl" "$pl_audio"
 [ ! -f "$pl_dir/amy/sameid000001.seen" ] && [ -f "$pl_dir/bob/sameid000001.seen" ]
 check "reaper: ends one player's session and leaves another's with the same id" "$?"
-[ -p "$pl_audio/sameid000001.pcm" ]
-check "reaper: a named player's session never unlinks the audio FIFO of the same id" "$?"
-[ ! -p "$pl_audio/oldid0000001.pcm" ]
+[ ! -p "$pl_audio/amy/sameid000001.pcm" ]
+check "reaper: an ended named player's FIFO is unlinked too, so the relay hears about it" "$?"
+[ -p "$pl_audio/bob/sameid000001.pcm" ]
+check "reaper: another player's FIFO of the same id is left alone" "$?"
+[ ! -p "$pl_audio/_default/oldid0000001.pcm" ]
 check "reaper: a default session's FIFO is still unlinked" "$?"
 
 if [ "$fail" != "0" ]; then

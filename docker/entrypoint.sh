@@ -27,10 +27,15 @@
 #                             LANTHORN_WEB_CREDENTIAL (ttyd ignores the
 #                             password whenever an auth header is configured,
 #                             so it would look like protection while
-#                             providing none),
-#                             and turns browser sound off: the audio relay is
-#                             a separate port that never sees the header, so
-#                             it cannot tell whose session a socket belongs to.
+#                             providing none).
+#                             Sound keeps working: the page dials the audio
+#                             relay on its OWN origin at /lanthorn-audio/<id>
+#                             instead of host:7682, the proxy must route that
+#                             path to the relay port (after authenticating
+#                             and setting the same header), and the relay
+#                             reads the header too, so FIFOs are keyed by
+#                             (player, id). The relay port, like ttyd's, must
+#                             be reachable only through the proxy.
 #   LANTHORN_WEB_AUDIO        on (default) or off: sound in the browser, via
 #                             lanthorn-audio-relay on its own port
 #   LANTHORN_WEB_AUDIO_PORT   that port (default 7682)
@@ -174,14 +179,11 @@ reap_stale_sessions() {
             kill -TERM "$_pid" 2>/dev/null || true
         fi
         rm -f "$_dir/$_id.seen" "$_dir/$_id.pid"
-        # FIFOs are keyed by id alone and exist only without a player: proxy
-        # mode runs with sound off (see LANTHORN_WEB_AUTH_HEADER above), so a
-        # named player's session has none, and an id of theirs must never
-        # unlink a default-layout session's pipe.
+        # FIFOs share the sockets' layout, <audio>/<player>/<id>.pcm, so the
+        # `<player>/<id>` key names the FIFO too and one player's session never
+        # unlinks another's pipe of the same id.
         if [ -n "$_audio" ]; then
-            case "$_id" in
-                _default/*) rm -f "$_audio/${_id#_default/}.pcm" ;;
-            esac
+            rm -f "$_audio/$_id.pcm"
         fi
     done
 }
@@ -249,6 +251,10 @@ build_index() {
     src="$LANTHORN_SHARE_DIR/ttyd-index.html"
     fonts_dir="$LANTHORN_SHARE_DIR/fonts"
     family="IosevkaTerm Nerd Font Mono"
+    proxy_audio=""
+    if [ -n "${LANTHORN_WEB_AUTH_HEADER:-}" ]; then
+        proxy_audio="1"
+    fi
     touch_on=""
     if [ "${LANTHORN_WEB_TOUCH:-on}" != "off" ]; then
         touch_on="1"
@@ -276,7 +282,7 @@ build_index() {
     merged_tmp="$(mktemp)"
     awk -v f="$LANTHORN_SHARE_DIR/web-audio.js" -v port="$audio_port" \
         -v tf="$LANTHORN_SHARE_DIR/web-touch.js" -v touch_on="$touch_on" \
-        -v sf="$LANTHORN_SHARE_DIR/web-session.js" \
+        -v sf="$LANTHORN_SHARE_DIR/web-session.js" -v proxy_audio="$proxy_audio" \
         -v ff="$LANTHORN_SHARE_DIR/web-font.js" -v tfont="$term_font_family" -v tsize="$term_font_size" '
         BEGIN {
             if (port != "") { while ((getline l < f) > 0) js = js l "\n" }
@@ -289,7 +295,11 @@ build_index() {
             if (i && !done) {
                 head_insert = "\n<script>\n" sjs "</script>"
                 if (port != "") {
-                    head_insert = head_insert "\n<script>window.LANTHORN_WEB_AUDIO_PORT=" port ";\n" js "</script>"
+                    # Proxy mode: the page dials its own origin at this path,
+                    # which the reverse proxy routes to the relay.
+                    pa = ""
+                    if (proxy_audio != "") { pa = "window.LANTHORN_WEB_AUDIO_PATH=\047/lanthorn-audio/\047;" }
+                    head_insert = head_insert "\n<script>window.LANTHORN_WEB_AUDIO_PORT=" port ";" pa "\n" js "</script>"
                 }
                 if (touch_on != "") {
                     head_insert = head_insert "\n<script>\n" tjs "</script>"
@@ -336,11 +346,9 @@ if [ "${1:-}" = "serve" ]; then
             echo "lanthorn: LANTHORN_WEB_AUTH_HEADER and LANTHORN_WEB_CREDENTIAL are both set. ttyd ignores the password whenever an auth header is configured, so it would look like protection while providing none; the proxy is the authentication. Unset LANTHORN_WEB_CREDENTIAL." >&2
             exit 2
         fi
-        if [ "${LANTHORN_WEB_AUDIO:-on}" != "off" ]; then
-            echo "lanthorn: proxy mode: browser sound is off (the audio relay never sees $auth_header, so it cannot tell whose session a socket is)" >&2
-        fi
-        LANTHORN_WEB_AUDIO=off
-        export LANTHORN_WEB_AUDIO LANTHORN_WEB_AUTH_HEADER
+        # Exported so the audio relay (started below) and the per-connection
+        # wrapper both see proxy mode.
+        export LANTHORN_WEB_AUTH_HEADER
     fi
 
     # Each connection runs through the session wrapper, which strips the page's

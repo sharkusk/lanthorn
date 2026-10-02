@@ -176,7 +176,10 @@ if [ -n "$sock" ] && [ -S "$sock" ]; then
 fi
 
 if [ -n "$session" ] && [ "${LANTHORN_WEB_AUDIO:-on}" != "off" ]; then
-    fifo="$audio_dir/$session.pcm"
+    # Keyed like the socket, <audio dir>/<player|_default>/<id>.pcm, which is
+    # where the relay (docker/entrypoint.sh starts it with the same header
+    # setting) creates it.
+    fifo="$audio_dir/${player:-_default}/$session.pcm"
     if [ -z "$attaching" ]; then
         # The page opens the audio socket before the terminal one, but the two
         # handshakes race; give the relay up to two seconds to create the FIFO.

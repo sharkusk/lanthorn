@@ -17,14 +17,36 @@
 // a drop and the sound picks up where the game is now — not where it was. Each
 // attach opens with a fresh header frame, and the queue is emptied when one
 // arrives: whatever was still buffered belongs to a connection that is over.
+
+// Where the audio socket is dialled. Normally the relay's own port on the
+// page's host (`ws://host:7682/audio/<id>`). In PROXY mode (SQ-1318) the
+// entrypoint also sets window.LANTHORN_WEB_AUDIO_PATH, and the page dials its
+// OWN origin at that path instead (`wss://host/lanthorn-audio/<id>`): the
+// operator's reverse proxy authenticates it, sets the same header it sets for
+// ttyd, and routes it to the relay, which takes the player from that header.
+// `loc` is window.location, `proxyPath` the injected path (or undefined).
+function audioUrl(loc, port, session, proxyPath) {
+  var scheme = loc.protocol === "https:" ? "wss" : "ws";
+  if (proxyPath) {
+    return scheme + "://" + loc.host + proxyPath + session;
+  }
+  return scheme + "://" + loc.hostname + ":" + port + "/audio/" + session;
+}
+
+if (typeof module !== "undefined" && module.exports) {
+  module.exports = { audioUrl: audioUrl };
+}
+
 (function () {
+  if (typeof window === "undefined") {
+    return;
+  }
   var session = window.LANTHORN_SESSION_ID;
   if (typeof session !== "string" || !/^[A-Za-z0-9_-]{8,64}$/.test(session)) {
     return;
   }
   var port = window.LANTHORN_WEB_AUDIO_PORT || 7682;
-  var scheme = window.location.protocol === "https:" ? "wss" : "ws";
-  var url = scheme + "://" + window.location.hostname + ":" + port + "/audio/" + session;
+  var url = audioUrl(window.location, port, session, window.LANTHORN_WEB_AUDIO_PATH);
   var ws = null;
   var retry = 500;                      // ms, doubling to RETRY_MAX
   var RETRY_MAX = 8000;

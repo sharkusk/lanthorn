@@ -117,12 +117,22 @@ terminal. Outside proxy mode `TTYD_USER` is never read.
   `<session dir>/<player>/<id>.*` (`_default` with no player), so reusing
   another player's session id starts a fresh game. The sweeper walks every
   player's directory and names a session `<player>/<id>`.
-- **Sound is off.** The audio relay is a second port that browsers dial
-  directly, so it never sees the header and cannot learn the player; its FIFOs
-  stay keyed by id alone (default layout only). Giving it the same header
-  would need the relay behind the proxy at a path on the page's own origin
-  (web-audio.js dials `host:7682` today), which is a larger change than this
-  mode, so the entrypoint switches audio off instead of guessing.
+- **Sound goes through the proxy too.** Normally web-audio.js dials
+  `host:7682/audio/<id>` directly. In proxy mode `build_index` also injects
+  `window.LANTHORN_WEB_AUDIO_PATH='/lanthorn-audio/'` (the same inline-config
+  mechanism as `LANTHORN_WEB_AUDIO_PORT`) and the page dials its own origin at
+  that path, so the operator's proxy authenticates it and routes it to the
+  relay port. The relay (`crates/audio-relay`) reads `LANTHORN_WEB_AUTH_HEADER`
+  from its environment, requires that header on the websocket upgrade (a 401
+  and no session when it is missing or not a valid player name), and takes the
+  player from it alone: nothing in the URL path or query can choose one. It
+  accepts both `/audio/<id>` and `/lanthorn-audio/<id>`. Its player-name check
+  is a copy of `data_roots::validate_player_name`, which is the source of
+  truth. FIFOs follow the socket layout, `<audio dir>/<player|_default>/<id>.pcm`,
+  which is also what serve-session.sh exports as `LANTHORN_AUDIO_OUT`, and the
+  sweeper unlinks `<audio dir>/<player>/<id>.pcm` for every player's session.
+  The relay port must be reachable only through the proxy, and the proxy must
+  strip client copies of the header on this route as well as ttyd's.
 
 ### The touch grab zone
 

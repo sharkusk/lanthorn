@@ -40,7 +40,7 @@ while any such tag, or this Unreleased section, still exists.*
   Authentik, Caddy `forward_auth`): set `LANTHORN_WEB_AUTH_HEADER` to the header
   your proxy fills in with the user's name. Each user's running game is kept
   separate too. The container does no login of its own, so the proxy must be the
-  only way to reach it. Sound is off in this mode.
+  only way to reach it. Sound works in this mode too, through a second proxy route.
 
 ### Fixed
 

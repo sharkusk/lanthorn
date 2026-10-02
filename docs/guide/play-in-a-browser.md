@@ -162,23 +162,30 @@ somebody else's session link starts a fresh game rather than joining theirs.
 
 ```caddy
 lanthorn.example.com {
-    forward_auth authelia:9091 {
-        uri /api/authz/forward-auth
-        copy_headers Remote-User
+    route {
+        forward_auth authelia:9091 {
+            uri /api/authz/forward-auth
+            copy_headers Remote-User
+        }
+        # Sound: the page dials its own address at /lanthorn-audio/, so that
+        # path gets the same login and goes on to the audio port.
+        @audio path /lanthorn-audio/*
+        reverse_proxy @audio lanthorn:7682
+        reverse_proxy lanthorn:7681
     }
-    reverse_proxy lanthorn:7681
 }
 ```
 
 Three things are on you, because **lanthorn does no authentication of its own**
 and trusts the header completely:
 
-- **ttyd's port must be reachable only through the proxy.** Do not publish
-  `7681` to the network; put the proxy and the container on a private Docker
-  network. Anyone who can reach it directly can send any name they like.
-- **The proxy must overwrite or strip any copy of the header the browser sends.**
-  Authelia and Caddy's `forward_auth` replace it; a bare `reverse_proxy` does
-  not.
+- **ttyd's port AND the audio port must be reachable only through the proxy.**
+  Do not publish `7681` or `7682` to the network; put the proxy and the
+  container on a private Docker network. Anyone who can reach either directly
+  can send any name they like.
+- **The proxy must overwrite or strip any copy of the header the browser sends,
+  on both routes.** Authelia and Caddy's `forward_auth` replace it; a bare
+  `reverse_proxy` does not.
 - **Do not also set `LANTHORN_WEB_CREDENTIAL`.** ttyd ignores the password
   whenever a header is configured, so it would look like protection while
   providing none; the proxy is the authentication. The container
@@ -186,9 +193,11 @@ and trusts the header completely:
 
 A name that is not a valid player name (1-29 letters, digits, `.`, `_`, `-`, not
 starting with `.`) is refused with a message on the terminal rather than played
-as someone else. Sound in the browser is switched off in this mode: it travels
-on its own port, which never sees the header, so it could not tell whose
-session a connection is.
+as someone else. Sound works in this mode: the page asks for it at
+`/lanthorn-audio/` on its own address instead of on port 7682, the audio relay
+reads the same header to know whose session it is, and each user's sound goes
+to their own game. A connection to the audio route without a valid header is
+refused.
 
 ## Publishing
 
