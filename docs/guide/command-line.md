@@ -92,6 +92,54 @@ in one pass than one keypress at a time in the picker. `--fetch all`
 refetches everything already cached. `--import-metadata <file>` applies a
 curated TSV of your own for titles IFDB doesn't know or has no cover for.
 
+## Sharing one install between players
+
+A household, a classroom or a shared server can run one lanthorn for several
+people, each with their own saves, map, settings and look, while the library's
+titles, blurbs and cover art are fetched once and shared. Say who is playing
+with `--player <name>`, or set `LANTHORN_PLAYER=<name>` in the environment (the
+flag wins). Leave both out, or leave them empty, and you are the default
+player, exactly as lanthorn has always worked.
+
+```sh
+lanthorn --player amy ~/if-games
+```
+
+Names are 1 to 29 characters of letters, digits, `.`, `_` and `-`, and may not
+start with a dot; anything else is refused with an error before lanthorn
+touches a file.
+
+**What is shared.** Everything IFDB gave a story (title, author, blurb, rating,
+cover), what lanthorn has learned about a Glulx story's insides, your
+`config.toml` and `style.toml` as the starting point for every player, and the
+install-wide extras (hint files, logs, system fonts and disks). One player's
+metadata fetch shows up for everyone.
+
+**What is per player.** Everything under `~/.lanthorn/users/<name>/`: their
+saves and quick-saves, in-game saves, auto-resume, map and turn history,
+transcripts and scripts, and each game's own settings. A game one player has
+saved shows as played only for them; deleting or resetting your saves never
+removes the shared story information.
+
+**Settings layer.** A player's own `config.toml` (and `style.toml`) sits on top
+of the shared one. It starts empty, and lanthorn writes only the settings that player
+actually changed, so anything they never touched keeps following the shared
+file: change the shared volume later and every player who never set theirs
+hears it. `[keymap]` and `[hotkeys]` layer the same way. The default player's
+`config.toml` *is* the shared one, so their changes become everyone's defaults
+unless a player has set their own.
+
+`--user-dir` moves the whole `.lanthorn`, player trees included. `--data-dir`
+stands in for `~/.lanthorn/saves`, the shared catalogue (and the default
+player's saves); a named player's files always sit under `users/` in the user
+directory.
+
+**Lanthorn does not check who you are.** `--player amy` means "act as amy", and
+anyone who can run lanthorn can say it. If players must not be able to read each
+other's games, put something in front that knows who is who: a login proxy that
+passes the username through, or a "who's playing?" picker behind a shared
+password for a household that trusts each other.
+
 ## Docker: a portable lanthorn
 
 The Docker image runs the full TUI — map, panes, kitty graphics and all — in

@@ -27,6 +27,14 @@ goes into the README in place, at its normal destination, marked with the
 visible tag `*Next release:*`. `release.yml` refuses to cut a release
 while any such tag, or this Unreleased section, still exists.*
 
+### Added
+
+- Several players can now share one lanthorn install. `--player <name>` (or the
+  `LANTHORN_PLAYER` environment variable) gives each player their own saves, map,
+  history, settings and look, while story titles, blurbs and covers are fetched
+  once and shared. Leave it out and nothing changes. Lanthorn only takes the name;
+  it does not check who you are.
+
 ### Fixed
 
 - The room inspector now shows room descriptions in Zork Zero, Shogun and

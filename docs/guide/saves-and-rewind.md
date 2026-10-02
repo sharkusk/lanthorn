@@ -47,7 +47,8 @@ a game you quit mid-replay is still steppable when you come back to it.
 
 Everything lands under `~/.lanthorn/saves/<story-filename>.save/` by
 default; `--data-dir <path>` moves just the saves and sidecars elsewhere
-without relocating your config or style.
+without relocating your config or style. Sharing an install between several
+players? See [the command line](command-line.md#sharing-one-install-between-players).
 
 And it isn't only the full TUI — `zvm-cli`, `gvm-cli` and `scott-cli` play
 the same games with the game's own SAVE/RESTORE intact, useful over a slow
