@@ -238,16 +238,19 @@ impl DownloadOption {
     /// different halves of the answer ("Russian translation in Z8" +
     /// "translated by Vyacheslav Dobranov").
     pub fn subtitle(&self) -> Option<String> {
-        let title = self
-            .title
-            .as_deref()
-            .filter(|t| !t.eq_ignore_ascii_case(self.filename.as_str()));
-        match (title, self.desc.as_deref()) {
-            (Some(t), Some(d)) => Some(format!("{t} — {d}")),
-            (Some(t), None) => Some(t.to_string()),
-            (None, Some(d)) => Some(d.to_string()),
-            (None, None) => None,
-        }
+        subtitle_of(&self.filename, self.title.as_deref(), self.desc.as_deref())
+    }
+}
+
+/// [`DownloadOption::subtitle`]'s rule, shared with the documents chooser
+/// (SQ-1680) so a link's one-line description is worded the same in both.
+pub(crate) fn subtitle_of(filename: &str, title: Option<&str>, desc: Option<&str>) -> Option<String> {
+    let title = title.filter(|t| !t.eq_ignore_ascii_case(filename));
+    match (title, desc) {
+        (Some(t), Some(d)) => Some(format!("{t} — {d}")),
+        (Some(t), None) => Some(t.to_string()),
+        (None, Some(d)) => Some(d.to_string()),
+        (None, None) => None,
     }
 }
 
@@ -261,6 +264,21 @@ pub struct ResolvedGame {
     /// Boxed: `IFiction` is large enough that an unboxed `Option` here blows
     /// up `SearchEvent`'s size (clippy's `large_enum_variant`).
     pub record: Option<Box<IFiction>>,
+    /// The non-game links of the same record (manuals, feelies, maps) for the
+    /// documents chooser (SQ-1680) — parsed from the same response, so offering
+    /// them costs no request of its own.
+    pub documents: Vec<crate::ifdb_documents::DocumentOption>,
+}
+
+/// What a `Range: bytes=0-0` probe learned about a URL (SQ-1680).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum RangeProbe {
+    /// The server answered 206 with a `Content-Range`: byte ranges work, and the
+    /// whole resource is `total` bytes.
+    Supported { total: u64 },
+    /// No 206 + `Content-Range`: the server will not serve a slice. `length` is
+    /// the size it advertised for the whole thing, when it said.
+    Unsupported { length: Option<u64> },
 }
 
 #[derive(Debug)]
@@ -279,6 +297,9 @@ pub enum SearchError {
     NotAStory,
     /// A local filesystem error writing the download.
     Io(String),
+    /// A problem with a document or the zip it comes from (SQ-1680), already
+    /// worded for the player.
+    Archive(String),
 }
 
 impl std::fmt::Display for SearchError {
@@ -292,6 +313,7 @@ impl std::fmt::Display for SearchError {
             SearchError::NoFilename => write!(f, "no downloadable story file"),
             SearchError::NotAStory => write!(f, "downloaded file is not a valid story file"),
             SearchError::Io(m) => write!(f, "could not save file: {m}"),
+            SearchError::Archive(m) => write!(f, "{m}"),
         }
     }
 }
@@ -309,6 +331,28 @@ pub trait SearchSource: Send + Sync {
     fn download_options(&self, tuid: &str) -> Result<ResolvedGame, SearchError>;
     /// Download `url` into `dest_dir`, returning the written path.
     fn download(&self, url: &str, dest_dir: &Path) -> Result<PathBuf, SearchError>;
+
+    // ── Documents (SQ-1680) ──────────────────────────────────────────────────
+    // Each is one user-driven request to a host named by the game's IFDB record.
+    // The defaults refuse, so a source that only searches stays a valid one.
+
+    /// Ask whether `url` serves byte ranges (a `Range: bytes=0-0` request) and
+    /// how big it is. Never reads the body.
+    fn probe_range(&self, _url: &str) -> Result<RangeProbe, SearchError> {
+        Err(SearchError::Transport("range requests are not available".into()))
+    }
+    /// `len` bytes of `url` from `start`. A server that ignores `Range` is
+    /// tolerated only for `start == 0`, where the first `len` bytes of its full
+    /// reply are the slice; anywhere else it is an error.
+    fn fetch_range(&self, _url: &str, _start: u64, _len: u64) -> Result<Vec<u8>, SearchError> {
+        Err(SearchError::Transport("range requests are not available".into()))
+    }
+    /// The whole of `url`, refusing (with [`SearchError::TooLarge`]) anything
+    /// over `cap` bytes — judged by the declared length first and again while
+    /// reading, so a host that lies about it is stopped at `cap` too.
+    fn fetch_capped(&self, _url: &str, _cap: u64) -> Result<Vec<u8>, SearchError> {
+        Err(SearchError::Transport("downloads are not available".into()))
+    }
 }
 
 /// ureq-backed [`SearchSource`] hitting the live IFDB + file-host endpoints.
@@ -364,7 +408,8 @@ impl SearchSource for IfdbSearchClient {
         // all) just means no auto-populated metadata later — the download
         // itself is unaffected.
         let record = crate::ifiction::parse(&bytes).ok().map(Box::new);
-        Ok(ResolvedGame { options, record })
+        let documents = crate::ifdb_documents::parse_document_options(&bytes);
+        Ok(ResolvedGame { options, record, documents })
     }
 
     fn download(&self, url: &str, dest_dir: &Path) -> Result<PathBuf, SearchError> {
@@ -418,6 +463,84 @@ impl SearchSource for IfdbSearchClient {
         std::fs::write(&dest, &bytes).map_err(|e| SearchError::Io(e.to_string()))?;
         Ok(dest)
     }
+
+    fn probe_range(&self, url: &str) -> Result<RangeProbe, SearchError> {
+        let resp = self
+            .file_request(url)
+            .header("Range", "bytes=0-0")
+            .call()
+            .map_err(|e| SearchError::Transport(e.to_string()))?;
+        let header = |name: &str| resp.headers().get(name).and_then(|v| v.to_str().ok()).map(str::to_string);
+        if resp.status().as_u16() == 206 {
+            if let Some(total) = header("content-range").as_deref().and_then(content_range_total) {
+                return Ok(RangeProbe::Supported { total });
+            }
+        }
+        let length = header("content-length").and_then(|s| s.parse::<u64>().ok());
+        Ok(RangeProbe::Unsupported { length })
+    }
+
+    fn fetch_range(&self, url: &str, start: u64, len: u64) -> Result<Vec<u8>, SearchError> {
+        if len == 0 {
+            return Ok(Vec::new());
+        }
+        let mut resp = self
+            .file_request(url)
+            .header("Range", format!("bytes={start}-{}", start + len - 1))
+            .call()
+            .map_err(|e| SearchError::Transport(e.to_string()))?;
+        match resp.status().as_u16() {
+            // Never more than was asked for: a host that sends extra is stopped.
+            206 => read_capped(resp.body_mut().as_reader(), len),
+            200 if start == 0 => {
+                let mut buf = Vec::new();
+                resp.body_mut()
+                    .as_reader()
+                    .take(len)
+                    .read_to_end(&mut buf)
+                    .map_err(|e| SearchError::Transport(e.to_string()))?;
+                Ok(buf)
+            }
+            _ => Err(SearchError::Transport("server ignored the Range request".into())),
+        }
+    }
+
+    fn fetch_capped(&self, url: &str, cap: u64) -> Result<Vec<u8>, SearchError> {
+        let mut resp = self.file_request(url).call().map_err(|e| SearchError::Transport(e.to_string()))?;
+        if let Some(len) = resp
+            .headers()
+            .get("content-length")
+            .and_then(|v| v.to_str().ok())
+            .and_then(|s| s.parse::<u64>().ok())
+        {
+            if len > cap {
+                return Err(SearchError::TooLarge);
+            }
+        }
+        read_capped(resp.body_mut().as_reader(), cap)
+    }
+}
+
+impl IfdbSearchClient {
+    /// A GET on a file host with the download phase budgets (see the timeouts
+    /// above) rather than the XML endpoints' whole-call 15 seconds.
+    fn file_request(&self, url: &str) -> ureq::RequestBuilder<ureq::typestate::WithoutBody> {
+        self.agent
+            .get(url)
+            .config()
+            .timeout_global(None)
+            .timeout_connect(Some(CONNECT_TIMEOUT))
+            .timeout_recv_response(Some(HEADERS_TIMEOUT))
+            .timeout_recv_body(Some(BODY_TIMEOUT))
+            .build()
+    }
+}
+
+/// The total out of a `Content-Range: bytes 0-0/12345` value; `None` for an
+/// unknown total (`*`) or a shape that is not a byte range.
+fn content_range_total(value: &str) -> Option<u64> {
+    let rest = value.trim().strip_prefix("bytes")?.trim_start();
+    rest.rsplit('/').next()?.trim().parse::<u64>().ok()
 }
 
 /// lanthorn's descriptive User-Agent — identifies the client and its repo, and
@@ -533,7 +656,7 @@ pub fn parse_download_options(xml: &[u8]) -> Vec<DownloadOption> {
 /// these strings really do carry them (IFDB's Invisiclues entry ends in a blank
 /// line) — which a one-row list cell cannot show, so every whitespace run then
 /// collapses to a single space.
-fn one_line(s: &str) -> Option<String> {
+pub(crate) fn one_line(s: &str) -> Option<String> {
     let flat = crate::ifiction::html_to_text(s);
     let joined = flat.split_whitespace().collect::<Vec<_>>().join(" ");
     if joined.is_empty() {
@@ -598,7 +721,7 @@ pub fn read_capped<R: Read>(r: R, cap: u64) -> Result<Vec<u8>, SearchError> {
 
 /// The last path segment of a URL, percent-decoded, with any query/fragment
 /// stripped. `None` if empty. Not yet sanitized — pass through [`sanitize_filename`].
-fn basename_from_url(url: &str) -> Option<String> {
+pub(crate) fn basename_from_url(url: &str) -> Option<String> {
     let no_frag = url.split('#').next().unwrap_or(url);
     let no_query = no_frag.split('?').next().unwrap_or(no_frag);
     let last = no_query.rsplit('/').next().unwrap_or(no_query);
@@ -665,6 +788,13 @@ pub fn looks_like_story_file(filename: &str, bytes: &[u8]) -> bool {
 /// control chars and anything path-significant, and require it to still end in
 /// an accepted story extension. `None` if nothing safe/openable remains.
 pub fn sanitize_filename(raw: &str) -> Option<String> {
+    sanitize_basename(raw).filter(|c| is_named_story_file(Path::new(c)))
+}
+
+/// [`sanitize_filename`] without the story-extension requirement: the safe final
+/// component of an untrusted name, for the documents downloader (SQ-1680), whose
+/// files are manuals and maps rather than stories.
+pub(crate) fn sanitize_basename(raw: &str) -> Option<String> {
     // Final component under BOTH separators — `a/../b`, `..\\evil`, `/etc/x`.
     let base = raw.rsplit(['/', '\\']).next().unwrap_or(raw).trim();
     // A lone/leading-dot name (".", "..", ".z5") is never a real story file.
@@ -679,7 +809,7 @@ pub fn sanitize_filename(raw: &str) -> Option<String> {
     if cleaned.is_empty() || cleaned == ".." {
         return None;
     }
-    is_named_story_file(Path::new(&cleaned)).then_some(cleaned)
+    Some(cleaned)
 }
 
 /// A non-colliding path in `dir` for `filename`: returns `dir/filename` if free,
@@ -756,7 +886,7 @@ fn percent_decode(s: &str) -> String {
 }
 
 /// Find a direct child element named `name` and return its trimmed text.
-fn child_text<'a>(parent: roxmltree::Node<'a, 'a>, name: &str) -> Option<String> {
+pub(crate) fn child_text<'a>(parent: roxmltree::Node<'a, 'a>, name: &str) -> Option<String> {
     parent
         .children()
         .find(|n| n.is_element() && n.tag_name().name() == name)
@@ -1237,7 +1367,7 @@ mod tests {
             Ok(self.hits.clone())
         }
         fn download_options(&self, _tuid: &str) -> Result<ResolvedGame, SearchError> {
-            Ok(ResolvedGame { options: self.options.clone(), record: self.record.clone().map(Box::new) })
+            Ok(ResolvedGame { options: self.options.clone(), record: self.record.clone().map(Box::new), ..Default::default() })
         }
         fn download(&self, _url: &str, dest: &Path) -> Result<PathBuf, SearchError> {
             let p = dest.join("downloaded.ulx");
@@ -1449,7 +1579,7 @@ mod tests {
             Ok(Vec::new())
         }
         fn download_options(&self, _tuid: &str) -> Result<ResolvedGame, SearchError> {
-            Ok(ResolvedGame { options: Vec::new(), record: None })
+            Ok(ResolvedGame::default())
         }
         fn download(&self, _url: &str, dest: &Path) -> Result<PathBuf, SearchError> {
             std::fs::create_dir_all(dest).map_err(|e| SearchError::Io(e.to_string()))?;

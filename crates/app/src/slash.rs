@@ -145,6 +145,11 @@ pub enum SlashOutcome {
     /// the modal; the answer writes preset names into `style.toml` and reloads
     /// the theme. Handled in `slash_dispatch`.
     RunFontCheck,
+    /// Open the "Download documents from IFDB" chooser (SQ-1680) for the game
+    /// the caller has in hand — the running game, or in the browser (which maps
+    /// it to [`crate::browser::BrowserAction::DownloadDocuments`]) the selected
+    /// story. The one outcome that both worlds apply, see [`in_both_worlds`].
+    DownloadDocuments,
     /// Act on the pre-game story browser. The browser has no `AppState`, so it
     /// cannot take an [`Action`]; its verbs are their own type and are applied
     /// by the picker loop. See [`crate::browser`] (SQ-0796).
@@ -323,6 +328,9 @@ pub static COMMANDS: &[CommandSpec] = &[
     CommandSpec { name: "quit-to-library", category: Category::Game, context: Context::Global,
         usage: "quit-to-library", description: "exit the current story and return to the story library",
         dispatch: |_| SlashOutcome::QuitToLibrary },
+    CommandSpec { name: "download-documents", category: Category::Game, context: Context::Global,
+        usage: "download-documents", description: "choose manuals, feelies and maps listed on IFDB for this game and save them to its documents folder",
+        dispatch: |_| SlashOutcome::DownloadDocuments },
     CommandSpec { name: "open-hints", category: Category::Game, context: Context::Global,
         usage: "open-hints", description: "open the hints panel",
         dispatch: |_| SlashOutcome::OpenHints },
@@ -767,6 +775,17 @@ pub fn find_command(name: &str) -> Option<&'static CommandSpec> {
     COMMANDS.iter().find(|c| c.name == name)
 }
 
+/// Commands that belong to BOTH worlds — the running game and the story browser
+/// (SQ-1680). Everything else is one or the other (SQ-0796), and the gates below
+/// keep it so; these have a counterpart on each side because the thing they act
+/// on — "this game's IFDB record" — exists on each.
+const BOTH_WORLDS: &[&str] = &["download-documents"];
+
+/// Is `spec` available in the story browser and in the game alike?
+pub fn in_both_worlds(spec: &CommandSpec) -> bool {
+    BOTH_WORLDS.contains(&spec.name)
+}
+
 // ── parse ─────────────────────────────────────────────────────────────────────
 
 /// Parse a slash-command body (the text AFTER the leading prefix, e.g. `/`).
@@ -823,7 +842,7 @@ pub fn parse_in_context(body: &str, prefix: char, ctx: Context) -> SlashOutcome 
     if spec.context == Context::Browser && ctx != Context::Browser {
         return SlashOutcome::Error(format!("{} is only available in the story browser", spec.name));
     }
-    if ctx == Context::Browser && spec.context != Context::Browser {
+    if ctx == Context::Browser && spec.context != Context::Browser && !in_both_worlds(spec) {
         return SlashOutcome::Error(format!("{} is not available in the story browser", spec.name));
     }
 
@@ -1182,7 +1201,10 @@ mod tests {
         // sections (Carrying/Elsewhere) by name substring.
         // SQ-1679 added `create-documents-folder`: the info panel's button, a key and
         // a story-menu row for the selected game's documents folder.
-        assert_eq!(COMMANDS.len(), 94, "registry must match the spec's Full command table");
+        // SQ-1680 added `download-documents`: the one command that lives in both the
+        // game and the story browser (`in_both_worlds`) — the chooser over a game's
+        // IFDB document links.
+        assert_eq!(COMMANDS.len(), 95, "registry must match the spec's Full command table");
     }
 
     /// SQ-1237 unified the panel vocabulary — `command band` became `command

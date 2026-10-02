@@ -110,6 +110,10 @@ version = 1   # style schema version — do not remove; lets lanthorn flag an ou
 # ifdb_download_marker = { parent = "accent", glyph = "⭳" }
 # ifdb_download_present = { parent = "muted", glyph = "✓" }
 # ifdb_attribution = { parent = "muted", italic = true }
+# documents_checked = { parent = "accent", glyph = "✓" }
+# documents_spoiler = { parent = "alert", italic = true }
+# documents_title_match = { parent = "accent", bold = true }
+# documents_preview = { parent = "muted" }
 # saves_portable = { parent = "accent", glyph = "↗" }
 # saves_host_only = { parent = "muted" }
 # "command_panel.column_header" = { parent = "muted" }

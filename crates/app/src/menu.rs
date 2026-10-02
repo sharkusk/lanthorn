@@ -55,12 +55,18 @@ pub struct MenuRects {
 /// (resolved by `key_of`, in whatever `KeyMap` context the caller reads)
 /// activates it directly, so the menu never gets in the way of somebody who
 /// already knows the key it is teaching them.
+///
+/// `disabled` names the items that cannot act right now, by command, with the
+/// reason to show in place of their key (SQ-1680): Enter on one does nothing, so
+/// the row stays and the reason with it. Its own hotkey still goes through — the
+/// command it dispatches answers with the same reason on the status line.
 pub fn on_key(
     cursor: &mut usize,
     items: &'static [MenuItem],
     k: KeyEvent,
     km: &KeyMap,
     key_of: impl Fn(&KeyMap, &str) -> Option<KeySpec>,
+    disabled: impl Fn(&str) -> Option<&'static str>,
 ) -> MenuOutcome {
     let n = items.len();
     match k.code {
@@ -72,6 +78,7 @@ pub fn on_key(
             *cursor = (*cursor + 1) % n;
             MenuOutcome::None
         }
+        KeyCode::Enter if disabled(items[*cursor].command).is_some() => MenuOutcome::None,
         KeyCode::Enter => MenuOutcome::Activate(items[*cursor].command),
         KeyCode::Esc => MenuOutcome::Close,
         _ => {
@@ -106,12 +113,17 @@ pub fn menu_rect(
     items: &[MenuItem],
     km: &KeyMap,
     key_of: impl Fn(&KeyMap, &str) -> Option<KeySpec>,
+    disabled: impl Fn(&str) -> Option<&'static str>,
     anchor: Rect,
     pane: Rect,
 ) -> Rect {
     let label_w = items.iter().map(|it| UnicodeWidthStr::width(it.label)).max().unwrap_or(0);
-    let key_w =
-        key_labels(items, km, &key_of).iter().map(|s| UnicodeWidthStr::width(s.as_str())).max().unwrap_or(0);
+    let key_w = key_labels(items, km, &key_of)
+        .iter()
+        .map(|s| UnicodeWidthStr::width(s.as_str()))
+        .chain(items.iter().filter_map(|it| disabled(it.command)).map(UnicodeWidthStr::width))
+        .max()
+        .unwrap_or(0);
     // ` label  key ` inside two border columns.
     let w = (label_w + key_w + 6) as u16;
     let h = items.len() as u16 + 2;
@@ -145,12 +157,13 @@ pub fn draw_menu(
     cursor: usize,
     km: &KeyMap,
     key_of: impl Fn(&KeyMap, &str) -> Option<KeySpec>,
+    disabled: impl Fn(&str) -> Option<&'static str>,
     anchor: Rect,
     pane: Rect,
     cs: &ColorScheme,
     buf: &mut Buffer,
 ) -> MenuRects {
-    let area = menu_rect(items, km, &key_of, anchor, pane);
+    let area = menu_rect(items, km, &key_of, &disabled, anchor, pane);
     let item_style = cs.theme.get("dialog.story_menu.item").style;
 
     // The shared panel chrome rather than `draw_dialog`: a context menu carries
@@ -193,7 +206,13 @@ pub fn draw_menu(
     let sel_style = cs.theme.get("dialog.story_menu.item:selected").style;
     let key_style = cs.theme.get("dialog.story_menu.key").style;
 
-    let keys = key_labels(items, km, &key_of);
+    let mut keys = key_labels(items, km, &key_of);
+    // A disabled item shows its reason where its key would be.
+    for (k, it) in keys.iter_mut().zip(items) {
+        if let Some(why) = disabled(it.command) {
+            *k = why.to_string();
+        }
+    }
     let key_w = keys.iter().map(|s| UnicodeWidthStr::width(s.as_str())).max().unwrap_or(0) as u16;
 
     let mut out = Vec::new();
@@ -204,7 +223,10 @@ pub fn draw_menu(
         }
         let row = Rect::new(content.x, y, content.width, 1);
         let selected = i == cursor;
-        let base = if selected { sel_style } else { item_style };
+        let off = disabled(it.command).is_some();
+        // A disabled row is dimmed in the key style, selected or not: it can be
+        // landed on, to be read, and cannot be mistaken for one that works.
+        let base = if off { key_style } else if selected { sel_style } else { item_style };
         // Paint the whole row first: the highlight is a band across the item AND
         // its key, not a coloured label with dim text beside it.
         for x in row.x..row.right() {
@@ -216,7 +238,7 @@ pub fn draw_menu(
         let key = &keys[i];
         if !key.is_empty() {
             let kx = row.right().saturating_sub(1 + key_w).max(row.x);
-            let kstyle = if selected { base } else { key_style };
+            let kstyle = if selected || off { base } else { key_style };
             draw_str_clipped(buf, kx, y, key, kstyle, row);
         }
         out.push((i, row));

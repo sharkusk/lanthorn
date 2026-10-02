@@ -421,6 +421,12 @@ pub(crate) fn poll_tidy_jobs(
 /// the lib so the integration tests can drive them against a real story. Both
 /// run — `||` would short-circuit the objects refresh on the one tick the verbs
 /// change.
+/// Hand the documents chooser (SQ-1680) what its worker has finished and start
+/// its next request. `true` when a redraw is due.
+pub(crate) fn poll_documents(state: &mut AppState) -> bool {
+    state.overlays.documents.as_mut().is_some_and(|d| d.pump())
+}
+
 pub(crate) fn refresh_command_band(state: &mut AppState, session: &dyn Engine) -> bool {
     let verbs = app::render::command_band::refresh_verbs(state, session);
     app::render::command_band::refresh_objects(state, session) || verbs

@@ -242,6 +242,13 @@ pub enum Action {
     /// Close the palette without executing (Esc / [X] / outside click). Returns to
     /// the hotkey dialog when the palette was promoted from it.
     PaletteClose,
+    /// A key for the open documents chooser (SQ-1680), which owns its own state
+    /// machine; this only carries the key to it.
+    DocumentsKey(KeyCode),
+    /// A left click at (column, row) while the documents chooser is open.
+    DocumentsClick(u16, u16),
+    /// A wheel notch (±1 row, already direction-resolved) over the chooser.
+    DocumentsWheel(isize),
     /// A mouse-wheel notch over whichever selection-list modal is open: scroll
     /// its viewport by `delta` rows and clamp the cursor into the visible
     /// window (SQ-0831). Deliberately ONE action for every list rather than a
@@ -582,6 +589,12 @@ pub fn key_to_command(state: &AppState, key: KeyEvent) -> KeyResolve {
     // dispatch path; Esc closes. Placed at the top of the modal ladder because it
     // can be summoned over any other view (incl. the debug pane where no prompt
     // exists).
+    // The documents chooser (SQ-1680) is a modal with a state machine of its
+    // own: every key goes to it, above the palette (which can open it, and has
+    // closed by then).
+    if state.overlays.documents.is_some() {
+        return KeyResolve::Action(Action::DocumentsKey(key.code));
+    }
     if state.overlays.palette.is_some() {
         return palette_key_to_command(state, key);
     }
@@ -1108,6 +1121,14 @@ pub fn mouse_to_action(
     // list with a cursor in a viewport.
     // `kind` already has the single mouse_wheel_invert applied (above), so map it
     // to a direction with the shared helper and invert=false (never twice).
+    // The documents chooser (SQ-1680) owns the mouse outright while open.
+    if state.overlays.documents.is_some() {
+        return match (wheel_delta(kind, false), m.kind) {
+            (Some(d), _) => Action::DocumentsWheel(d),
+            (None, MouseEventKind::Down(MouseButton::Left)) => Action::DocumentsClick(col, row),
+            _ => Action::None,
+        };
+    }
     let wheel_up = wheel_delta(kind, false).map(|d| d < 0);
     if let Some(up) = wheel_up {
         // Priority mirrors the keyboard modal routing order above.
@@ -2720,6 +2741,29 @@ fn apply_action_inner(action: Action, state: &mut AppState, mapper: &mut Mapper)
             // left untouched, so closing restores it unchanged.
             state.overlays.hotkey_dialog = false;
             state.overlays.palette = Some(crate::state::PaletteState::new(from_hotkey));
+        }
+
+        Action::DocumentsKey(code) => {
+            let anim = state.config.animation.clone();
+            if let Some(ds) = state.overlays.documents.as_mut() {
+                if ds.on_key(code, &anim) == crate::documents_chooser::KeyOutcome::Close {
+                    state.overlays.documents = None;
+                }
+            }
+        }
+        Action::DocumentsClick(col, row) => {
+            if let Some(ds) = state.overlays.documents.as_mut() {
+                let pos = ratatui::layout::Position { x: col, y: row };
+                if ds.on_click_at(pos) == crate::documents_chooser::KeyOutcome::Close {
+                    state.overlays.documents = None;
+                }
+            }
+        }
+        Action::DocumentsWheel(delta) => {
+            let anim = state.config.animation.clone();
+            if let Some(ds) = state.overlays.documents.as_mut() {
+                ds.chooser.on_wheel(delta, &anim);
+            }
         }
 
         Action::PaletteNav(delta) => {
@@ -12935,5 +12979,110 @@ mod tests {
         s.overlays.quit_dialog = true;
         assert!(!apply_paste(&mut s, "north"));
         assert!(s.input.value.is_empty());
+    }
+
+    // ── SQ-1680: the documents chooser as a modal of the running game ──────────
+
+    /// A source that is never online, so opening the chooser here reaches no network.
+    struct Offline;
+
+    impl crate::ifdb_search::SearchSource for Offline {
+        fn search(&self, _q: &str) -> Result<Vec<crate::ifdb_search::SearchHit>, crate::ifdb_search::SearchError> {
+            Err(crate::ifdb_search::SearchError::Transport("offline".into()))
+        }
+        fn hot(&self) -> Result<Vec<crate::ifdb_search::SearchHit>, crate::ifdb_search::SearchError> {
+            Err(crate::ifdb_search::SearchError::Transport("offline".into()))
+        }
+        fn download_options(&self, _t: &str) -> Result<crate::ifdb_search::ResolvedGame, crate::ifdb_search::SearchError> {
+            Err(crate::ifdb_search::SearchError::Transport("offline".into()))
+        }
+        fn download(
+            &self,
+            _u: &str,
+            _d: &std::path::Path,
+        ) -> Result<std::path::PathBuf, crate::ifdb_search::SearchError> {
+            Err(crate::ifdb_search::SearchError::Transport("offline".into()))
+        }
+    }
+
+    fn state_with_documents(tag: &str) -> (AppState, std::path::PathBuf) {
+        let home = crate::scratch_dir(tag);
+        let roots = crate::data_roots::DataRoots::resolve(&home, None, None, &Default::default());
+        let mut s = AppState::default();
+        s.overlays.documents =
+            Some(crate::documents_chooser::DocumentsSession::open(Box::new(Offline), roots, "abc123", "Zork I"));
+        (s, home)
+    }
+
+    #[test]
+    fn the_documents_chooser_is_a_modal_that_owns_the_keys_and_closes_on_esc() {
+        let (mut s, home) = state_with_documents("docs-modal-keys");
+        assert!(s.any_modal_overlay_open(), "it is a modal");
+        // A letter that would otherwise type into the story prompt goes to the chooser.
+        let a = key_to_action(&s, key(KeyCode::Char('x')));
+        assert!(matches!(a, Action::DocumentsKey(KeyCode::Char('x'))), "{a:?}");
+        apply_action(a, &mut s, &mut Mapper::default());
+        assert!(s.input.value.is_empty(), "nothing leaked into the prompt");
+        // Tab is the chooser's focus key, not the prompt's autocomplete / the pane toggle.
+        let a = key_to_action(&s, key(KeyCode::Tab));
+        assert!(matches!(a, Action::DocumentsKey(KeyCode::Tab)), "{a:?}");
+        let a = key_to_action(&s, key(KeyCode::Esc));
+        apply_action(a, &mut s, &mut Mapper::default());
+        assert!(s.overlays.documents.is_none(), "Esc closes it");
+        assert!(!s.any_modal_overlay_open());
+        let _ = std::fs::remove_dir_all(home);
+    }
+
+    #[test]
+    fn the_documents_chooser_owns_the_mouse_while_open() {
+        use crossterm::event::{MouseEvent, MouseEventKind};
+        let (s, home) = state_with_documents("docs-modal-mouse");
+        let ev = |kind| MouseEvent { kind, column: 5, row: 6, modifiers: KeyModifiers::NONE };
+        let none = None;
+        let r = ratatui::layout::Rect::default();
+        let act = |kind| mouse_to_action(&s, ev(kind), r, r, &[], &none);
+        assert_eq!(act(MouseEventKind::Down(crossterm::event::MouseButton::Left)), Action::DocumentsClick(5, 6));
+        assert_eq!(act(MouseEventKind::ScrollDown), Action::DocumentsWheel(1));
+        assert_eq!(act(MouseEventKind::ScrollUp), Action::DocumentsWheel(-1));
+        assert_eq!(act(MouseEventKind::Moved), Action::None, "motion is swallowed, not routed to the map");
+        let _ = std::fs::remove_dir_all(home);
+    }
+
+    /// One command, two worlds: typed in the game it asks for the chooser; the
+    /// browser reads the same registry entry as its own action, and Shift-D and
+    /// nothing else is bound to it.
+    #[test]
+    fn download_documents_is_one_registry_command_in_the_game_and_the_browser() {
+        use crate::keymap::Context;
+        use crate::slash::{in_both_worlds, parse_in_context, SlashOutcome, COMMANDS};
+        assert!(matches!(parse_in_context("download-documents", '/', Context::Global), SlashOutcome::DownloadDocuments));
+        assert!(matches!(parse_in_context("download-documents", '/', Context::Browser), SlashOutcome::DownloadDocuments));
+        assert_eq!(
+            crate::browser::action_for_command("download-documents"),
+            Some(crate::browser::BrowserAction::DownloadDocuments)
+        );
+        // It is the ONLY command that crosses: every other game command is still refused in the browser.
+        let both: Vec<&str> = COMMANDS.iter().filter(|c| in_both_worlds(c)).map(|c| c.name).collect();
+        assert_eq!(both, ["download-documents"]);
+        assert!(matches!(parse_in_context("quit", '/', Context::Browser), SlashOutcome::Error(_)));
+        // The in-game palette and Tab completion offer it; /help lists it.
+        assert!(crate::slash::slash_names().iter().any(|n| n == "download-documents"));
+        assert!(crate::slash::help_text('/').iter().any(|l| l.contains("download-documents")));
+        // Shift-D in the browser; plain d is still reverse-sort.
+        let km = crate::keymap::KeyMap::default();
+        let shift_d = crossterm::event::KeyEvent::new(KeyCode::Char('D'), KeyModifiers::SHIFT);
+        assert_eq!(crate::browser::action_for_key(&km, shift_d), Some(crate::browser::BrowserAction::DownloadDocuments));
+        assert_eq!(
+            crate::browser::action_for_key(&km, key(KeyCode::Char('d'))),
+            Some(crate::browser::BrowserAction::ReverseSort)
+        );
+        // It may be bound in either keymap — it is at home in both worlds.
+        let mut cfg = crate::config::KeymapConfig::default();
+        cfg.browser.insert("ctrl+w".into(), "download-documents".into());
+        cfg.global.insert("ctrl+e".into(), "download-documents".into());
+        let (km2, warnings) = crate::keymap::KeyMap::resolve(&cfg);
+        assert!(warnings.is_empty(), "{warnings:?}");
+        assert_eq!(km2.lookup(&"ctrl+w".parse().unwrap(), Context::Browser), Some("download-documents"));
+        assert_eq!(km2.lookup(&"ctrl+e".parse().unwrap(), Context::Global), Some("download-documents"));
     }
 }

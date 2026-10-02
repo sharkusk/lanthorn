@@ -42,6 +42,11 @@ const DOCS_BUTTON_LABEL: &str = "Create documents folder";
 /// a URL would sit: not a URL, so the click handler runs the command instead.
 const PANEL_ACTION_CREATE_DOCS: &str = "lanthorn-action:create-documents-folder";
 
+/// The info panel's "Download documents…" button label and what a click on it
+/// reports (SQ-1680) — the same arrangement as the create button above.
+const DOWNLOAD_DOCS_LABEL: &str = "Download documents…";
+const PANEL_ACTION_DOWNLOAD_DOCS: &str = "lanthorn-action:download-documents";
+
 /// A previewable bundled resource the info panel links to (SQ-0347): an image
 /// (`Pict`) or a sound (`Snd `). Carries where to re-read the bytes from (the
 /// story's own blorb, or its sidecar) since the panel's `ChunkInfo` list holds
@@ -558,6 +563,26 @@ fn create_documents_folder(
             }
         }
     }
+}
+
+/// The IFDB id and title of the story `entry` if it is linked to IFDB, which is
+/// what the documents chooser needs and a game IFDB does not know cannot give.
+fn documents_target(roots: &app::data_roots::DataRoots, entry: &app::picker::StoryEntry) -> Option<(String, String)> {
+    match app::documents::locate(roots, entry.meta.ifdb_tuid.as_deref(), &entry.title) {
+        app::documents::Location::Unlinked => None,
+        _ => entry.meta.ifdb_tuid.clone().map(|t| (t, entry.title.clone())),
+    }
+}
+
+/// The per-story menu for row `idx`, with its IFDB-record items disabled when
+/// the story is not linked (SQ-1680).
+fn menu_for(
+    stories: &[app::picker::StoryEntry],
+    idx: usize,
+    roots: &app::data_roots::DataRoots,
+) -> app::story_menu::StoryMenu {
+    let linked = stories.get(idx).is_some_and(|e| documents_target(roots, e).is_some());
+    app::story_menu::StoryMenu::for_story(idx, linked)
 }
 
 /// The rows the picker lists for `dir`: a library shows the folder at `dir`
@@ -1462,6 +1487,10 @@ pub(crate) fn run_story_picker(
     let mut search_modal: Option<app::ifdb_search_modal::SearchModal> = None;
     let mut search_area = Rect::new(0, 0, 0, 0);
     let mut search_close_rect: Option<Rect> = None;
+    // The documents chooser (SQ-1680): `Shift-D`, the story menu's row and the
+    // info panel's button open it for the selected story. Its worker is its own
+    // (one request at a time, like the search worker's), built per open.
+    let mut docs_session: Option<app::documents_chooser::DocumentsSession> = None;
 
     // Info panel: always starts closed each launch (session-only state).
     let mut slide = PanelSlide::closed();
@@ -1715,6 +1744,12 @@ pub(crate) fn run_story_picker(
                 let rects = app::ifdb_search_modal::draw_search_modal(sm, area, &cs, buf);
                 search_area = rects.area;
                 search_close_rect = rects.close;
+            }
+
+            // Documents chooser (SQ-1680): a modal like the search one, and
+            // never open with it.
+            if let Some(ds) = &docs_session {
+                app::documents_chooser::draw_documents(&ds.chooser, area, &cs, buf);
             }
 
             // Launch-options dialog (SQ-0789): topmost of all, since it is the
@@ -2009,6 +2044,16 @@ pub(crate) fn run_story_picker(
         // cursor on the new story; other events (search results, download
         // options, errors) update the modal's own state machine, which may hand
         // back a follow-up action.
+        let mut docs_arrived = false;
+        if let Some(ds) = docs_session.as_mut() {
+            docs_arrived = ds.pump();
+            if ds.chooser.take_saved() {
+                // Files landed in the game's folder: the info panel's
+                // Documents line is read afresh (as after creating the folder).
+                aux_cache = (0..stories.len()).map(|_| None).collect();
+                ensure_aux(&mut aux_cache, &stories, list.selected, roots, &hint_index);
+            }
+        }
         let mut search_arrived = false;
         for ev in search_worker.drain() {
             search_arrived = true;
@@ -2069,7 +2114,7 @@ pub(crate) fn run_story_picker(
         // `index_grew` too (SQ-none): a find's matches and the gallery's scope
         // widen as folders are indexed, and a header that counts them must
         // repaint without waiting for a key.
-        if cover_arrived || fetch_arrived || hint_arrived || search_arrived || url_arrived || index_grew {
+        if cover_arrived || fetch_arrived || hint_arrived || search_arrived || docs_arrived || url_arrived || index_grew {
             list.finalize_if_done();
             continue;
         }
@@ -2088,6 +2133,7 @@ pub(crate) fn run_story_picker(
             && (!requested.is_empty() || tile_encoder.pending());
         let cover_busy = panel_busy || gallery_busy;
         let search_busy = search_modal.as_ref().is_some_and(|m| m.busy()) || search_worker.busy();
+        let docs_busy = docs_session.as_ref().is_some_and(|d| d.busy() || d.chooser.has_active_animation());
         // The modal's own lists ease exactly as `list` does (SQ-0598), so they
         // need the same tick — without it a scroll would freeze mid-tween until
         // the next keypress.
@@ -2098,12 +2144,15 @@ pub(crate) fn run_story_picker(
         // its real payload fires on its own, without waiting for another key —
         // mirroring `has_active_animation()` pulling in `transcript_scroll_in_motion`
         // for the transcript's own debounce (SQ-1198).
-        if (list.has_active_animation() || slide.active() || cover_busy || fetcher.busy() || hint_dl.busy() || url_dl.busy() || search_busy || search_scrolling || gallery_scroll_in_motion(gallery_scroll_motion_at))
+        if (list.has_active_animation() || slide.active() || cover_busy || fetcher.busy() || hint_dl.busy() || url_dl.busy() || search_busy || docs_busy || search_scrolling || gallery_scroll_in_motion(gallery_scroll_motion_at))
             && !crossterm::event::poll(Duration::from_millis(16)).unwrap_or(false)
         {
             list.finalize_if_done();
             if let Some(m) = &mut search_modal {
                 m.finalize_if_done();
+            }
+            if let Some(d) = &mut docs_session {
+                d.chooser.finalize_if_done();
             }
             continue;
         }
@@ -2232,6 +2281,12 @@ pub(crate) fn run_story_picker(
                 } else if search_modal.is_some() {
                     let action = search_modal.as_mut().unwrap().on_key(k.code, anim);
                     dispatch_search_action(action, &search_worker, &dir, &mut search_modal);
+                // The documents chooser (SQ-1680) captures all keys while open:
+                // Tab/Shift-Tab focus, Enter activates, Esc closes.
+                } else if let Some(ds) = docs_session.as_mut() {
+                    if ds.on_key(k.code, anim) == app::documents_chooser::KeyOutcome::Close {
+                        docs_session = None;
+                    }
                 // The resource-preview modal (SQ-0347) captures all keys while
                 // open: `+`/`=`/`-`/`0` step the zoom (SQ-0486, intercepted
                 // ahead of dismissal); any of Esc/Enter/q/Space dismisses it
@@ -2440,6 +2495,7 @@ pub(crate) fn run_story_picker(
                     let pt = ratatui::layout::Position { x: m.column, y: m.row };
                     if launch_opts.is_none()
                         && search_modal.is_none()
+                        && docs_session.is_none()
                         && preview.is_none()
                         && !keys_dialog
                     {
@@ -2452,7 +2508,7 @@ pub(crate) fn run_story_picker(
                             panel_scroll = 0;
                             list.select(idx, viewport, anim);
                         }
-                        story_menu = open.map(app::story_menu::StoryMenu::new);
+                        story_menu = open.map(|i| menu_for(&stories, i, roots));
                     }
                 } else if let MouseEventKind::Down(MouseButton::Left) = m.kind {
                     let pt = ratatui::layout::Position { x: m.column, y: m.row };
@@ -2539,6 +2595,14 @@ pub(crate) fn run_story_picker(
                         {
                             launch_opts = None;
                         }
+                    } else if docs_session.is_some() {
+                        // Documents chooser (SQ-1680): ✕ / outside / Close dismiss,
+                        // Download acts, a click inside the list is swallowed.
+                        if let Some(ds) = docs_session.as_mut() {
+                            if ds.on_click_at(pt) == app::documents_chooser::KeyOutcome::Close {
+                                docs_session = None;
+                            }
+                        }
                     } else if search_modal.is_some() {
                         // IFDB search modal (SQ-0413): the ✕ or a click outside the
                         // dialog closes it; a click inside is swallowed (its lists
@@ -2573,6 +2637,8 @@ pub(crate) fn run_story_picker(
                         // except the documents button, which runs its command.
                         if url == PANEL_ACTION_CREATE_DOCS {
                             pending_command = Some("create-documents-folder");
+                        } else if url == PANEL_ACTION_DOWNLOAD_DOCS {
+                            pending_command = Some("download-documents");
                         } else {
                             open_url(url);
                         }
@@ -2624,7 +2690,7 @@ pub(crate) fn run_story_picker(
                         launch_opts.is_some(),
                         keys_dialog,
                         story_menu.is_some(),
-                        search_modal.is_some(),
+                        search_modal.is_some() || docs_session.is_some(),
                         preview.is_some(),
                         slide.open && last_panel_area.contains(pt),
                     ) {
@@ -2637,6 +2703,8 @@ pub(crate) fn run_story_picker(
                         WheelTarget::Search => {
                             if let Some(sm) = search_modal.as_mut() {
                                 sm.on_wheel(d, anim);
+                            } else if let Some(ds) = docs_session.as_mut() {
+                                ds.chooser.on_wheel(d, anim);
                             }
                         }
                         // Over the preview modal, the wheel zooms instead of
@@ -2781,7 +2849,7 @@ pub(crate) fn run_story_picker(
             // inert on one, exactly as launch options already are.
             Some(app::browser::BrowserAction::OpenStoryMenu) => {
                 if stories.get(list.selected).is_some_and(|e| !e.is_folder()) {
-                    story_menu = Some(app::story_menu::StoryMenu::new(list.selected));
+                    story_menu = Some(menu_for(&stories, list.selected, roots));
                 }
             }
             Some(app::browser::BrowserAction::ShowBrowserKeys) => {
@@ -2937,6 +3005,25 @@ pub(crate) fn run_story_picker(
                 if !url_dl.busy() {
                     url_prompt = Some(app::text_field::TextField::new(""));
                     progress_line = None;
+                }
+            }
+            // Choose manuals, feelies and maps from the selected story's
+            // IFDB record (SQ-1680). A story IFDB does not know has no record
+            // to read, so it says so instead.
+            Some(app::browser::BrowserAction::DownloadDocuments) => {
+                if let Some(entry) = stories.get(list.selected).filter(|e| !e.is_folder()) {
+                    match documents_target(roots, entry) {
+                        None => progress_line = Some(app::documents_chooser::LINK_FIRST.to_string()),
+                        Some((tuid, title)) => {
+                            docs_session = Some(app::documents_chooser::DocumentsSession::open(
+                                app::documents_chooser::default_source(),
+                                roots.clone(),
+                                &tuid,
+                                &title,
+                            ));
+                            progress_line = None;
+                        }
+                    }
                 }
             }
             Some(app::browser::BrowserAction::SearchIfdb) => {
@@ -3757,7 +3844,7 @@ fn draw_info_panel(
     let mut resource_refs: Vec<(usize, ResourceRef)> = Vec::new();
     // Line indices that are the documents button (SQ-1679): clickable, reported
     // through `link_rects` under [`PANEL_ACTION_CREATE_DOCS`].
-    let mut button_rows: Vec<usize> = Vec::new();
+    let mut button_rows: Vec<(usize, &'static str)> = Vec::new();
 
     // Title.
     lines.push((title.to_string(), story_info_title));
@@ -3880,14 +3967,23 @@ fn draw_info_panel(
             app::documents::Location::Exists(p) => {
                 link_urls.push((lines.len(), app::documents::file_url(p)));
                 lines.push((format!("Documents: {}", abbreviate_home(p)), story_info_documents));
+                button_rows.push((lines.len(), PANEL_ACTION_DOWNLOAD_DOCS));
+                lines.push((format!(" [ {DOWNLOAD_DOCS_LABEL} ] "), story_info_documents_button));
             }
             app::documents::Location::Missing(p) => {
                 lines.push((format!("Documents: {} (not created)", abbreviate_home(p)), story_info_documents));
-                button_rows.push(lines.len());
+                button_rows.push((lines.len(), PANEL_ACTION_CREATE_DOCS));
                 lines.push((format!(" [ {DOCS_BUTTON_LABEL} ] "), story_info_documents_button));
+                button_rows.push((lines.len(), PANEL_ACTION_DOWNLOAD_DOCS));
+                lines.push((format!(" [ {DOWNLOAD_DOCS_LABEL} ] "), story_info_documents_button));
             }
             app::documents::Location::Unlinked => {
                 lines.push(("Documents: Link to IFDB for a documents folder".to_string(), story_info_documents));
+                // Disabled: drawn as plain text, not as a button, and not clickable.
+                lines.push((
+                    format!(" [ {DOWNLOAD_DOCS_LABEL} ] {}", app::documents_chooser::LINK_FIRST),
+                    story_info_documents,
+                ));
             }
         }
     }
@@ -4230,10 +4326,10 @@ fn draw_info_panel(
             link_rects.push((rect, url.clone()));
             continue;
         }
-        if button_rows.contains(&li) {
+        if let Some((_, action)) = button_rows.iter().find(|(row, _)| *row == li) {
             draw_str_clipped(buf, row_area.x, y, text, *style, row_area);
             let w = (text.chars().count() as u16).min(row_area.width);
-            link_rects.push((Rect::new(row_area.x, y, w, 1), PANEL_ACTION_CREATE_DOCS.to_string()));
+            link_rects.push((Rect::new(row_area.x, y, w, 1), action.to_string()));
             continue;
         }
         if let Some((_, rref)) = resource_refs.iter().find(|(idx, _)| *idx == li) {
@@ -7213,16 +7309,46 @@ mod tests {
         assert!(text.contains("Documents: /nowhere/documents/Game [t1]"), "{text}");
         assert!(!text.contains("not created") && !text.contains("Create documents folder"), "{text}");
         assert!(links.iter().any(|(_, u)| u.starts_with("file:///nowhere/documents/Game%20%5Bt1%5D")), "{links:?}");
+        // SQ-1680: the folder exists, so the download button sits under its line.
+        assert!(text.contains("[ Download documents… ]"), "{text}");
+        assert!(links.iter().any(|(_, u)| u == super::PANEL_ACTION_DOWNLOAD_DOCS), "clickable: {links:?}");
 
         let (text, links) = render(Location::Missing(dir));
         assert!(text.contains("Documents: /nowhere/documents/Game [t1] (not created)"), "{text}");
         assert!(text.contains("[ Create documents folder ]"), "{text}");
         assert!(links.iter().any(|(_, u)| u == super::PANEL_ACTION_CREATE_DOCS), "the button is clickable: {links:?}");
+        assert!(text.contains("[ Download documents… ]"), "a linked game can download before the folder exists: {text}");
+        assert!(links.iter().any(|(_, u)| u == super::PANEL_ACTION_DOWNLOAD_DOCS), "{links:?}");
 
         let (text, links) = render(Location::Unlinked);
         assert!(text.contains("Link to IFDB for a documents folder"), "{text}");
         assert!(!text.contains("Create documents folder"), "an unlinked game has no button: {text}");
         assert!(links.iter().all(|(_, u)| u != super::PANEL_ACTION_CREATE_DOCS));
+        // SQ-1680: the download button is there, disabled, and says why.
+        assert!(text.contains("[ Download documents… ] Link to IFDB first"), "{text}");
+        assert!(links.iter().all(|(_, u)| u != super::PANEL_ACTION_DOWNLOAD_DOCS), "not clickable: {links:?}");
+    }
+
+    /// SQ-1680: a story's menu disables the documents row exactly when the story
+    /// has no IFDB id, and the chooser's target is the id and title the documents
+    /// folder is named for.
+    #[test]
+    fn the_story_menu_and_the_chooser_target_follow_the_stories_ifdb_link() {
+        let roots = app::data_roots::DataRoots::single(std::path::PathBuf::from("/nowhere"));
+        let mut linked = scott_entry_with_pictures(std::path::Path::new("/tmp/lib/l.prg"), None);
+        linked.title = "Linked Game".into();
+        linked.meta.ifdb_tuid = Some("tuid123".into());
+        let mut unlinked = scott_entry_with_pictures(std::path::Path::new("/tmp/lib/u.prg"), None);
+        unlinked.title = "Plain Game".into();
+        assert_eq!(super::documents_target(&roots, &linked), Some(("tuid123".to_string(), "Linked Game".to_string())));
+        assert_eq!(super::documents_target(&roots, &unlinked), None);
+        let stories = [linked, unlinked];
+        assert!(super::menu_for(&stories, 0, &roots).disabled("download-documents").is_none());
+        assert_eq!(
+            super::menu_for(&stories, 1, &roots).disabled("download-documents"),
+            Some(app::documents_chooser::LINK_FIRST)
+        );
+        assert!(super::menu_for(&stories, 9, &roots).disabled("download-documents").is_some(), "no row: nothing to link");
     }
 
     /// SQ-1679: activating the button creates exactly `<Title> [<TUID>]` under the

@@ -11,6 +11,7 @@ Every slash command, grouped the way `/help` groups them. Type any of these afte
 | Game | `set-transcript on|off` | start or stop the story's own transcript, written to script.txt in the game's folder — the same switch a game's SCRIPT command throws, for the many that have none (launch with --transcript-file for a live, engine-neutral stream instead) |
 | Game | `quit` | exit lanthorn |
 | Game | `quit-to-library` | exit the current story and return to the story library |
+| Game | `download-documents` | choose manuals, feelies and maps listed on IFDB for this game and save them to its documents folder |
 | Game | `open-hints` | open the hints panel |
 | Game | `open-history` | open the rewind/replay history |
 | Game | `toggle-command-panel` | open or close the command panel; remembered per story |

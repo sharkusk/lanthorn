@@ -68,7 +68,7 @@ impl RoomMenu {
 
     /// Route a keystroke. See [`crate::menu::on_key`].
     pub fn on_key(&mut self, k: KeyEvent, km: &KeyMap) -> MenuOutcome {
-        menu_widget::on_key(&mut self.cursor, ROOM_MENU, k, km, first_key)
+        menu_widget::on_key(&mut self.cursor, ROOM_MENU, k, km, first_key, |_| None)
     }
 
     /// The 1x1 rect `crate::menu`'s geometry anchors against.
@@ -80,7 +80,7 @@ impl RoomMenu {
 /// The menu's frame, clamped inside `pane` (the map pane). See
 /// [`crate::menu::menu_rect`].
 pub fn menu_rect(menu: &RoomMenu, km: &KeyMap, pane: Rect) -> Rect {
-    menu_widget::menu_rect(ROOM_MENU, km, first_key, menu.anchor_rect(), pane)
+    menu_widget::menu_rect(ROOM_MENU, km, first_key, |_| None, menu.anchor_rect(), pane)
 }
 
 /// Draw the menu anchored at the click, clamped to `pane`. See
@@ -92,7 +92,7 @@ pub fn draw_room_menu(
     cs: &ColorScheme,
     buf: &mut Buffer,
 ) -> MenuRects {
-    menu_widget::draw_menu(ROOM_MENU, menu.cursor, km, first_key, menu.anchor_rect(), pane, cs, buf)
+    menu_widget::draw_menu(ROOM_MENU, menu.cursor, km, first_key, |_| None, menu.anchor_rect(), pane, cs, buf)
 }
 
 // ── Tests ─────────────────────────────────────────────────────────────────────

@@ -175,6 +175,10 @@ Every themeable `style.toml` selector: which role or selector it derives from, a
 | `ifdb_download_marker` | Elements | Style | `accent` | `glyph="⭳"` | |
 | `ifdb_download_present` | Elements | Style | `muted` | `glyph="✓"` | |
 | `ifdb_attribution` | Elements | Style | `muted` | `italic` | |
+| `documents_checked` | Elements | Style | `accent` | `glyph="✓"` | |
+| `documents_spoiler` | Elements | Style | `alert` | `italic` | |
+| `documents_title_match` | Elements | Style | `accent` | `bold` | |
+| `documents_preview` | Elements | Style | `muted` |  | |
 | `saves_portable` | Elements | Style | `accent` | `glyph="↗"` | |
 | `saves_host_only` | Elements | Style | `muted` |  | |
 | `dialog.list_selected` | Dialog | Style |  | `fg=Black bg=Cyan bold` | |

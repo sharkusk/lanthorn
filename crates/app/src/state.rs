@@ -2570,6 +2570,9 @@ pub struct OverlayState {
     /// the same room — the menu and the panel underneath always agree on
     /// which room is meant.
     pub room_menu: Option<crate::room_menu::RoomMenu>,
+    /// The "Download documents from IFDB" chooser and its worker (SQ-1680). A
+    /// modal: it owns every key and click while open.
+    pub documents: Option<crate::documents_chooser::DocumentsSession>,
 }
 
 /// Where the last v6 frame put one thing on the terminal, for `/dump-windows`
@@ -3547,6 +3550,11 @@ pub struct AppState {
     /// per-game reads/writes happen against an empty path).
     pub game_dir: std::path::PathBuf,
 
+    /// Where this player's data lives — the documents folders among it — set
+    /// once at startup (SQ-1680). `None` until then, and in a host that has no
+    /// library, where there is nothing for `download-documents` to save into.
+    pub data_roots: Option<crate::data_roots::DataRoots>,
+
     // ── Inventory panel state ─────────────────────────────────────────────────
 
     /// When true, the inventory strip is shown above the input line.
@@ -4012,6 +4020,7 @@ impl Default for AppState {
             ifid: String::new(),
             source: crate::archive::SaveSource::default(),
             game_dir: std::path::PathBuf::new(),
+            data_roots: None,
             show_inventory: false,
             player_obj: None,
             inventory_fallback: Vec::new(),
@@ -4648,6 +4657,7 @@ impl AppState {
             || self.overlays.replay.is_some()
             || self.overlays.region_prompt.is_some()
             || self.overlays.room_menu.is_some()
+            || self.overlays.documents.is_some()
             || self.resize_mode
     }
 

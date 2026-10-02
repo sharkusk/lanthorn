@@ -24,7 +24,7 @@ use crate::data_roots::DataRoots;
 const MAX_TITLE_CHARS: usize = 80;
 
 /// Names Windows refuses for a file or folder whatever the extension.
-const WINDOWS_RESERVED: [&str; 22] = [
+pub(crate) const WINDOWS_RESERVED: [&str; 22] = [
     "CON", "PRN", "AUX", "NUL", "COM1", "COM2", "COM3", "COM4", "COM5", "COM6", "COM7", "COM8", "COM9", "LPT1",
     "LPT2", "LPT3", "LPT4", "LPT5", "LPT6", "LPT7", "LPT8", "LPT9",
 ];

@@ -417,6 +417,7 @@ impl Default for KeyMap {
         bind!(plain(Char('m')), "create-documents-folder", Context::Browser);
         bind!(g(Char('U'), false, true), "open-url", Context::Browser);
         bind!(g(Char('H'), false, true), "download-hints", Context::Browser);
+        bind!(g(Char('D'), false, true), "download-documents", Context::Browser);
         bind!(plain(Char('s')), "sort-library", Context::Browser);
         bind!(plain(Char('d')), "reverse-sort", Context::Browser);
         // Ctrl+F filters the library's in-memory index; Backspace climbs out of
@@ -547,7 +548,7 @@ impl KeyMap {
                 // nothing. Say so here instead.
                 if let Some(spec) = crate::slash::find_command(cmd_name) {
                     let in_browser = ctx == Context::Browser;
-                    if (spec.context == Context::Browser) != in_browser {
+                    if (spec.context == Context::Browser) != in_browser && !crate::slash::in_both_worlds(spec) {
                         warnings.push(if in_browser {
                             format!("keymap: '{command}' is a game command and cannot be bound in [keymap.browser]; skipped")
                         } else {

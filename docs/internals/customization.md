@@ -365,7 +365,10 @@ switches that make lanthorn feel like yours without opening the whole registry.
   The commands are `move-selection <dx> <dy>`, `page-selection <n>`,
   `select-edge first|last`, `play-story`, `open-launch-options`,
   `toggle-info-panel`, `toggle-gallery`, `fetch-story`, `refresh-library`,
-  `set-ifdb-url`, `search-ifdb`, `download-hints`, `sort-library`,
+  `set-ifdb-url`, `search-ifdb`, `download-hints`, `download-documents`
+  (the one command that is also a game command: `/download-documents` in a
+  running game opens the same chooser, and `Shift+D` is bound to it here),
+  `sort-library`,
   `reverse-sort`, `find-story`, `parent-folder`, `quit-browser` and
   `cancel-browser`. They are a world of their
   own: a game command in `[keymap.browser]` is refused with a warning (there is

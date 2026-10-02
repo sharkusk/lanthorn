@@ -588,6 +588,13 @@ pub static REGISTRY: std::sync::LazyLock<Vec<RegRow>> = std::sync::LazyLock::new
     // muted tint, so "I have this one" reads without displacing the filename.
     row("ifdb_download_present", Section::Elements, Kind::Style, Some("muted"), glyph("✓")),
     row("ifdb_attribution", Section::Elements, Kind::Style, Some("muted"), mods(false, true, false, false)),
+    // ── the documents chooser (SQ-1680) — it reuses the IFDB modal's row styles;
+    // these are what it adds: the mark on a ticked row, the spoiler tag, a file
+    // or zip entry named for the game, and the text preview. ──
+    row("documents_checked", Section::Elements, Kind::Style, Some("accent"), glyph("✓")),
+    row("documents_spoiler", Section::Elements, Kind::Style, Some("alert"), mods(false, true, false, false)),
+    row("documents_title_match", Section::Elements, Kind::Style, Some("accent"), mods(true, false, false, false)),
+    row("documents_preview", Section::Elements, Kind::Style, Some("muted"), Delta::EMPTY),
     // ── saves manager (SQ-0531) — the Type cell's portability tint. A "Game"
     // save carries standard save-instruction-PC bytes any interpreter reads and
     // gets the accent + the ↗ glyph; a host "State" snapshot stays here. ──
@@ -882,6 +889,11 @@ mod tests {
         "saves_portable",
         "saves_host_only",
         "ifdb_attribution",
+        // SQ-1680: the documents chooser
+        "documents_checked",
+        "documents_spoiler",
+        "documents_title_match",
+        "documents_preview",
         // SQ-0643: hard-coded modal/list styles → themed selectors
         "dialog.list_selected",
         "dialog.list_footer",

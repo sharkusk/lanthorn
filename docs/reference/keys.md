@@ -53,6 +53,7 @@ The built-in key bindings, one row per binding — several keys may reach the sa
 | Browser | `M` | `create-documents-folder` | create the selected story's documents folder (manuals, maps) beside its IFDB id |
 | Browser | `Shift+U` | `open-url` | download a story from a URL into this library and open it |
 | Browser | `Shift+H` | `download-hints` | download a matching InvisiClues hint file for the selected story |
+| Browser | `Shift+D` | `download-documents` | choose manuals, feelies and maps listed on IFDB for this game and save them to its documents folder |
 | Browser | `S` | `sort-library` | cycle the browser's sort column, keeping the direction |
 | Browser | `D` | `reverse-sort` | reverse the browser's sort direction, keeping the column |
 | Browser | `Ctrl+F` | `find-story` | type to filter the whole library by title, author, filename or folder |

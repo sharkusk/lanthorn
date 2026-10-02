@@ -97,6 +97,8 @@ pub mod fetch_worker;
 pub mod metadata_import;
 pub mod cover_gallery;
 pub mod ifdb;
+pub mod documents_chooser;
+pub mod ifdb_documents;
 pub mod ifdb_search;
 pub mod ifdb_search_modal;
 pub mod ifiction;

@@ -1964,6 +1964,8 @@ fn run_event_loop(boot: startup::BootResult, launched_from_library: bool) -> Run
     // Whether a story library exists to return to; gates `/quit-to-library`. Set
     // once here from the launch context. (SQ-0435)
     state.launched_from_library = launched_from_library;
+    // Where `download-documents` saves (SQ-1680).
+    state.data_roots = Some(roots.clone());
     // A story launched from the list always resolves back to it, on every way
     // the run can end — the game's own quit included — not only the explicit
     // `/quit-to-library` path. Seeding the default here means a game-driven quit
@@ -2086,6 +2088,7 @@ fn run_event_loop(boot: startup::BootResult, launched_from_library: bool) -> Run
         // independent pollable subsystem lives in `loop_tick` and returns its
         // redraw contribution, OR-ed into `needs_redraw` here (order preserved).
         needs_redraw |= loop_tick::poll_style_watch(&mut state, &style_watcher, &mut watch_dirty);
+        needs_redraw |= loop_tick::poll_documents(&mut state);
         loop_tick::sync_theme_colours(&state, &mut *session);
         needs_redraw |= loop_tick::poll_glulx_resize(
             &mut *session,

@@ -84,6 +84,30 @@ to keep them somewhere other than `~/.lanthorn/documents`. Both are read from th
 shared `config.toml` only, so a named player's file cannot move or switch them.
 A story that is not linked to IFDB has no documents folder; the panel says so.
 
+**Fetching what IFDB lists.** IFDB's page for a game often links its manual, a
+map, a transcript of the original packaging, or a walkthrough. Press `Shift+D`
+on a linked story, or choose **Download documents from IFDB…** from its menu, or
+click **Download documents…** in the info panel, to see them in a list. (Inside a
+game, `/download-documents` does the same.) Move with the arrow keys, press
+`Space` to mark the ones you want, and `Enter` to save them into the game's
+documents folder, which is made if it is not there yet. With nothing marked,
+`Enter` saves the row you are on.
+
+- **Spoilers are tagged.** A link from IFDB's solutions or hints directories is
+  marked *spoiler* in the list, so you do not open a walkthrough by accident.
+- **Zips open without being downloaded.** Press `→` on a zip to see its contents:
+  lanthorn asks the server for the end of the file, where the table of contents
+  lives, and nothing more. Mark single files inside (a file named for your game is
+  starred) and only those are fetched, so you can take *ZorkI.txt* out of a bundle
+  of solutions for fifty games. If a server will not hand out part of a file, the
+  row says *contents unknown* and the whole zip is all you can take.
+- **Peek at text first.** `p` shows the first twenty lines of a text file, or of
+  a text file inside a zip, before you decide.
+- Nothing is fetched until you ask for it, one request at a time, and a file over
+  50 MB is refused. A name that already exists in the folder is never overwritten:
+  the new file is saved as `manual (2).pdf`. A game that is not linked to IFDB
+  shows the button and menu row greyed out with *Link to IFDB first*.
+
 **A multi-disk release shows up as one shelf, not a pile of disks.** Point
 lanthorn at any volume from a set — the seven Apple II floppies of *The Lost
 Treasures of Infocom*, `floppy1.ima` through `floppy5.ima` — and it opens a

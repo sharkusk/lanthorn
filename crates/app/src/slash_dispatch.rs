@@ -635,6 +635,20 @@ pub(crate) fn dispatch_slash_outcome(
                 Err(e) => state.set_status(format!("set-game-borders failed: {e}")),
             }
         }
+        SlashOutcome::DownloadDocuments => {
+            // SQ-1680: manuals, feelies and maps from this game's IFDB record.
+            // The chooser is a modal of the game's own; a game IFDB does not
+            // know gets the reason on the status line instead.
+            match app::documents_chooser::session_for_story(
+                state.data_roots.as_ref(),
+                story_path,
+                state.source.disk_entry.as_deref(),
+                app::documents_chooser::default_source(),
+            ) {
+                Ok(session) => state.overlays.documents = Some(session),
+                Err(why) => state.set_status(why),
+            }
+        }
         SlashOutcome::RunFontCheck => {
             // SQ-1104/SQ-1245: open the same modal the first run raises, on
             // stage one. Focus starts on the second button — the answer that

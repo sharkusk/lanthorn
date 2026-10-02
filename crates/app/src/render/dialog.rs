@@ -256,6 +256,7 @@ pub struct DialogSpec<'a> {
 
 // ── DialogRects ───────────────────────────────────────────────────────────────
 
+#[derive(Clone)]
 pub struct DialogRects {
     pub area: Rect,
     pub content: Rect,

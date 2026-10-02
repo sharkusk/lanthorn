@@ -163,6 +163,11 @@ pub(crate) fn draw_all(
         }
     }
 
+    // ── Documents chooser (SQ-1680) ────────────────────────────────────────
+    if let Some(ds) = &state.overlays.documents {
+        out.dialog = Some(app::documents_chooser::draw_documents(&ds.chooser, dialog_area, &state.colors, buf));
+    }
+
     // ── Command palette popup — drawn over everything (SQ-0419) ────────────
     if state.overlays.palette.is_some() {
         out.dialog = draw_palette(state, dialog_area, buf, modal_list_viewport, palette_hits);

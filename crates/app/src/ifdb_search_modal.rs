@@ -670,7 +670,7 @@ fn render_body(modal: &mut SearchModal, area: Rect, cs: &ColorScheme, buf: &mut 
 
 /// Right-hand gutter reserved so a row's content never touches the dialog's
 /// border column.
-const ROW_MARGIN: u16 = 1;
+pub(crate) const ROW_MARGIN: u16 = 1;
 
 /// One result row: "Title — Author", clipped with an ellipsis to leave room for
 /// a right-aligned "★rating (year)" tail. The tail's width is reserved FIRST
@@ -728,7 +728,7 @@ fn render_hit_row(
 
 /// A row's themeable marker glyph, falling back to `default` when a theme
 /// blanks it out. Same contract as the saves manager's portability glyph.
-fn row_glyph(cs: &ColorScheme, selector: &str, default: &str) -> String {
+pub(crate) fn row_glyph(cs: &ColorScheme, selector: &str, default: &str) -> String {
     cs.theme
         .get(selector)
         .glyph
@@ -803,7 +803,7 @@ fn render_option_row(
 /// Cells, not chars (SQ-0655): a fullwidth IFDB title is two cells per char, so a
 /// char-counted clip drew twice its budget — over the right-aligned rating tail
 /// and on into the modal's border.
-fn clip_with_ellipsis(s: &str, width: u16) -> String {
+pub(crate) fn clip_with_ellipsis(s: &str, width: u16) -> String {
     crate::textwidth::clip_to_cols_ellipsis(s, width as usize)
 }
 
@@ -830,7 +830,7 @@ fn hit_rating(hit: &SearchHit) -> Option<String> {
 /// after the list shrinks (a new search replaces a long result set with a short
 /// one) an un-clamped offset would render a window hanging off the end, with
 /// blank rows below a handful of items.
-fn window_start(offset: usize, len: usize, rows: usize) -> usize {
+pub(crate) fn window_start(offset: usize, len: usize, rows: usize) -> usize {
     offset.min(len.saturating_sub(rows))
 }
 
@@ -841,7 +841,7 @@ fn window_start(offset: usize, len: usize, rows: usize) -> usize {
 /// cell let a fullwidth string run past `x + width` on screen even after clipping
 /// (SQ-0655). Grapheme clusters are written whole, so a combining mark or a ZWJ
 /// emoji stays with its base.
-fn put_str(buf: &mut Buffer, x: u16, y: u16, width: u16, s: &str, style: Style) {
+pub(crate) fn put_str(buf: &mut Buffer, x: u16, y: u16, width: u16, s: &str, style: Style) {
     use unicode_segmentation::UnicodeSegmentation;
     let end = x.saturating_add(width);
     let mut cx = x;
@@ -907,7 +907,7 @@ mod tests {
     /// tests want (they're exercising the options/download plumbing, not
     /// SQ-0474's metadata threading).
     fn resolved(options: Vec<DownloadOption>) -> ResolvedGame {
-        ResolvedGame { options, record: None }
+        ResolvedGame { options, record: None, ..Default::default() }
     }
 
     #[test]
@@ -1053,6 +1053,7 @@ mod tests {
         let action = m.on_event(&SearchEvent::Options(ResolvedGame {
             options: vec![opt("a.z5"), opt("a.z8")],
             record: Some(record.clone()),
+            ..Default::default()
         }));
         assert_eq!(action, ModalAction::None);
         assert_eq!(m.take_pending_record(), Some(record));

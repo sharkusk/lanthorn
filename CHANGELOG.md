@@ -29,6 +29,16 @@ while any such tag, or this Unreleased section, still exists.*
 
 ### Added
 
+- You can now fetch a game's manuals, feelies and maps straight from IFDB into its
+  documents folder. Press `Shift+D` on a story (or use the story menu's **Download
+  documents from IFDB…**, the **Download documents…** button in the info panel, or
+  `/download-documents` in a running game) and pick from the files IFDB lists:
+  PDFs, scans, text files and zips. Solutions and hints are tagged *spoiler*. A
+  zip opens to show what is inside without being downloaded, so you can take just
+  the one entry you want from a bundle of fifty games, and a text file can be
+  previewed first. Nothing is fetched until you ask, files over 50 MB are refused,
+  and a game that is not linked to IFDB says so.
+
 - Every game linked to IFDB can have a documents folder for its manual, feelies
   and maps, named `<Title> [<IFDB id>]` under `~/.lanthorn/documents/` and shared
   by every release of the game and every player. The story info panel shows its

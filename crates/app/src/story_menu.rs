@@ -41,6 +41,7 @@ pub const STORY_MENU: &[MenuItem] = &[
     MenuItem { command: "download-hints", label: "Get hints" },
     MenuItem { command: "set-ifdb-url", label: "Set IFDB URL…" },
     MenuItem { command: "create-documents-folder", label: "Create documents folder" },
+    MenuItem { command: "download-documents", label: "Download documents from IFDB…" },
 ];
 
 // ── State ─────────────────────────────────────────────────────────────────────
@@ -48,6 +49,9 @@ pub const STORY_MENU: &[MenuItem] = &[
 /// The open menu: which story it belongs to, and which row the cursor is on.
 #[derive(Debug, Clone, Copy)]
 pub struct StoryMenu {
+    /// The story is not linked to IFDB, so the items that need its record are
+    /// disabled (SQ-1680). Set by [`StoryMenu::for_story`].
+    pub unlinked: bool,
     /// The list index the menu was opened for. The picker selects that row
     /// before opening, so this is the selection — kept so a redraw can anchor
     /// the popup on the row even after the list scrolls under it.
@@ -59,12 +63,23 @@ pub struct StoryMenu {
 impl StoryMenu {
     /// Open the menu on `story`, cursor on the first item.
     pub fn new(story: usize) -> StoryMenu {
-        StoryMenu { story, cursor: 0 }
+        StoryMenu { unlinked: false, story, cursor: 0 }
+    }
+
+    /// Open the menu on `story`, which is linked to IFDB or is not.
+    pub fn for_story(story: usize, linked: bool) -> StoryMenu {
+        StoryMenu { unlinked: !linked, ..StoryMenu::new(story) }
+    }
+
+    /// Why `command` cannot be used on this story right now, if it cannot.
+    pub fn disabled(&self, command: &str) -> Option<&'static str> {
+        (self.unlinked && command == "download-documents").then_some(crate::documents_chooser::LINK_FIRST)
     }
 
     /// Route a keystroke. See [`crate::menu::on_key`].
     pub fn on_key(&mut self, k: KeyEvent, km: &KeyMap) -> MenuOutcome {
-        menu_widget::on_key(&mut self.cursor, STORY_MENU, k, km, first_key)
+        let unlinked = self.unlinked;
+        menu_widget::on_key(&mut self.cursor, STORY_MENU, k, km, first_key, |c| story_disabled(unlinked, c))
     }
 }
 
@@ -73,7 +88,11 @@ impl StoryMenu {
 /// The menu's frame for an anchor row, clamped inside `pane`. See
 /// [`crate::menu::menu_rect`].
 pub fn menu_rect(km: &KeyMap, anchor: Rect, pane: Rect) -> Rect {
-    menu_widget::menu_rect(STORY_MENU, km, first_key, anchor, pane)
+    menu_widget::menu_rect(STORY_MENU, km, first_key, |_| None, anchor, pane)
+}
+
+fn story_disabled(unlinked: bool, command: &str) -> Option<&'static str> {
+    (unlinked && command == "download-documents").then_some(crate::documents_chooser::LINK_FIRST)
 }
 
 // ── Draw ──────────────────────────────────────────────────────────────────────
@@ -88,7 +107,7 @@ pub fn draw_story_menu(
     cs: &ColorScheme,
     buf: &mut Buffer,
 ) -> MenuRects {
-    menu_widget::draw_menu(STORY_MENU, menu.cursor, km, first_key, anchor, pane, cs, buf)
+    menu_widget::draw_menu(STORY_MENU, menu.cursor, km, first_key, |c| menu.disabled(c), anchor, pane, cs, buf)
 }
 
 // ── Tests ─────────────────────────────────────────────────────────────────────
@@ -114,7 +133,11 @@ mod tests {
         for it in STORY_MENU {
             let spec = crate::slash::find_command(it.command)
                 .unwrap_or_else(|| panic!("story menu names unknown command '{}'", it.command));
-            assert_eq!(spec.context, crate::keymap::Context::Browser, "{}", it.command);
+            assert!(
+                spec.context == crate::keymap::Context::Browser || crate::slash::in_both_worlds(spec),
+                "{}",
+                it.command
+            );
             assert!(
                 first_key(&km, it.command).is_some(),
                 "story menu item '{}' has no default browser key",
@@ -160,20 +183,62 @@ mod tests {
     fn the_key_column_reads_the_keymap() {
         assert_eq!(
             menu_widget::key_labels(STORY_MENU, &km(), &first_key),
-            vec!["Enter", "o", "f", "Shift+H", "u", "m"]
+            vec!["Enter", "o", "f", "Shift+H", "u", "m", "Shift+D"]
         );
+    }
+
+    /// SQ-1680: the documents row is there, and for a story IFDB does not know it
+    /// is disabled — the reason where its key would be, Enter inert on it — while
+    /// for a linked story it is an ordinary row.
+    #[test]
+    fn the_documents_row_is_disabled_for_an_unlinked_story_and_says_why() {
+        let km = km();
+        let cs = ColorScheme::terminal_default();
+        let pane = Rect::new(0, 0, 60, 24);
+        let last = STORY_MENU.len() - 1;
+        assert_eq!(STORY_MENU[last].command, "download-documents");
+        let draw = |menu: &StoryMenu| {
+            let mut buf = Buffer::empty(pane);
+            draw_story_menu(menu, Rect::new(1, 2, 40, 1), pane, &km, &cs, &mut buf);
+            (0..pane.height)
+                .map(|y| (0..pane.width).map(|x| buf.cell((x, y)).unwrap().symbol().to_string()).collect::<String>())
+                .collect::<Vec<_>>()
+                .join("\n")
+        };
+
+        let linked = StoryMenu::for_story(0, true);
+        let text = draw(&linked);
+        assert!(text.contains("Download documents from IFDB…") && text.contains("Shift+D"), "{text}");
+        assert!(!text.contains("Link to IFDB first"), "{text}");
+        let mut m = linked;
+        m.cursor = last;
+        assert_eq!(m.on_key(key(KeyCode::Enter), &km), MenuOutcome::Activate("download-documents"));
+
+        let mut off = StoryMenu::for_story(0, false);
+        let text = draw(&off);
+        assert!(text.contains("Download documents from IFDB…") && text.contains("Link to IFDB first"), "{text}");
+        off.cursor = last;
+        assert_eq!(off.on_key(key(KeyCode::Enter), &km), MenuOutcome::None, "Enter on a disabled row does nothing");
+        assert_eq!(off.cursor, last, "and the menu stays up with the reason showing");
+        // Its hotkey still dispatches: the command itself answers on the status line.
+        assert_eq!(
+            off.on_key(KeyEvent::new(KeyCode::Char('D'), KeyModifiers::SHIFT), &km),
+            MenuOutcome::Activate("download-documents")
+        );
+        // Nothing else is disabled.
+        assert!(STORY_MENU.iter().filter(|it| off.disabled(it.command).is_some()).count() == 1);
     }
 
     #[test]
     fn the_menu_is_clamped_inside_the_pane() {
         let km = km();
-        let pane = Rect::new(0, 0, 40, 20);
+        let pane = Rect::new(0, 0, 50, 20);
         // A row near the bottom flips the menu above itself.
         let low = menu_rect(&km, Rect::new(2, 18, 30, 1), pane);
         assert!(low.bottom() <= pane.bottom(), "{low:?}");
         assert!(low.y < 18, "a row with no room below is served from above: {low:?}");
         // …and a row at the very right edge is pulled back inside.
-        let far = menu_rect(&km, Rect::new(38, 2, 2, 1), pane);
+        let far = menu_rect(&km, Rect::new(48, 2, 2, 1), pane);
         assert!(far.right() <= pane.right(), "{far:?}");
         assert!(far.x >= pane.x);
         // The usual case: below the row, aligned with it.
@@ -203,14 +268,15 @@ mod tests {
         // notched into its top edge, labels left and keys in their own column.
         assert_eq!(
             text,
-            "┌──────────────────────────────────┐\n\
-             │ Open                     Enter   │\n\
-             │ Launch options…          o       │\n\
-             │ Fetch metadata           f       │\n\
-             │ Get hints                Shift+H │\n\
-             │ Set IFDB URL…            u       │\n\
-             │ Create documents folder  m       │\n\
-             └──────────────────────────────────┘",
+            "┌────────────────────────────────────────┐\n\
+             │ Open                           Enter   │\n\
+             │ Launch options…                o       │\n\
+             │ Fetch metadata                 f       │\n\
+             │ Get hints                      Shift+H │\n\
+             │ Set IFDB URL…                  u       │\n\
+             │ Create documents folder        m       │\n\
+             │ Download documents from IFDB…  Shift+D │\n\
+             └────────────────────────────────────────┘",
             "{text}"
         );
     }
