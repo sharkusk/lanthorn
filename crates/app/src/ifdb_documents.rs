@@ -983,6 +983,17 @@ pub(crate) mod tests {
     }
 
     #[test]
+    fn zip_entries_are_flagged_by_their_own_name() {
+        let url = "https://ifarchive.example/docs/pack.zip";
+        let zip = big_zip(0, 0, &[("solution.txt", b"x"), ("manual.txt", b"y")]);
+        let host = Host::new(true).with(url, zip);
+        let ZipListing::Entries(entries) = list_zip(&host, url).unwrap() else { panic!("ranges were on") };
+        let flag = |n: &str| entries.iter().find(|e| e.name == n).unwrap().spoiler;
+        assert!(flag("solution.txt"));
+        assert!(!flag("manual.txt"));
+    }
+
+    #[test]
     fn one_entry_is_extracted_without_the_rest() {
         let zip = big_zip(20, 60_000, &[("Sols/ZorkI.txt", b"ZORK I walkthrough\n")]);
         let total = zip.len() as u64;
