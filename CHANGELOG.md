@@ -72,6 +72,22 @@ while any such tag, or this Unreleased section, still exists.*
   separate too. The container does no login of its own, so the proxy must be the
   only way to reach it. Sound works in this mode too, through a second proxy route.
 
+### Changed
+
+- The panel beside the story is now the **Journal**, with tabs along its top:
+  Map, Room and Inventory. The room panel and the inventory panel that used to
+  sit under the map and across the bottom of the screen are now the Room and
+  Inventory tabs, so the story pane keeps the rows the inventory used to take.
+  Click a tab, press Alt+1, Alt+2 or Alt+3, or use `/journal-tab`
+  (`/journal-next-tab` and `/journal-prev-tab` step through them). Clicking a
+  room on the map still selects it without leaving the map; open the Room tab to
+  read about it. The tab you were on comes back the next time you open that
+  story. `/toggle-room-panel` and `/toggle-inventory-panel` are replaced by
+  `/journal-tab`, the leader keys `k` and `i` now switch to those tabs, and the
+  `inv_dock_pct` and `room_dock_pct` settings are gone. The border control
+  that cycled the command panel and inventory now just opens and closes the
+  command panel.
+
 ### Fixed
 
 - Story downloads from IFDB are now limited to 100 MB per file, the same as

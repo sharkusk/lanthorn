@@ -73,8 +73,8 @@ since a one-finger drag that starts moving up or down is read as a scroll.
 browser handle touch its own way.
 
 The edges you drag are made wider here than on a desktop, because a fingertip
-is not a mouse pointer: the splitter between the story and the map, and the
-top edges of the inventory and room panels, are four cells deep instead of
+is not a mouse pointer: the splitter between the story and the Journal, and the
+top edge of the command panel, are four cells deep instead of
 two. `LANTHORN_WEB_GRAB_ZONE` sets that (anything from 1 to 6), and whatever
 you set in lanthorn's own settings screen wins over it from then on.
 

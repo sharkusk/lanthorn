@@ -210,6 +210,10 @@ itself.**
   for it, and no room is ever drawn twice because the game spelled its name two
   ways.
   → [the map](docs/guide/the-map.md)
+- **The Journal** — *Next release:* the panel beside the story is a tabbed
+  Journal: **Map**, **Room** and **Inventory**, one click or `Alt+1/2/3` apart,
+  and it remembers the tab you left on for each story. The inventory is no longer
+  a strip across the bottom, so the story gets its rows back.
 - **The original disks, as the original machines** — hand it an Amiga, Macintosh,
   Apple II, Atari ST, PC or Commodore floppy and it plays the build on that disk,
   with that machine's artwork, sound, palette and status line. Nine machines,
@@ -268,7 +272,7 @@ and the internals below — is [**`docs/README.md`**](docs/README.md).
 ## Playing aids
 
 The story pane's border carries a few clickable switches — the command panel and
-the Guiding Light along the bottom, the map at the right, and on a graphical v6
+the Guiding Light along the bottom, the Journal at the right, and on a graphical v6
 story the render mode and pixel lock along the top. Each shows its state at a
 glance, and hovering one names the command it stands for. What you switch there
 is remembered per story; the settings screen sets the defaults.

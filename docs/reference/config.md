@@ -43,9 +43,7 @@ Every setting `~/.lanthorn/config.toml` accepts, grouped the way the seeded temp
 | `show_status_bar` | `true` |  | Show the status/score bar across the top of the story pane. |
 | `show_room_numbers` | `false` |  | Show room numbers (#id, or a small ordinal for a name-only room) inside Boxes-zoom room boxes. |
 | `grab_zone_cells` | `2` |  | How many cells wide the draggable pane boundaries are: the story/map splitter and the inventory/room panel top edges. Raise it for touch — e.g. the Docker web image on a tablet, where a finger cannot land on so narrow a target. The command panel's own top edge is unaffected and always stays a single row, so it never swallows clicks on its own column headers. Clamped to 1-6. |
-| `split_ratio` | `50` |  | The story pane's share of the story/map split, as a percentage. |
-| `inv_dock_pct` | `33` |  | Inventory panel height cap, as a percentage of screen height. |
-| `room_dock_pct` | `33` |  | Room panel height, as a percentage of screen height. The panel docks at the bottom of the map pane and describes the room you are in (or the one you clicked). |
+| `split_ratio` | `50` |  | The story pane's share of the story/Journal split, as a percentage. |
 | `text_margin_x` | `0` |  | Blank columns reserved inside each side of the transcript window. |
 | `text_margin_y` | `0` |  | Blank rows reserved above and below the transcript text. |
 | `background_tidy` | `"every_room"` |  | Automatic map re-tidy when new rooms appear: "off", "every_room" (default), "on_overlap", "debounced". |

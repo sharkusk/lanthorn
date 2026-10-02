@@ -25,9 +25,10 @@ inspecting the machine, and firing commands — without ever leaving the story.
   the automapper's job (see [Keeping it tidy](mapping.md)) — so a left-press
   that starts on a room and then moves pans instead of fighting the layout. Only
   a press-release with NO motion in between keeps the click meaning above: pin
-  (or unpin) the room panel, or select a matrix row. The dock never interrupts
-  the game: it reserves rows at the bottom of the map pane rather than covering
-  anything, so the keyboard stays on the story prompt and you can keep typing
+  (or unpin) the room, or select a matrix row. A pin never switches the Journal
+  to its Room tab, so a click on the map never replaces the map. The Journal
+  never interrupts the game: it covers nothing, so the keyboard stays on the
+  story prompt and you can keep typing
   and pressing Enter with it up — handy for watching a room's exit card fill in
   as you walk.
 - **Mouse wheel** pans the map (hold Shift for horizontal, Ctrl to zoom) and
@@ -60,9 +61,8 @@ inspecting the machine, and firing commands — without ever leaving the story.
   clipboard via the OSC 52 terminal escape — so a selection copies cleanly even
   over SSH, with no clipboard library in the loop. Each row is clamped to the
   story pane's columns, so a drag never scoops up the map beside the text.
-- **Drag a pane boundary to resize it** — grab the divider between the story and
-  map panes, or the top edge of the inventory panel, the command panel or the room
-  panel, and drag.
+- **Drag a pane boundary to resize it** — grab the divider between the story pane
+  and the Journal, or the top edge of the command panel, and drag.
   The boundary lights up as the pointer crosses it, the panes follow the pointer
   live, and the new size is written to `config.toml` when you let go. What you
   press the button on decides what the drag means: a drag that starts on a
@@ -70,33 +70,44 @@ inspecting the machine, and firing commands — without ever leaving the story.
   selecting even when it crosses one. For the keyboard, `/resize-panes` enters
   resize mode — **Tab** cycles which boundary is live, the arrows move it, `0`
   resets, **Esc** leaves.
-- **The room panel** — one panel at the bottom of the map pane describing one
-  room, opened with `k` from the leader panel or `/toggle-room-panel`. It has two
+- **The Journal** (SQ-1684) — the tabbed panel on the right, `journal.rs` and
+  `layout.rs`'s `journal`/`journal_tabs`/`journal_body` rects. A one-row tab bar
+  (styleable as `journal.tabbar`, `journal.tab`, `journal.tab:active`) sits over
+  the active tab's body: **Map**, **Room**, **Inventory**. `/journal-tab
+  <map|room|inventory>`, `/journal-next-tab`, `/journal-prev-tab`, a click on a
+  label, **Alt+1/2/3**, and the leader panel's `j`/`k`/`i` all select a tab
+  (`Action::SetJournalTab`), revealing the Journal if `/toggle-map` had hidden
+  it. At narrow widths the bar abbreviates its labels and then shows only the
+  active tab between `‹` `›` markers. The active tab is remembered per story
+  (`journal_tab` in the per-game sidecar); the width is `split_ratio`. Adding a
+  tab is one `JournalTab` variant plus one arm in `main.rs`'s Journal draw.
+- **The Room tab** — one panel describing one room. It has two
   bodies:
   - **Room** — the room's notes, its [exit card](mapping.md#room-card) in the
     matrix vocabulary, and the objects the engine can see there. The card spends
-    the dock's WIDTH rather than its height: the twelve travel directions lay
+    the tab's WIDTH rather than its height: the twelve travel directions lay
     out in up to three columns — cardinals, diagonals, portals — so the whole
-    card is four rows on a normal map pane and falls back to the single column
+    card is four rows on a normal Journal and falls back to the single column
     on a narrow one.
   - **Diagnostics** — id, layer, grid position, and the per-edge
     dropped-constraint flags, so you can see *why* the layout engine placed a
     room where it did. `/toggle-inspector` opens straight onto this body, and
-    flips back to Room when the dock is already up.
+    flips back to Room when the Room tab is already up.
 
-  The two names sit in the dock's tab strip — the same strip, and the same
+  The two names sit in the panel's own tab strip — the same strip, and the same
   click, as the map pane's layer tabs: click either name to switch bodies.
 
-  **It follows you by default.** With nothing selected the dock describes the
+  **It follows you by default.** With nothing selected the tab describes the
   room you are standing in and updates every move — the header says `◇ following`.
   Click a room to **pin** it (`◆ pinned`) — hollow while it moves with you, filled
   once it is fixed, and both settable as `dock.following` / `dock.pinned` in
-  `style.toml`; the dock then holds that room while
+  `style.toml`; the tab then holds that room while
   you walk on. Pinning is just selecting, so the map highlight and the matrix
-  cross-highlight always agree with the dock. **Unpin** — back to following — by
+  cross-highlight always agree with the tab. **Unpin** — back to following — by
   clicking the pinned room again, clicking empty map space, or pressing **Esc**;
-  a second **Esc** closes the dock. It is not a modal, so it costs you nothing to
-  leave up: it never takes the keyboard and it never hides the prompt.
+  a further **Esc** on the Room tab returns to the Map tab. It is not a modal, so
+  it costs you nothing to leave up: it never takes the keyboard and it never hides
+  the prompt.
 - **The map never takes the keyboard.** Every keystroke goes to the story, so a
   key always means the same thing — you never have to look at which pane is
   "active" before pressing an arrow. The map is driven alongside your typing

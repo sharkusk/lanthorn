@@ -15,7 +15,7 @@ Every slash command, grouped the way `/help` groups them. Type any of these afte
 | Game | `open-hints` | open the hints panel |
 | Game | `open-history` | open the rewind/replay history |
 | Game | `toggle-command-panel` | open or close the command panel; remembered per story |
-| Game | `cycle-panel` | cycle command panel → inventory panel → none; persisted per-game |
+| Game | `cycle-panel` | cycle command panel → none; persisted per-game |
 | Game | `toggle-timed-input` | toggle honoring the game's timed-input timers |
 | Game | `toggle-sound` | toggle audio playback (bleeps + sampled sounds) |
 | Game | `volume <0-100>` | set the master audio volume (0-100) |
@@ -32,18 +32,19 @@ Every slash command, grouped the way `/help` groups them. Type any of these afte
 | Map | `delete-connection` | delete the selected connection |
 | Map | `relabel-edge` | relabel the selected edge |
 | Map | `move-region [new|parent|layer] [direction]` | re-home the selected room's region onto a fresh layer, its parent, or any named layer; bare picks both when only one choice is possible |
-| Map | `toggle-room-panel` | open or close the room panel under the map |
-| Map | `toggle-inspector` | show the room panel's diagnostics view (flips back to info when open) |
+| Map | `toggle-inspector` | show the Journal's Room tab on its diagnostics view (flips back to info when already there) |
 | Map | `load-map <path>` | load a standalone map file into the current session |
 | Map | `toggle-room-numbers` | toggle room-number labels |
 | Map | `view-map [drawn|matrix]` | how the active layer draws: bare cycles, a name sets it |
 | Map | `mark-maze-layer` | flag the active layer as a maze (defaults it to the matrix view) |
 | Map | `toggle-alignment` | toggle alignment guides |
 | Map | `toggle-portal-labels` | toggle portal labels |
-| View | `toggle-map` | show or hide the map panel; persisted per-game |
+| View | `toggle-map` | show or hide the Journal (the map's panel); persisted per-game |
 | View | `toggle-focus` | switch focus between panes |
-| View | `toggle-inventory-panel` | open or close the inventory panel; remembered per story |
-| View | `filter-items [query]` | filter the inventory panel (both Carrying and Elsewhere) to items matching query; no query clears the filter |
+| View | `journal-tab <map|room|inventory>` | show a tab of the Journal (the right-hand panel), revealing it if hidden; remembered per story |
+| View | `journal-next-tab` | show the Journal's next tab, wrapping |
+| View | `journal-prev-tab` | show the Journal's previous tab, wrapping |
+| View | `filter-items [query]` | filter the Journal's Inventory tab (both Carrying and Elsewhere) to items matching query; no query clears the filter |
 | View | `toggle-status-bar` | toggle the status/score bar |
 | View | `resize-panes` | enter interactive pane-resize mode |
 | View | `reset-pane-size` | reset all pane sizes to their defaults |

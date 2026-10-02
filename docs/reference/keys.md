@@ -8,6 +8,9 @@ The built-in key bindings, one row per binding — several keys may reach the sa
 | Global | `Tab` | `toggle-focus` | switch focus between panes |
 | Global | `Ctrl+S` | `save-state` | save an emulator Save State, optionally to a named slot |
 | Global | `Ctrl+R` | `restore-state` | restore an emulator Save State — bare opens the saves dialog to pick one; a name restores that slot directly |
+| Global | `Alt+1` | `journal-tab map` | show a tab of the Journal (the right-hand panel), revealing it if hidden; remembered per story |
+| Global | `Alt+2` | `journal-tab room` | show a tab of the Journal (the right-hand panel), revealing it if hidden; remembered per story |
+| Global | `Alt+3` | `journal-tab inventory` | show a tab of the Journal (the right-hand panel), revealing it if hidden; remembered per story |
 | Anim | `H` | `pan-map -1 0` | pan the map by dx columns and dy rows |
 | Anim | `L` | `pan-map 1 0` | pan the map by dx columns and dy rows |
 | Anim | `K` | `pan-map 0 -1` | pan the map by dx columns and dy rows |

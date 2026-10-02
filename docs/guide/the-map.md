@@ -22,6 +22,19 @@ graphical v6 games paint no status line at all so lanthorn reads the band
 above the story window, and Glulx games get it from the bold room heading
 Inform prints as you enter — but you never configure any of it.
 
+**The Journal.** The panel on the right is the Journal, and it has tabs along
+its top: **Map**, **Room** and **Inventory**. Click a tab name, press
+**Alt+1**, **Alt+2** or **Alt+3**, or run `/journal-tab map|room|inventory`
+(`/journal-next-tab` and `/journal-prev-tab` step through them). The leader
+panel (`Ctrl+P`) has `j`, `k` and `i` for the same three. Your terminal may need
+"Option as Alt" turned on for the Alt keys to reach lanthorn. The Room tab shows
+the notes, exit card and objects for the room you are standing in — or the one
+you clicked on the map, which pins it (Esc lets go) — and the Inventory tab lists
+what you carry and where everything else was last seen. It remembers which tab you
+left on, per story. Narrow it down far enough and the bar shortens its labels, then
+shows only the current tab between `‹` and `›`. `/toggle-map` hides or shows the
+whole Journal, and the splitter beside it drags to any width.
+
 **Getting around.** `/zoom-map in|out|reset` scales between a detailed view
 and a compact overview; `/pan-map <dx> <dy>` slides the viewport and
 `/center-map` snaps back to wherever you're standing. You can also press and

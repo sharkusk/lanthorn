@@ -123,6 +123,9 @@ Every themeable `style.toml` selector: which role or selector it derives from, a
 | `tidy_progress` | Elements | Style | `accent` |  | |
 | `meta_marker` | Elements | Style | `muted` |  | |
 | `inventory_panel` | Elements | Style | `accent` |  | |
+| `journal.tabbar` | Elements | Style | `text` |  | |
+| `journal.tab` | Elements | Style | `muted` |  | |
+| `journal.tab:active` | Elements | Style | `accent` | `bold` | |
 | `inventory_panel.header` | Elements | Style | `heading` |  | |
 | `inventory_panel.meta` | Elements | Style | `muted` |  | |
 | `room_panel` | Elements | Style | `text` |  | |

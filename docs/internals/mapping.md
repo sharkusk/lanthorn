@@ -331,8 +331,8 @@ The map is a place you can move through, not just a picture.
   map and the **matrix** — the direction table described below. Bare, it cycles; `view-map
   drawn` / `view-map matrix` sets it outright. The choice is per-layer and saved with the map,
   so a maze can stay a table while everything around it stays a map.
-- **Room card** — the [room panel](interface.md#the-room-panel)'s Room body (`toggle-room-panel`,
-  leader `k`, or left-click a room) lists **every** travel direction, not just the ones that go
+- **Room card** — the [room panel](interface.md#the-room-panel)'s Room body (`journal-tab room`,
+  leader `k`, or Alt+2; a left-click on a room pins it for the tab) lists **every** travel direction, not just the ones that go
   somewhere: where each leads, how it comes back, which you tried and found walled up (`×`), and
   which you have never tried at all (`·`). That is the map's answer to "where haven't I been?",
   one room at a time — and the dock follows you as you walk, so the card is about wherever you
