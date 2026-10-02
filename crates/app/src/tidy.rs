@@ -1175,12 +1175,16 @@ mod tests {
 
     #[test]
     fn sq1672_canyon_view_specimens_keep_the_stack_and_the_west_side() {
-        // Row alignment of the one-way `25 W 76` is NOT asserted: `directional_hint_score` is
-        // side-only, so shifting the 25-26 stack down a row gains nothing under the repair
-        // stage's strict-gain rule (reported on SQ-1672).
         for name in ["zork1_r88_sq1669_old.json", "zork1_r88_sq1669_fixed.json"] {
             let g = tidied(name);
             assert!(pos(&g, 76).0 < pos(&g, 25).0, "{name}: 76 is west of 25");
+            assert_eq!(pos(&g, 25).1, pos(&g, 76).1, "{name}: 25 W 76 is drawn straight");
+            let bent = g
+                .connections()
+                .iter()
+                .filter(|c| mapper::direction::grid_offset(c.dir).is_some() && !mapper::layout::edge_is_satisfied(&g, c))
+                .count();
+            assert!(bent <= 17, "{name}: {bent} bent compass edges (was 18 before SQ-1672 straightened 25 W 76)");
             assert_eq!(pos(&g, 26).0, pos(&g, 25).0, "{name}: 26 stays in 25's column");
             assert!(pos(&g, 25).1 < pos(&g, 26).1, "{name}: stack order kept");
         }

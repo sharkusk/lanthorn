@@ -3930,10 +3930,10 @@ pub(crate) fn cleanup_overlaps_observed(
     }
 }
 
-/// SQ-1672: the vertical Up/Down stack `id` belongs to — every room reachable through Up/Down
-/// connections whose two ends share a column — sorted by id. A lone room returns just itself.
+/// SQ-1672: the Up/Down stack `id` belongs to — every placed room reachable through Up/Down
+/// connections, however the stairwell bends on the grid — sorted by id. A lone room returns just itself.
 fn updown_stack(graph: &mapper::graph::MapGraph, id: mapper::graph::RoomId) -> Vec<mapper::graph::RoomId> {
-    let x_of = |r: mapper::graph::RoomId| graph.room(r).and_then(|r| r.pos).map(|p| p.0);
+    let placed = |r: mapper::graph::RoomId| graph.room(r).is_some_and(|r| r.pos.is_some());
     let mut seen = vec![id];
     let mut i = 0;
     while i < seen.len() {
@@ -3950,7 +3950,7 @@ fn updown_stack(graph: &mapper::graph::MapGraph, id: mapper::graph::RoomId) -> V
             } else {
                 continue;
             };
-            if !seen.contains(&other) && x_of(other).is_some() && x_of(other) == x_of(cur) {
+            if !seen.contains(&other) && placed(other) {
                 seen.push(other);
             }
         }
@@ -3993,6 +3993,7 @@ pub(crate) fn repair_directional_hints_observed(
 
     let mut stats = mapper::layout::TidyStats::default();
     let chains = mapper::layout::detect_chains(graph);
+    let unreliable = mapper::layout::positionally_unreliable(graph);
     // SQ-1637 Part 4: same accounting as `cleanup_overlaps_observed` — every candidate actually
     // evaluated counts as a trial, whether or not it wins its pass.
     let mut trials_tried: u32 = 0;
@@ -4003,8 +4004,57 @@ pub(crate) fn repair_directional_hints_observed(
 
     type Cell = (i32, i32);
     type Move = Vec<(mapper::graph::RoomId, Cell)>;
-    /// (moved positions, overlap stats, hint score, alignment before, alignment after).
-    type Trial = (Move, (usize, usize), usize, usize, usize);
+    /// (moved positions, overlap stats, hint score, bent compass edges, alignment before,
+    /// alignment after).
+    type Trial = (Move, (usize, usize), usize, usize, usize, usize);
+
+    /// SQ-1672: compass edges whose bearing is not drawn exactly (a cardinal off its line, a
+    /// diagonal on the wrong quadrant) — the secondary objective, checked when the hint score ties.
+    fn bent_edges(graph: &mapper::graph::MapGraph) -> usize {
+        graph
+            .connections()
+            .iter()
+            .filter(|c| {
+                mapper::direction::grid_offset(c.dir).is_some()
+                    && !mapper::layout::edge_is_satisfied(graph, c)
+            })
+            .count()
+    }
+
+    /// Hint score and bent-edge count over every connection that does NOT touch a positionally
+    /// unreliable room. A group move is judged by this, so a room whose own claims contradict
+    /// each other (SQ-1289) can never drag reliable rooms around for the sake of its hints.
+    fn reliable_scores(
+        graph: &mapper::graph::MapGraph,
+        unreliable: &std::collections::BTreeSet<mapper::graph::RoomId>,
+    ) -> (usize, usize) {
+        let compass_weight = graph.connections().len() + 1;
+        let (mut score, mut bent) = (0, 0);
+        for c in graph.connections() {
+            if unreliable.contains(&c.origin) || unreliable.contains(&c.dest) {
+                continue;
+            }
+            let compass = mapper::direction::grid_offset(c.dir).is_some();
+            if compass && !mapper::layout::edge_is_satisfied(graph, c) {
+                bent += 1;
+            }
+            let Some(delta) = mapper::direction::layout_offset(c.dir) else { continue };
+            let (Some(op), Some(dp)) =
+                (graph.room(c.origin).and_then(|r| r.pos), graph.room(c.dest).and_then(|r| r.pos))
+            else {
+                continue;
+            };
+            let side = |actual: i32, expected: i32| match expected.cmp(&0) {
+                std::cmp::Ordering::Equal => true,
+                std::cmp::Ordering::Greater => actual > 0,
+                std::cmp::Ordering::Less => actual < 0,
+            };
+            if side(dp.0 - op.0, delta.0) && side(dp.1 - op.1, delta.1) {
+                score += if compass { compass_weight } else { 1 };
+            }
+        }
+        (score, bent)
+    }
 
     /// Try translating `members` rigidly by `(dx, dy)`. `None` when a locked member would leave
     /// its axis or a target cell is taken by a non-member; otherwise the moved positions, the
@@ -4013,6 +4063,8 @@ pub(crate) fn repair_directional_hints_observed(
     fn trial_group(
         graph: &mut mapper::graph::MapGraph,
         chains: &mapper::layout::Chains,
+        group_view: Option<&std::collections::BTreeSet<mapper::graph::RoomId>>,
+        base: (usize, usize),
         members: &[mapper::graph::RoomId],
         dx: i32,
         dy: i32,
@@ -4048,19 +4100,29 @@ pub(crate) fn repair_directional_hints_observed(
         for &(m, t) in &moved {
             graph.set_pos(m, t);
         }
-        let s = render_overlap_stats(graph);
-        let score = mapper::layout::directional_hint_score(graph);
+        let (score, bent) = match group_view {
+            Some(unreliable) => reliable_scores(graph, unreliable),
+            None => (mapper::layout::directional_hint_score(graph), bent_edges(graph)),
+        };
         let align_trial: usize =
             members.iter().map(|&m| mapper::layout::room_alignment_score(graph, m)).sum();
+        // The render is the expensive part, and most trials are rejected on these cheap numbers
+        // alone — so only a candidate that is already a hint/straightness win without losing
+        // alignment gets one. A skipped render is reported as "unboundedly many overlaps", which
+        // the caller's acceptance test rejects exactly as the real answer would have been.
+        let viable = (score > base.0 || (score == base.0 && bent < base.1)) && align_trial >= align_orig;
+        let s = if viable { render_overlap_stats(graph) } else { (usize::MAX, usize::MAX) };
         for &(m, p) in &origs {
             graph.set_pos(m, p);
         }
-        Some((moved, s, score, align_orig, align_trial))
+        Some((moved, s, score, bent, align_orig, align_trial))
     }
 
     for _ in 0..max_passes {
         let base = render_overlap_stats(graph);
         let base_score = mapper::layout::directional_hint_score(graph);
+        let base_bent = bent_edges(graph);
+        let (group_base_score, group_base_bent) = reliable_scores(graph, &unreliable);
 
         let room_ids: Vec<mapper::graph::RoomId> =
             graph.rooms().filter(|r| r.pos.is_some()).map(|r| r.id).collect();
@@ -4073,17 +4135,40 @@ pub(crate) fn repair_directional_hints_observed(
             (w.max(h) + 2).min(MAX_SLIDE)
         };
 
-        type Key = (std::cmp::Reverse<usize>, usize, usize, usize, mapper::graph::RoomId, usize);
+        type Key = (
+            std::cmp::Reverse<usize>,
+            std::cmp::Reverse<usize>,
+            usize,
+            usize,
+            usize,
+            mapper::graph::RoomId,
+            usize,
+        );
         let mut best: Option<(Key, Move)> = None;
         let consider = |best: &mut Option<(Key, Move)>,
                             res: Option<Trial>,
                             id: mapper::graph::RoomId,
                             degree: usize,
-                            move_idx: usize| {
-            let Some((moved, s, score, align_orig, align_trial)) = res else { return };
-            if score > base_score && s.0 <= base.0 && align_trial >= align_orig {
+                            move_idx: usize,
+                            group: bool| {
+            let (base_score, base_bent) =
+                if group { (group_base_score, group_base_bent) } else { (base_score, base_bent) };
+            let Some((moved, s, score, bent, align_orig, align_trial)) = res else { return };
+            // Lexicographic (SQ-1672): a strict hint gain, or — at an equal hint score — strictly
+            // fewer bent compass edges. Both strictly improve a bounded pair, so the loop ends.
+            let better = score > base_score || (score == base_score && bent < base_bent);
+            if better && s.0 <= base.0 && align_trial >= align_orig {
                 let gain = score - base_score;
-                let key: Key = (std::cmp::Reverse(gain), s.0, s.1, degree, id, move_idx);
+                let straightened = base_bent.saturating_sub(bent);
+                let key: Key = (
+                    std::cmp::Reverse(gain),
+                    std::cmp::Reverse(straightened),
+                    s.0,
+                    s.1,
+                    degree,
+                    id,
+                    move_idx,
+                );
                 if best.as_ref().is_none_or(|(bk, _)| key < *bk) {
                     *best = Some((key, moved));
                 }
@@ -4101,8 +4186,8 @@ pub(crate) fn repair_directional_hints_observed(
                     continue;
                 }
                 trials_tried += 1;
-                let res = trial_group(graph, &chains, &[id], dx, dy);
-                consider(&mut best, res, id, degree, move_idx);
+                let res = trial_group(graph, &chains, None, (base_score, base_bent), &[id], dx, dy);
+                consider(&mut best, res, id, degree, move_idx, false);
             }
             let mut slide_idx = moves.len();
             let mut slides: Vec<(i32, i32)> = Vec::new();
@@ -4120,8 +4205,8 @@ pub(crate) fn repair_directional_hints_observed(
                     }
                     if dist > radius {
                         trials_tried += 1;
-                        let res = trial_group(graph, &chains, &[id], sx * dist, sy * dist);
-                        consider(&mut best, res, id, degree, slide_idx);
+                        let res = trial_group(graph, &chains, None, (base_score, base_bent), &[id], sx * dist, sy * dist);
+                        consider(&mut best, res, id, degree, slide_idx, false);
                         slide_idx += 1;
                     }
                 }
@@ -4149,13 +4234,16 @@ pub(crate) fn repair_directional_hints_observed(
                 }
             }
         }
-        // A strict hint gain needs a violated hint to become satisfied, which needs exactly one of
-        // its two endpoints to move — so a group with no violated hint crossing its boundary
+        // A win needs a violated hint or a bent compass edge to improve, which needs exactly one
+        // of its two endpoints to move — so a group with no such edge crossing its boundary
         // cannot win, and is not worth a render.
         let violated: Vec<(mapper::graph::RoomId, mapper::graph::RoomId)> = graph
             .connections()
             .iter()
             .filter(|c| {
+                if mapper::direction::grid_offset(c.dir).is_some() && !mapper::layout::edge_is_satisfied(graph, c) {
+                    return true;
+                }
                 // The score's own side-only test, spelled out: violated when dest sits on the
                 // wrong side of origin along either axis the bearing names.
                 let Some(delta) = mapper::direction::layout_offset(c.dir) else { return false };
@@ -4184,12 +4272,12 @@ pub(crate) fn repair_directional_hints_observed(
             let mut move_idx = moves.len() + 4 * MAX_SLIDE as usize * 2;
             for (sx, sy) in [(0, -1), (0, 1), (-1, 0), (1, 0)] {
                 for dist in 1..=extent {
-                    let res = trial_group(graph, &chains, &members, sx * dist, sy * dist);
+                    let res = trial_group(graph, &chains, Some(&unreliable), (group_base_score, group_base_bent), &members, sx * dist, sy * dist);
                     let blocked = res.is_none();
                     if !blocked {
                         trials_tried += 1;
                     }
-                    consider(&mut best, res, id, degree, move_idx);
+                    consider(&mut best, res, id, degree, move_idx, true);
                     move_idx += 1;
                     if blocked {
                         break;

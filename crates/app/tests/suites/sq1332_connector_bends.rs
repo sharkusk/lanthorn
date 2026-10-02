@@ -203,9 +203,9 @@ fn zork1_spends_no_more_turns_than_its_budget() {
     let map = app::mapgen::generate(&path, true).expect("mapgen");
     let (n, bends, opt) = totals(&map);
     assert!(n > 100, "Zork I must draw a real number of connectors, got {n}");
-    // SQ-1669..1672: 81 -> 78. The tidy's repair stage now slides and group-moves rooms the
+    // SQ-1669..1672: 81 -> 70. The tidy's repair stage now slides and group-moves rooms the
     // radius-3 ring could not reach, and the connectors between them need fewer forced turns.
-    assert_eq!(opt, 78, "the anchor optimum is a property of the LAYOUT, not the router");
+    assert_eq!(opt, 70, "the anchor optimum is a property of the LAYOUT, not the router");
     assert!(bends <= 145, "Zork I draws {bends} turns against a budget of 145 (was 153)");
 }
 
@@ -234,8 +234,8 @@ fn anchorhead_spends_no_more_turns_than_its_budget() {
     let map = app::mapgen::generate(&path, true).expect("mapgen");
     let (n, bends, opt) = totals(&map);
     assert!(n > 100, "Anchorhead must draw a real number of connectors, got {n}");
-    // SQ-1669..1672: 56 -> 51, for the reason the Zork I case above gives.
-    assert_eq!(opt, 51, "the anchor optimum is a property of the LAYOUT, not the router");
+    // SQ-1669..1672: 56 -> 50, for the reason the Zork I case above gives.
+    assert_eq!(opt, 50, "the anchor optimum is a property of the LAYOUT, not the router");
     assert!(bends <= 100, "Anchorhead draws {bends} turns against a budget of 100 (was 112)");
 }
 
