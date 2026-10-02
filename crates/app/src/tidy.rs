@@ -1119,4 +1119,176 @@ mod tests {
         assert_eq!(real.room(1).and_then(|r| r.pos), Some((100, 100)), "stale result must not overwrite position 1");
         assert_eq!(real.room(2).and_then(|r| r.pos), Some((200, 200)), "stale result must not overwrite position 2");
     }
+
+    // ── SQ-1669 / SQ-1672: hint repair slides along lines and moves Up/Down stacks ──────────
+
+    fn sq1669_fixture(name: &str) -> mapper::graph::MapGraph {
+        let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../unit_tests").join(name);
+        let json = std::fs::read_to_string(&path).unwrap_or_else(|e| panic!("{}: {e}", path.display()));
+        mapper::persist::from_json(&json).expect("valid map file").graph
+    }
+
+    fn tidied(name: &str) -> mapper::graph::MapGraph {
+        let mut g = sq1669_fixture(name);
+        let layers: Vec<_> = g.layers().keys().copied().collect();
+        for l in layers {
+            tidy_layer_silent(&mut g, l);
+        }
+        g
+    }
+
+    fn pos(g: &mapper::graph::MapGraph, id: u32) -> (i32, i32) {
+        g.room(id).and_then(|r| r.pos).expect("room placed")
+    }
+
+    /// Overlaps, and reciprocal runs that no longer share their row or column.
+    fn assert_clean(g: &mapper::graph::MapGraph) {
+        let cells: std::collections::BTreeSet<_> = g.rooms().filter_map(|r| r.pos).collect();
+        assert_eq!(cells.len(), g.rooms().filter(|r| r.pos.is_some()).count(), "no two rooms share a cell");
+        let ch = mapper::layout::detect_chains(g);
+        for m in &ch.ew_members {
+            assert!(m.iter().all(|&r| pos(g, r).1 == pos(g, m[0]).1), "E/W run split: {m:?}");
+        }
+        for m in &ch.ns_members {
+            assert!(m.iter().all(|&r| pos(g, r).0 == pos(g, m[0]).0), "N/S run split: {m:?}");
+        }
+    }
+
+    #[test]
+    fn sq1669_old_specimen_places_forest_west_of_west_of_house() {
+        let g = tidied("zork1_r88_sq1669_old.json");
+        assert!(pos(&g, 78).0 < pos(&g, 180).0, "78 {:?} must be west of 180 {:?}", pos(&g, 78), pos(&g, 180));
+        assert_eq!(pos(&g, 78).1, pos(&g, 75).1, "78 and 75 share a row");
+        let score = mapper::layout::directional_hint_score(&g);
+        assert!(score >= 1968, "hint score {score}");
+        assert_clean(&g);
+    }
+
+    #[test]
+    fn sq1669_fixed_specimen_keeps_its_hints() {
+        let g = tidied("zork1_r88_sq1669_fixed.json");
+        assert!(pos(&g, 78).0 < pos(&g, 180).0);
+        let score = mapper::layout::directional_hint_score(&g);
+        assert!(score >= 2150, "hint score {score}");
+        assert_clean(&g);
+    }
+
+    #[test]
+    fn sq1672_canyon_view_specimens_keep_the_stack_and_the_west_side() {
+        // Row alignment of the one-way `25 W 76` is NOT asserted: `directional_hint_score` is
+        // side-only, so shifting the 25-26 stack down a row gains nothing under the repair
+        // stage's strict-gain rule (reported on SQ-1672).
+        for name in ["zork1_r88_sq1669_old.json", "zork1_r88_sq1669_fixed.json"] {
+            let g = tidied(name);
+            assert!(pos(&g, 76).0 < pos(&g, 25).0, "{name}: 76 is west of 25");
+            assert_eq!(pos(&g, 26).0, pos(&g, 25).0, "{name}: 26 stays in 25's column");
+            assert!(pos(&g, 25).1 < pos(&g, 26).1, "{name}: stack order kept");
+        }
+    }
+
+    #[test]
+    fn sq1669_repair_slides_a_room_further_than_the_ring_radius() {
+        use mapper::direction::Direction::*;
+        // Reciprocal E/W pair 1<->2 on row 0; one-way `3 E 1` wants room 1 east of room 3 (at
+        // x=12). Room 1 is 12 cells short, far outside the radius-3 ring, but the row east of it
+        // is free, so a line slide reaches it.
+        let mut g = mapper::graph::MapGraph::new();
+        for id in [1u32, 2, 3] {
+            g.upsert_room(id, "r".into());
+        }
+        g.add_edge(2, E, 1);
+        g.add_edge(1, W, 2);
+        g.add_edge(3, E, 1);
+        g.set_pos(2, (0, 0));
+        g.set_pos(1, (1, 0));
+        g.set_pos(3, (12, 3));
+        crate::render::map::repair_directional_hints(&mut g, 3, 40);
+        assert!(pos(&g, 1).0 > pos(&g, 3).0, "1 {:?} must slide east of 3 {:?}", pos(&g, 1), pos(&g, 3));
+        assert_eq!(pos(&g, 1).1, pos(&g, 2).1, "the reciprocal row is kept");
+    }
+
+    /// Two-room reciprocal run (`a` -> `b` along `dir`) plus a room 3 that one-way claims BOTH
+    /// of them on `claim`'s side, placed so every cell the run could reach alone is short of it.
+    fn run_graph(run_dir: mapper::direction::Direction, claim: mapper::direction::Direction, p3: (i32, i32)) -> mapper::graph::MapGraph {
+        let mut g = mapper::graph::MapGraph::new();
+        for id in [1u32, 2, 3, 4] {
+            g.upsert_room(id, "r".into());
+        }
+        g.add_edge(1, run_dir, 2);
+        g.add_edge(2, mapper::direction::opposite(run_dir), 1);
+        g.add_edge(3, claim, 1);
+        g.add_edge(4, claim, 2);
+        // Room 4 shares room 3's bound on the claimed axis, so no staggering helps one room.
+        g.set_pos(4, match claim {
+            mapper::direction::Direction::E => (p3.0, p3.1 + 1),
+            _ => (p3.0 + 1, p3.1),
+        });
+        g.set_pos(1, (0, 0));
+        g.set_pos(2, match run_dir {
+            mapper::direction::Direction::E => (1, 0),
+            _ => (0, 1),
+        });
+        g.set_pos(3, p3);
+        g
+    }
+
+    #[test]
+    fn sq1672_repair_moves_a_whole_ew_run_as_a_unit() {
+        use mapper::direction::Direction::*;
+        // 3 E 1 / 3 E 2: both run rooms must end east of room 3. One room sliding alone is
+        // stopped by the other, so only the run travelling together honours both.
+        let mut g = run_graph(E, E, (6, 3));
+        crate::render::map::repair_directional_hints(&mut g, 3, 40);
+        assert!(pos(&g, 1).0 > 6 && pos(&g, 2).0 > 6, "{:?} {:?}", pos(&g, 1), pos(&g, 2));
+        assert_eq!(pos(&g, 2).0 - pos(&g, 1).0, 1, "the run stays intact");
+        assert_eq!(pos(&g, 1).1, pos(&g, 2).1);
+    }
+
+    #[test]
+    fn sq1672_repair_moves_a_whole_ns_run_as_a_unit() {
+        use mapper::direction::Direction::*;
+        // 3 S 1 / 3 S 2: both run rooms must end south of room 3.
+        let mut g = run_graph(S, S, (3, 6));
+        crate::render::map::repair_directional_hints(&mut g, 3, 40);
+        assert!(pos(&g, 1).1 > 6 && pos(&g, 2).1 > 6, "{:?} {:?}", pos(&g, 1), pos(&g, 2));
+        assert_eq!(pos(&g, 2).1 - pos(&g, 1).1, 1, "the run stays intact");
+        assert_eq!(pos(&g, 1).0, pos(&g, 2).0);
+    }
+
+    #[test]
+    fn sq1672_repair_moves_a_run_perpendicular_to_its_own_axis() {
+        use mapper::direction::Direction::*;
+        // An E/W run (row-locked for any single room) must travel SOUTH to sit below room 3.
+        let mut g = run_graph(E, S, (5, 6));
+        crate::render::map::repair_directional_hints(&mut g, 3, 40);
+        assert!(pos(&g, 1).1 > 6 && pos(&g, 2).1 > 6, "{:?} {:?}", pos(&g, 1), pos(&g, 2));
+        assert_eq!(pos(&g, 1).1, pos(&g, 2).1, "the run keeps its row");
+        assert_eq!(pos(&g, 2).0 - pos(&g, 1).0, 1);
+    }
+
+    #[test]
+    fn sq1672_repair_moves_a_room_together_with_its_updown_stack() {
+        use mapper::direction::Direction::*;
+        // 1 S 2 / 2 N 1 is a reciprocal column with an Up/Down link, so 1 cannot step down alone
+        // (2 is in the way, and hopping over it breaks the pair). One-way `3 S 1` wants 1 below
+        // room 3's row; 3 is row-locked by its reciprocal partner 4. Only shifting 1 and 2 down
+        // together satisfies it.
+        let mut g = mapper::graph::MapGraph::new();
+        for id in [1u32, 2, 3, 4] {
+            g.upsert_room(id, "r".into());
+        }
+        g.add_edge(1, Down, 2);
+        g.add_edge(1, S, 2);
+        g.add_edge(2, N, 1);
+        g.add_edge(3, S, 1);
+        g.add_edge(3, E, 4);
+        g.add_edge(4, W, 3);
+        g.set_pos(1, (0, 0));
+        g.set_pos(2, (0, 1));
+        g.set_pos(3, (5, 0));
+        g.set_pos(4, (6, 0));
+        crate::render::map::repair_directional_hints(&mut g, 3, 40);
+        assert!(pos(&g, 1).1 > pos(&g, 3).1, "1 {:?} must end up below 3 {:?}", pos(&g, 1), pos(&g, 3));
+        assert_eq!(pos(&g, 2), (pos(&g, 1).0, pos(&g, 1).1 + 1), "2 travelled with 1");
+    }
 }

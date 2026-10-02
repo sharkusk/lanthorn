@@ -3930,6 +3930,35 @@ pub(crate) fn cleanup_overlaps_observed(
     }
 }
 
+/// SQ-1672: the vertical Up/Down stack `id` belongs to — every room reachable through Up/Down
+/// connections whose two ends share a column — sorted by id. A lone room returns just itself.
+fn updown_stack(graph: &mapper::graph::MapGraph, id: mapper::graph::RoomId) -> Vec<mapper::graph::RoomId> {
+    let x_of = |r: mapper::graph::RoomId| graph.room(r).and_then(|r| r.pos).map(|p| p.0);
+    let mut seen = vec![id];
+    let mut i = 0;
+    while i < seen.len() {
+        let cur = seen[i];
+        i += 1;
+        for c in graph.connections() {
+            if !matches!(c.dir, Direction::Up | Direction::Down) || c.is_self_loop() {
+                continue;
+            }
+            let other = if c.origin == cur {
+                c.dest
+            } else if c.dest == cur {
+                c.origin
+            } else {
+                continue;
+            };
+            if !seen.contains(&other) && x_of(other).is_some() && x_of(other) == x_of(cur) {
+                seen.push(other);
+            }
+        }
+    }
+    seen.sort_unstable();
+    seen
+}
+
 /// Nudge rooms to satisfy currently-VIOLATED directional hints — e.g. a one-way `W` edge whose dest
 /// ended up east of its origin because a post-solve stage (contiguity ejection, collision spiral)
 /// moved a room across it. Sibling to [`cleanup_overlaps`]; runs after it in the Retidy flow.
@@ -3963,10 +3992,71 @@ pub(crate) fn repair_directional_hints_observed(
     };
 
     let mut stats = mapper::layout::TidyStats::default();
-    let locks = reciprocal_axis_locks(graph);
+    let chains = mapper::layout::detect_chains(graph);
     // SQ-1637 Part 4: same accounting as `cleanup_overlaps_observed` — every candidate actually
     // evaluated counts as a trial, whether or not it wins its pass.
     let mut trials_tried: u32 = 0;
+    // SQ-1669: longest line slide / group translation considered; also bounded per pass by the
+    // map's own extent (past which every sign-based hint reads the same), and it stops at the
+    // first occupied cell anyway.
+    const MAX_SLIDE: i32 = 64;
+
+    type Cell = (i32, i32);
+    type Move = Vec<(mapper::graph::RoomId, Cell)>;
+    /// (moved positions, overlap stats, hint score, alignment before, alignment after).
+    type Trial = (Move, (usize, usize), usize, usize, usize);
+
+    /// Try translating `members` rigidly by `(dx, dy)`. `None` when a locked member would leave
+    /// its axis or a target cell is taken by a non-member; otherwise the moved positions, the
+    /// resulting `(overlaps, crossings)`, hint score and alignment sums before and after. The
+    /// graph is always left as it was found.
+    fn trial_group(
+        graph: &mut mapper::graph::MapGraph,
+        chains: &mapper::layout::Chains,
+        members: &[mapper::graph::RoomId],
+        dx: i32,
+        dy: i32,
+    ) -> Option<Trial> {
+        // A reciprocal N/S room is column-locked (X fixed), an E/W room row-locked (Y fixed) —
+        // unless its whole run travels with it, which keeps the run aligned.
+        let pinned = |map: &std::collections::BTreeMap<mapper::graph::RoomId, usize>,
+                      all: &[Vec<mapper::graph::RoomId>],
+                      m: &mapper::graph::RoomId| {
+            map.get(m).is_some_and(|&c| !all[c].iter().all(|r| members.contains(r)))
+        };
+        if members.iter().any(|m| {
+            (dx != 0 && pinned(&chains.ns, &chains.ns_members, m))
+                || (dy != 0 && pinned(&chains.ew, &chains.ew_members, m))
+        }) {
+            return None;
+        }
+        let origs: Move = members
+            .iter()
+            .filter_map(|&m| graph.room(m).and_then(|r| r.pos).map(|p| (m, p)))
+            .collect();
+        if origs.len() != members.len() {
+            return None;
+        }
+        let moved: Move = origs.iter().map(|&(m, p)| (m, (p.0 + dx, p.1 + dy))).collect();
+        if graph.rooms().any(|r| {
+            !members.contains(&r.id) && r.pos.is_some_and(|rp| moved.iter().any(|&(_, t)| t == rp))
+        }) {
+            return None;
+        }
+        let align_orig: usize =
+            members.iter().map(|&m| mapper::layout::room_alignment_score(graph, m)).sum();
+        for &(m, t) in &moved {
+            graph.set_pos(m, t);
+        }
+        let s = render_overlap_stats(graph);
+        let score = mapper::layout::directional_hint_score(graph);
+        let align_trial: usize =
+            members.iter().map(|&m| mapper::layout::room_alignment_score(graph, m)).sum();
+        for &(m, p) in &origs {
+            graph.set_pos(m, p);
+        }
+        Some((moved, s, score, align_orig, align_trial))
+    }
 
     for _ in 0..max_passes {
         let base = render_overlap_stats(graph);
@@ -3974,50 +4064,158 @@ pub(crate) fn repair_directional_hints_observed(
 
         let room_ids: Vec<mapper::graph::RoomId> =
             graph.rooms().filter(|r| r.pos.is_some()).map(|r| r.id).collect();
+        let extent = {
+            let ps: Vec<Cell> = graph.rooms().filter_map(|r| r.pos).collect();
+            let xs = ps.iter().map(|p| p.0);
+            let ys = ps.iter().map(|p| p.1);
+            let w = xs.clone().max().unwrap_or(0) - xs.min().unwrap_or(0);
+            let h = ys.clone().max().unwrap_or(0) - ys.min().unwrap_or(0);
+            (w.max(h) + 2).min(MAX_SLIDE)
+        };
 
         type Key = (std::cmp::Reverse<usize>, usize, usize, usize, mapper::graph::RoomId, usize);
-        let mut best: Option<(Key, mapper::graph::RoomId, (i32, i32))> = None;
+        let mut best: Option<(Key, Move)> = None;
+        let consider = |best: &mut Option<(Key, Move)>,
+                            res: Option<Trial>,
+                            id: mapper::graph::RoomId,
+                            degree: usize,
+                            move_idx: usize| {
+            let Some((moved, s, score, align_orig, align_trial)) = res else { return };
+            if score > base_score && s.0 <= base.0 && align_trial >= align_orig {
+                let gain = score - base_score;
+                let key: Key = (std::cmp::Reverse(gain), s.0, s.1, degree, id, move_idx);
+                if best.as_ref().is_none_or(|(bk, _)| key < *bk) {
+                    *best = Some((key, moved));
+                }
+            }
+        };
+
+        // Single-room candidates: the radius ring, then (SQ-1669) line slides — any distance
+        // along the row/column the room shares with a reciprocal partner, through free cells.
         for &id in &room_ids {
             let Some(orig) = graph.room(id).and_then(|r| r.pos) else { continue };
-            // Reciprocal N/S rooms are column-locked (X fixed), E/W rooms row-locked (Y fixed).
-            let (x_locked, y_locked) = locks.get(&id).copied().unwrap_or((false, false));
-            let align_orig = mapper::layout::room_alignment_score(graph, id);
             let degree = mapper::layout::room_compass_degree(graph, id);
             for (move_idx, &(dy, dx)) in moves.iter().enumerate() {
-                // Skip any candidate that would slide a reciprocal-locked room off its shared axis.
-                if (x_locked && dx != 0) || (y_locked && dy != 0) {
-                    continue;
-                }
-                let trial = (orig.0 + dx, orig.1 + dy);
-                if graph.rooms().any(|r| r.id != id && r.pos == Some(trial)) {
+                let cell = (orig.0 + dx, orig.1 + dy);
+                if graph.rooms().any(|r| r.id != id && r.pos == Some(cell)) {
                     continue;
                 }
                 trials_tried += 1;
-                graph.set_pos(id, trial);
-                let s = render_overlap_stats(graph);
-                let score = mapper::layout::directional_hint_score(graph);
-                let align_trial = mapper::layout::room_alignment_score(graph, id);
-                graph.set_pos(id, orig);
-                if score > base_score && s.0 <= base.0 && align_trial >= align_orig {
-                    let gain = score - base_score;
-                    let key: Key = (std::cmp::Reverse(gain), s.0, s.1, degree, id, move_idx);
-                    if best.as_ref().is_none_or(|(bk, _, _)| key < *bk) {
-                        best = Some((key, id, trial));
+                let res = trial_group(graph, &chains, &[id], dx, dy);
+                consider(&mut best, res, id, degree, move_idx);
+            }
+            let mut slide_idx = moves.len();
+            let mut slides: Vec<(i32, i32)> = Vec::new();
+            if chains.ew.contains_key(&id) {
+                slides.extend([(-1, 0), (1, 0)]);
+            }
+            if chains.ns.contains_key(&id) {
+                slides.extend([(0, -1), (0, 1)]);
+            }
+            for (sx, sy) in slides {
+                for dist in 1..=extent {
+                    let cell = (orig.0 + sx * dist, orig.1 + sy * dist);
+                    if graph.rooms().any(|r| r.id != id && r.pos == Some(cell)) {
+                        break;
+                    }
+                    if dist > radius {
+                        trials_tried += 1;
+                        let res = trial_group(graph, &chains, &[id], sx * dist, sy * dist);
+                        consider(&mut best, res, id, degree, slide_idx);
+                        slide_idx += 1;
+                    }
+                }
+            }
+        }
+
+        // SQ-1672: whole-group candidates. A group is a room's Up/Down stack, its E/W reciprocal
+        // run, or its N/S reciprocal run (the layout's own `detect_chains` runs). Each distinct
+        // group (id-sorted) is translated rigidly one or more cells up, down, left or right —
+        // perpendicular to its own axis as well as along it — stopping at the first blocked
+        // distance. Iteration order is fixed: groups in ascending lowest-id order, then
+        // (up, down, left, right) by distance.
+        let mut groups: std::collections::BTreeSet<Vec<mapper::graph::RoomId>> =
+            std::collections::BTreeSet::new();
+        for &id in &room_ids {
+            let stack = updown_stack(graph, id);
+            if stack.len() > 1 {
+                groups.insert(stack);
+            }
+            for (map, members) in [(&chains.ew, &chains.ew_members), (&chains.ns, &chains.ns_members)] {
+                if let Some(&cid) = map.get(&id) {
+                    let mut m = members[cid].clone();
+                    m.sort_unstable();
+                    groups.insert(m);
+                }
+            }
+        }
+        // A strict hint gain needs a violated hint to become satisfied, which needs exactly one of
+        // its two endpoints to move — so a group with no violated hint crossing its boundary
+        // cannot win, and is not worth a render.
+        let violated: Vec<(mapper::graph::RoomId, mapper::graph::RoomId)> = graph
+            .connections()
+            .iter()
+            .filter(|c| {
+                // The score's own side-only test, spelled out: violated when dest sits on the
+                // wrong side of origin along either axis the bearing names.
+                let Some(delta) = mapper::direction::layout_offset(c.dir) else { return false };
+                let (Some(op), Some(dp)) = (
+                    graph.room(c.origin).and_then(|r| r.pos),
+                    graph.room(c.dest).and_then(|r| r.pos),
+                ) else {
+                    return false;
+                };
+                let (ax, ay) = (dp.0 - op.0, dp.1 - op.1);
+                (delta.0 != 0 && (ax > 0) != (delta.0 > 0)) || (delta.1 != 0 && (ay > 0) != (delta.1 > 0))
+                    || (delta.0 != 0 && ax == 0) || (delta.1 != 0 && ay == 0)
+            })
+            .map(|c| (c.origin, c.dest))
+            .collect();
+        for members in groups {
+            // A hint between two group members cannot change under a rigid move either.
+            if !violated.iter().any(|(a, b)| members.contains(a) != members.contains(b)) {
+                continue;
+            }
+            let id = members[0];
+            let degree = members
+                .iter()
+                .map(|&m| mapper::layout::room_compass_degree(graph, m))
+                .sum::<usize>();
+            let mut move_idx = moves.len() + 4 * MAX_SLIDE as usize * 2;
+            for (sx, sy) in [(0, -1), (0, 1), (-1, 0), (1, 0)] {
+                for dist in 1..=extent {
+                    let res = trial_group(graph, &chains, &members, sx * dist, sy * dist);
+                    let blocked = res.is_none();
+                    if !blocked {
+                        trials_tried += 1;
+                    }
+                    consider(&mut best, res, id, degree, move_idx);
+                    move_idx += 1;
+                    if blocked {
+                        break;
                     }
                 }
             }
         }
 
         match best {
-            Some((_, id, trial)) => {
-                let orig = graph.room(id).and_then(|r| r.pos).unwrap_or(trial);
-                graph.set_pos(id, trial);
+            Some((_, moved)) => {
+                let descs: Vec<String> = moved
+                    .iter()
+                    .map(|&(id, trial)| {
+                        let orig = graph.room(id).and_then(|r| r.pos).unwrap_or(trial);
+                        let name = graph.room(id).map(|r| r.name.as_str()).unwrap_or("?").to_owned();
+                        format!("room {} ({}) from {:?} to {:?}", id, name, orig, trial)
+                    })
+                    .collect();
+                for &(id, trial) in &moved {
+                    graph.set_pos(id, trial);
+                }
                 if let Some(ref mut cb) = obs {
                     stats.hints_repaired += 1;
-                    let name = graph.room(id).map(|r| r.name.as_str()).unwrap_or("?").to_owned();
                     let desc = format!(
-                        "Repair hint: moved room {} ({}) from {:?} to {:?} to restore directional edge.",
-                        id, name, orig, trial
+                        "Repair hint: moved {} to restore directional edge.",
+                        descs.join(", ")
                     );
                     cb(graph, "repair_hints", &desc, &stats);
                 }

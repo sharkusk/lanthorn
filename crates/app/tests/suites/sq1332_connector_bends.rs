@@ -87,6 +87,11 @@ fn totals(map: &app::mapgen::GeneratedMap) -> (usize, usize, usize) {
 /// `West of House #68` diagonally opposite it. The connector pays a turn for that, and it is the
 /// right trade — the passage the ghost stands for was the one drawn round a room it never touches.
 ///
+/// **`#68↔#217` is 1 since SQ-1669..1672** — the two rooms' passage now draws as a single L,
+/// exactly what the anchors allow, because the repair stage's line slides and group moves close
+/// the gap the tidy used to leave between them (and `South of House` draws its cardinal exit
+/// rather than the diagonal, SQ-1671).
+///
 /// **And `#68↔#91` is 3 since SQ-1376, because the passage is finally pointing the right way.**
 /// `Forest #91` is the room `West of House`'s own `W` exit names, and mapgen had been drawing it
 /// to the EAST — the contiguity stage broke the bearing to keep a row tight and mapgen, unlike the
@@ -111,7 +116,7 @@ fn zork1_named_connectors_take_the_fewest_turns_their_anchors_allow() {
     layers.sort_unstable();
     let report: Vec<_> =
         layers.iter().flat_map(|&l| app::render::map::bend_report(&map.graph, l)).collect();
-    for (origin, dest, want) in [(68u32, 91u32, 3usize), (68, 217, 3), (78, 131, 2)] {
+    for (origin, dest, want) in [(68u32, 91u32, 3usize), (68, 217, 1), (78, 131, 2)] {
         let f = report
             .iter()
             .find(|f| (f.origin, f.dest) == (origin, dest) || (f.origin, f.dest) == (dest, origin))
@@ -198,7 +203,9 @@ fn zork1_spends_no_more_turns_than_its_budget() {
     let map = app::mapgen::generate(&path, true).expect("mapgen");
     let (n, bends, opt) = totals(&map);
     assert!(n > 100, "Zork I must draw a real number of connectors, got {n}");
-    assert_eq!(opt, 81, "the anchor optimum is a property of the LAYOUT, not the router");
+    // SQ-1669..1672: 81 -> 78. The tidy's repair stage now slides and group-moves rooms the
+    // radius-3 ring could not reach, and the connectors between them need fewer forced turns.
+    assert_eq!(opt, 78, "the anchor optimum is a property of the LAYOUT, not the router");
     assert!(bends <= 145, "Zork I draws {bends} turns against a budget of 145 (was 153)");
 }
 
@@ -227,7 +234,8 @@ fn anchorhead_spends_no_more_turns_than_its_budget() {
     let map = app::mapgen::generate(&path, true).expect("mapgen");
     let (n, bends, opt) = totals(&map);
     assert!(n > 100, "Anchorhead must draw a real number of connectors, got {n}");
-    assert_eq!(opt, 56, "the anchor optimum is a property of the LAYOUT, not the router");
+    // SQ-1669..1672: 56 -> 51, for the reason the Zork I case above gives.
+    assert_eq!(opt, 51, "the anchor optimum is a property of the LAYOUT, not the router");
     assert!(bends <= 100, "Anchorhead draws {bends} turns against a budget of 100 (was 112)");
 }
 

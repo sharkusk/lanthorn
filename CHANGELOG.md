@@ -27,6 +27,13 @@ goes into the README in place, at its normal destination, marked with the
 visible tag `*Next release:*`. `release.yml` refuses to cut a release
 while any such tag, or this Unreleased section, still exists.*
 
+### Fixed
+
+- The map's tidy now honours one-way compass hints it used to leave bent: a room
+  a passage leads west to now ends up west of it, even when that takes a long
+  slide or moving a whole stairwell or corridor together, and a room draws its
+  plain compass exit rather than a diagonal one leading to the same place.
+
 ## v0.8.2 — 2026-10-01
 
 ### Added
