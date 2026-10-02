@@ -144,63 +144,22 @@ before exposing it any further than that.
 
 ## One account per person, behind a login proxy
 
-If you already run a login-aware reverse proxy (Authelia,
-Authentik, Caddy with `forward_auth`), the container can give
-every signed-in user their own saves, map and settings. Set
-`LANTHORN_WEB_AUTH_HEADER` to the name of the header your proxy fills in with
-the user's name after it has checked their login. The header must carry a
-plain username that is a valid player name (see below). One that holds an
-email address or a display name with spaces, as Tailscale Serve's identity
-headers do, is refused:
+lanthorn does no logins itself, but it can play each person as their own
+player — own saves, map and settings — when a reverse proxy you run in front
+of it does the login. Set `LANTHORN_WEB_AUTH_HEADER` to the request header your
+proxy fills in with the signed-in username:
 
 ```yaml
 environment:
-  LANTHORN_WEB_AUTH_HEADER: "Remote-User"   # Authelia; Caddy often uses X-Forwarded-User
+  LANTHORN_WEB_AUTH_HEADER: "X-Forwarded-User"
 ```
 
-The container then plays each connection as that user, the same as launching
-lanthorn with `--player <name>` (see "Sharing one install between players" in
-the command-line guide). A user's running game is kept apart too: pasting
-somebody else's session link starts a fresh game rather than joining theirs.
-
-```caddy
-lanthorn.example.com {
-    route {
-        forward_auth authelia:9091 {
-            uri /api/authz/forward-auth
-            copy_headers Remote-User
-        }
-        # Sound: the page dials its own address at /lanthorn-audio/, so that
-        # path gets the same login and goes on to the audio port.
-        @audio path /lanthorn-audio/*
-        reverse_proxy @audio lanthorn:7682
-        reverse_proxy lanthorn:7681
-    }
-}
-```
-
-Three things are on you, because **lanthorn does no authentication of its own**
-and trusts the header completely:
-
-- **ttyd's port AND the audio port must be reachable only through the proxy.**
-  Do not publish `7681` or `7682` to the network; put the proxy and the
-  container on a private Docker network. Anyone who can reach either directly
-  can send any name they like.
-- **The proxy must overwrite or strip any copy of the header the browser sends,
-  on both routes.** Authelia and Caddy's `forward_auth` replace it; a bare
-  `reverse_proxy` does not.
-- **Do not also set `LANTHORN_WEB_CREDENTIAL`.** ttyd ignores the password
-  whenever a header is configured, so it would look like protection while
-  providing none; the proxy is the authentication. The container
-  refuses to start with both.
-
-A name that is not a valid player name (1-29 letters, digits, `.`, `_`, `-`, not
-starting with `.`) is refused with a message on the terminal rather than played
-as someone else. Sound works in this mode: the page asks for it at
-`/lanthorn-audio/` on its own address instead of on port 7682, the audio relay
-reads the same header to know whose session it is, and each user's sound goes
-to their own game. A connection to the audio route without a valid header is
-refused.
+The proxy must route the page to port 7681 and `/lanthorn-audio/*` to port
+7682 (sound), set the header on both, and overwrite any copy the browser sends.
+Neither port may be reachable except through the proxy, since lanthorn trusts
+the header completely. The username must be a valid player name (1-29 letters,
+digits, `.`, `_`, `-`); anything else is refused. Leave `LANTHORN_WEB_CREDENTIAL`
+unset — the container refuses to start with both.
 
 ## Publishing
 
