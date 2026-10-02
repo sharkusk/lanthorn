@@ -29,6 +29,16 @@ while any such tag, or this Unreleased section, still exists.*
 
 ### Added
 
+- The Journal has a **Documents** tab: the game's documents folder listed with
+  each file's kind and size, a link to the folder, and **Download documents…** and
+  **Create documents folder** buttons. Text opens in a pager that wraps to the pane,
+  reads old Mac (CR) and DOS (code page 437) files, and re-wraps when you resize;
+  pictures are shown in place; PDFs open in your system viewer. Files named like a
+  walkthrough or hint sheet are marked as spoilers and ask before they open. Reach
+  it with a click, `Alt+5` or `/journal-tab documents`; Shift+Up/Down and
+  Shift+Right/Left move through it from the keyboard without touching the command
+  line. `/create-documents-folder` now works in a running game too.
+
 - You can now fetch a game's manuals, feelies and maps straight from IFDB into its
   documents folder. Press `Shift+D` on a story (or use the story menu's **Download
   documents from IFDB…**, the **Download documents…** button in the info panel, or

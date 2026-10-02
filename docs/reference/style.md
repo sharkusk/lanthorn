@@ -126,6 +126,16 @@ Every themeable `style.toml` selector: which role or selector it derives from, a
 | `journal.tabbar` | Elements | Style | `text` |  | |
 | `journal.tab` | Elements | Style | `muted` |  | |
 | `journal.tab:active` | Elements | Style | `accent` | `bold` | |
+| `journal.docs.row` | Elements | Style | `text` |  | |
+| `journal.docs.row:selected` | Elements | Style | `accent` | `reversed` | |
+| `journal.docs.meta` | Elements | Style | `muted` |  | |
+| `journal.docs.spoiler` | Elements | Style | `alert` | `bold` | |
+| `journal.docs.header` | Elements | Style | `muted` |  | |
+| `journal.docs.button` | Elements | Style | `accent` | `bold reversed` | |
+| `journal.docs.hint` | Elements | Style | `muted` | `italic` | |
+| `journal.docs.pager` | Elements | Style | `text` |  | |
+| `journal.docs.pager_title` | Elements | Style | `heading` |  | |
+| `journal.docs.pager_notice` | Elements | Style | `alert` |  | |
 | `inventory_panel.header` | Elements | Style | `heading` |  | |
 | `inventory_panel.meta` | Elements | Style | `muted` |  | |
 | `room_panel` | Elements | Style | `text` |  | |

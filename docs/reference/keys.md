@@ -11,6 +11,7 @@ The built-in key bindings, one row per binding — several keys may reach the sa
 | Global | `Alt+1` | `journal-tab map` | show a tab of the Journal (the right-hand panel), revealing it if hidden; remembered per story |
 | Global | `Alt+2` | `journal-tab room` | show a tab of the Journal (the right-hand panel), revealing it if hidden; remembered per story |
 | Global | `Alt+3` | `journal-tab inventory` | show a tab of the Journal (the right-hand panel), revealing it if hidden; remembered per story |
+| Global | `Alt+5` | `journal-tab documents` | show a tab of the Journal (the right-hand panel), revealing it if hidden; remembered per story |
 | Anim | `H` | `pan-map -1 0` | pan the map by dx columns and dy rows |
 | Anim | `L` | `pan-map 1 0` | pan the map by dx columns and dy rows |
 | Anim | `K` | `pan-map 0 -1` | pan the map by dx columns and dy rows |
@@ -53,7 +54,7 @@ The built-in key bindings, one row per binding — several keys may reach the sa
 | Browser | `R` | `refresh-library` | fetch IFDB metadata for every story that is missing or stale |
 | Browser | `U` | `set-ifdb-url` | point the selected story at an IFDB page by hand |
 | Browser | `/` | `search-ifdb` | search IFDB by title or author and download a story into this directory |
-| Browser | `M` | `create-documents-folder` | create the selected story's documents folder (manuals, maps) beside its IFDB id |
+| Browser | `M` | `create-documents-folder` | create this story's documents folder (manuals, maps) beside its IFDB id |
 | Browser | `Shift+U` | `open-url` | download a story from a URL into this library and open it |
 | Browser | `Shift+H` | `download-hints` | download a matching InvisiClues hint file for the selected story |
 | Browser | `Shift+D` | `download-documents` | choose manuals, feelies and maps listed on IFDB for this game and save them to its documents folder |

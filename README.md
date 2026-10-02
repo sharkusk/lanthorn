@@ -211,9 +211,11 @@ itself.**
   ways.
   → [the map](docs/guide/the-map.md)
 - **The Journal** — *Next release:* the panel beside the story is a tabbed
-  Journal: **Map**, **Room** and **Inventory**, one click or `Alt+1/2/3` apart,
-  and it remembers the tab you left on for each story. The inventory is no longer
-  a strip across the bottom, so the story gets its rows back.
+  Journal: **Map**, **Room**, **Inventory** and **Documents**, one click or
+  `Alt+1/2/3/5` apart, and it remembers the tab you left on for each story. The
+  inventory is no longer a strip across the bottom, so the story gets its rows
+  back, and the Documents tab reads a game's manuals and maps in place: text in a
+  pager, pictures drawn in the pane, PDFs in your viewer.
 - **The original disks, as the original machines** — hand it an Amiga, Macintosh,
   Apple II, Atari ST, PC or Commodore floppy and it plays the build on that disk,
   with that machine's artwork, sound, palette and status line. Nine machines,

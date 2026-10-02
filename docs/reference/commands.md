@@ -41,10 +41,14 @@ Every slash command, grouped the way `/help` groups them. Type any of these afte
 | Map | `toggle-portal-labels` | toggle portal labels |
 | View | `toggle-map` | show or hide the Journal (the map's panel); persisted per-game |
 | View | `toggle-focus` | switch focus between panes |
-| View | `journal-tab <map|room|inventory>` | show a tab of the Journal (the right-hand panel), revealing it if hidden; remembered per story |
+| View | `journal-tab <map|room|inventory|documents>` | show a tab of the Journal (the right-hand panel), revealing it if hidden; remembered per story |
 | View | `journal-next-tab` | show the Journal's next tab, wrapping |
 | View | `journal-prev-tab` | show the Journal's previous tab, wrapping |
 | View | `filter-items [query]` | filter the Journal's Inventory tab (both Carrying and Elsewhere) to items matching query; no query clears the filter |
+| View | `open-document` | open the selected document in the Journal's Documents tab: text in a pager, images in place, PDFs in the system viewer |
+| View | `close-document` | close the open document and return to the Documents tab's list |
+| View | `select-document <n>` | move the Documents tab's selection by signed n rows |
+| View | `scroll-document <n>|page-up|page-down` | scroll the open document (or the Documents list) by signed n lines or a page |
 | View | `toggle-status-bar` | toggle the status/score bar |
 | View | `resize-panes` | enter interactive pane-resize mode |
 | View | `reset-pane-size` | reset all pane sizes to their defaults |
@@ -91,7 +95,7 @@ Every slash command, grouped the way `/help` groups them. Type any of these afte
 | Library | `fetch-story` | re-fetch the selected story's IFDB metadata, ignoring the cache |
 | Library | `refresh-library` | fetch IFDB metadata for every story that is missing or stale |
 | Library | `set-ifdb-url` | point the selected story at an IFDB page by hand |
-| Library | `create-documents-folder` | create the selected story's documents folder (manuals, maps) beside its IFDB id |
+| Library | `create-documents-folder` | create this story's documents folder (manuals, maps) beside its IFDB id |
 | Library | `open-url` | download a story from a URL into this library and open it |
 | Library | `search-ifdb` | search IFDB by title or author and download a story into this directory |
 | Library | `download-hints` | download a matching InvisiClues hint file for the selected story |
