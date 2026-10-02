@@ -33,6 +33,7 @@ pub mod save_name_dialog;
 pub mod text_entry_dialog;
 pub mod confirm_delete_dialog;
 pub mod confirm_overwrite_dialog;
+pub mod confirm_spoiler_dialog;
 pub mod room_dock;
 pub mod room_info;
 pub mod saves;

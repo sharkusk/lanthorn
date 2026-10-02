@@ -424,7 +424,12 @@ pub(crate) fn poll_tidy_jobs(
 /// Hand the documents chooser (SQ-1680) what its worker has finished and start
 /// its next request. `true` when a redraw is due.
 pub(crate) fn poll_documents(state: &mut AppState) -> bool {
-    state.overlays.documents.as_mut().is_some_and(|d| d.pump())
+    let changed = state.overlays.documents.as_mut().is_some_and(|d| d.pump());
+    if changed {
+        // A download or import may have landed: the Documents tab reads its folder again.
+        state.documents_tab.mark_dirty();
+    }
+    changed
 }
 
 pub(crate) fn refresh_command_band(state: &mut AppState, session: &dyn Engine) -> bool {

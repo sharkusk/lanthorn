@@ -61,6 +61,16 @@ version = 1   # style schema version — do not remove; lets lanthorn flag an ou
 # "journal.tabbar" = { parent = "text" }
 # "journal.tab" = { parent = "muted" }
 # "journal.tab:active" = { parent = "accent", bold = true }
+# "journal.docs.row" = { parent = "text" }
+# "journal.docs.row:selected" = { parent = "accent", reversed = true }
+# "journal.docs.meta" = { parent = "muted" }
+# "journal.docs.spoiler" = { parent = "alert", bold = true }
+# "journal.docs.header" = { parent = "muted" }
+# "journal.docs.button" = { parent = "accent", bold = true, reversed = true }
+# "journal.docs.hint" = { parent = "muted", italic = true }
+# "journal.docs.pager" = { parent = "text" }
+# "journal.docs.pager_title" = { parent = "heading" }
+# "journal.docs.pager_notice" = { parent = "alert" }
 # "inventory_panel.header" = { parent = "heading" }
 # "inventory_panel.meta" = { parent = "muted" }
 # room_panel = { parent = "text" }

@@ -650,6 +650,11 @@ pub(crate) fn dispatch_slash_outcome(
                 Err(why) => state.set_status(why),
             }
         }
+        SlashOutcome::CreateDocumentsFolder => {
+            // SQ-1681: the Documents tab's button, and the same command the story
+            // browser's info panel runs for the selected story.
+            app::documents_tab::create_folder(state, story_path);
+        }
         SlashOutcome::RunFontCheck => {
             // SQ-1104/SQ-1245: open the same modal the first run raises, on
             // stage one. Focus starts on the second button — the answer that

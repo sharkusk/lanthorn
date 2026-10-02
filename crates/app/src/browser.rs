@@ -120,6 +120,7 @@ pub fn action_for_command(command: &str) -> Option<BrowserAction> {
     match parse_in_context(command, '/', Context::Browser) {
         SlashOutcome::Browser(a) => Some(a),
         SlashOutcome::DownloadDocuments => Some(BrowserAction::DownloadDocuments),
+        SlashOutcome::CreateDocumentsFolder => Some(BrowserAction::CreateDocumentsFolder),
         _ => None,
     }
 }

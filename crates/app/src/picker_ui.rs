@@ -3689,22 +3689,7 @@ fn dispatch_search_action(
 /// OSC 8 hyperlink (SQ-0367) — we open it ourselves instead. Fire-and-forget:
 /// the URL is passed as a single argument (no shell), so it needs no escaping.
 fn open_url(url: &str) {
-    #[cfg(target_os = "macos")]
-    let mut cmd = std::process::Command::new("open");
-    #[cfg(target_os = "windows")]
-    let mut cmd = {
-        let mut c = std::process::Command::new("cmd");
-        c.args(["/C", "start", ""]);
-        c
-    };
-    #[cfg(all(unix, not(target_os = "macos")))]
-    let mut cmd = std::process::Command::new("xdg-open");
-
-    let _ = cmd
-        .arg(url)
-        .stdout(std::process::Stdio::null())
-        .stderr(std::process::Stdio::null())
-        .spawn();
+    app::opener::open(url);
 }
 
 /// Draw the highlighted story's metadata panel: title, filesystem info,

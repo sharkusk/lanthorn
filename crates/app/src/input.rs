@@ -246,6 +246,22 @@ pub enum Action {
     /// A key for the open documents chooser (SQ-1680), which owns its own state
     /// machine; this only carries the key to it.
     DocumentsKey(KeyCode),
+    /// Open the Documents tab's selected row (`None`) or the one given (SQ-1681):
+    /// a pager, an image, or the system viewer, behind a spoiler question when
+    /// the file's name flags it.
+    DocTabOpen(Option<usize>),
+    /// Close the Documents tab's open document and return to its list.
+    DocTabClose,
+    /// Move the Documents list's selection by this many rows.
+    DocTabSelect(i32),
+    /// Scroll the open document, or the list, by this many lines.
+    DocTabScroll(i32),
+    /// Scroll by a page (+1 / -1).
+    DocTabPage(i32),
+    /// A click on list row `idx`: select it, or open it on the second click.
+    DocTabClickRow(usize),
+    /// A click on the folder's `file://` link: hand it to the system opener.
+    DocTabOpenLink(String),
     /// A left click at (column, row) while the documents chooser is open.
     DocumentsClick(u16, u16),
     /// A wheel notch (±1 row, already direction-resolved) over the chooser.
@@ -637,6 +653,17 @@ pub fn key_to_command(state: &AppState, key: KeyEvent) -> KeyResolve {
     }
     if state.overlays.hotkey_dialog {
         return hotkey_dialog_key_to_action(state, key);
+    }
+
+    // 6.4. Documents tab (SQ-1681): Esc closes an open document and returns to the
+    // list. Only while a viewer is actually up on the visible tab — with the list
+    // showing, Esc keeps every meaning it had.
+    if state.documents_tab_visible()
+        && state.documents_tab.viewer_open()
+        && key.modifiers == KeyModifiers::NONE
+        && matches!(key.code, KeyCode::Esc)
+    {
+        return KeyResolve::Action(Action::DocTabClose);
     }
 
     // 6.5. Room dock Esc ladder (SQ-0692, extended by SQ-0693): drop the route
@@ -2009,6 +2036,23 @@ fn config_screen_key_to_action(key: KeyEvent, focus: usize) -> Action {
 
 fn game_key_to_action(state: &AppState, key: KeyEvent) -> Action {
     let shift = key.modifiers == KeyModifiers::SHIFT;
+    // The Documents tab (SQ-1681) is modeless like the map: Shift+Arrows and
+    // Shift+PageUp/PageDown are never typed text, and with the Documents tab up the
+    // map they would pan is not on screen. Up/Down move the list's selection (or
+    // scroll an open document), Right opens the selected row, Left closes the
+    // document. Plain arrows, letters and Esc stay the command line's.
+    if shift && state.documents_tab_visible() {
+        let viewer = state.documents_tab.viewer_open();
+        match key.code {
+            KeyCode::Up => return if viewer { Action::DocTabScroll(-1) } else { Action::DocTabSelect(-1) },
+            KeyCode::Down => return if viewer { Action::DocTabScroll(1) } else { Action::DocTabSelect(1) },
+            KeyCode::Right => return if viewer { Action::None } else { Action::DocTabOpen(None) },
+            KeyCode::Left => return Action::DocTabClose,
+            KeyCode::PageUp => return Action::DocTabPage(-1),
+            KeyCode::PageDown => return Action::DocTabPage(1),
+            _ => {}
+        }
+    }
     match key.code {
         // Map navigation is available WITHOUT leaving the story line: Shift+Arrows
         // pan and the non-typeable Home recenters; PageUp/PageDown page the
@@ -3190,6 +3234,22 @@ fn apply_action_inner(action: Action, state: &mut AppState, mapper: &mut Mapper)
             };
             state.scroll_transcript_to(target);
         }
+
+        // ── Documents tab (SQ-1681) ───────────────────────────────────────────
+        Action::DocTabOpen(idx) => {
+            state.set_journal_tab(crate::journal::JournalTab::Documents);
+            crate::documents_tab::open_selected(state, idx, false);
+        }
+        Action::DocTabClose => crate::documents_tab::close_viewer(state),
+        Action::DocTabSelect(n) => state.documents_tab.select(n as isize),
+        Action::DocTabScroll(n) => state.documents_tab.scroll(n as isize),
+        Action::DocTabPage(d) => state.documents_tab.scroll_page(d),
+        Action::DocTabClickRow(idx) => {
+            if state.documents_tab.click_row(idx, std::time::Instant::now()) {
+                crate::documents_tab::open_selected(state, Some(idx), false);
+            }
+        }
+        Action::DocTabOpenLink(url) => crate::opener::open(&url),
 
         Action::SetJournalTab(tab) => {
             state.set_journal_tab(tab);
@@ -6462,13 +6522,17 @@ mod tests {
             parse("journal-tab inventory"),
             SlashOutcome::Action(Action::SetJournalTab(JournalTab::Inventory))
         ));
+        assert!(matches!(
+            parse("journal-tab documents"),
+            SlashOutcome::Action(Action::SetJournalTab(JournalTab::Documents))
+        ));
         assert!(matches!(parse("journal-tab nope"), SlashOutcome::Error(_)));
         assert!(matches!(parse("journal-tab"), SlashOutcome::Error(_)));
 
         let mut s = AppState::default();
         let mut m = Mapper::default();
         apply_action(Action::JournalStepTab(false), &mut s, &mut m);
-        assert_eq!(s.journal_tab, JournalTab::Inventory, "back from Map wraps to the last tab");
+        assert_eq!(s.journal_tab, JournalTab::Documents, "back from Map wraps to the last tab");
         apply_action(Action::JournalStepTab(true), &mut s, &mut m);
         assert_eq!(s.journal_tab, JournalTab::Map, "forward from the last tab wraps to Map");
         apply_action(Action::JournalStepTab(true), &mut s, &mut m);
@@ -12944,7 +13008,7 @@ mod tests {
         );
         // It is the ONLY command that crosses: every other game command is still refused in the browser.
         let both: Vec<&str> = COMMANDS.iter().filter(|c| in_both_worlds(c)).map(|c| c.name).collect();
-        assert_eq!(both, ["download-documents"]);
+        assert_eq!(both, ["download-documents", "create-documents-folder"]);
         assert!(matches!(parse_in_context("quit", '/', Context::Browser), SlashOutcome::Error(_)));
         // The in-game palette and Tab completion offer it; /help lists it.
         assert!(crate::slash::slash_names().iter().any(|n| n == "download-documents"));

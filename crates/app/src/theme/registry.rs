@@ -494,6 +494,20 @@ pub static REGISTRY: std::sync::LazyLock<Vec<RegRow>> = std::sync::LazyLock::new
     row("journal.tabbar", Section::Elements, Kind::Style, Some("text"), Delta::EMPTY),
     row("journal.tab", Section::Elements, Kind::Style, Some("muted"), Delta::EMPTY),
     row("journal.tab:active", Section::Elements, Kind::Style, Some("accent"), mods(true, false, false, false)),
+    // ── The Journal's Documents tab (SQ-1681). A list row and its selection, the
+    // kind/size column, the spoiler marker, the folder line and the buttons under
+    // it, the empty-folder hint; the pager's text, its title line and its
+    // truncation notice.
+    row("journal.docs.row", Section::Elements, Kind::Style, Some("text"), Delta::EMPTY),
+    row("journal.docs.row:selected", Section::Elements, Kind::Style, Some("accent"), mods(false, false, false, true)),
+    row("journal.docs.meta", Section::Elements, Kind::Style, Some("muted"), Delta::EMPTY),
+    row("journal.docs.spoiler", Section::Elements, Kind::Style, Some("alert"), mods(true, false, false, false)),
+    row("journal.docs.header", Section::Elements, Kind::Style, Some("muted"), Delta::EMPTY),
+    row("journal.docs.button", Section::Elements, Kind::Style, Some("accent"), mods(true, false, false, true)),
+    row("journal.docs.hint", Section::Elements, Kind::Style, Some("muted"), mods(false, true, false, false)),
+    row("journal.docs.pager", Section::Elements, Kind::Style, Some("text"), Delta::EMPTY),
+    row("journal.docs.pager_title", Section::Elements, Kind::Style, Some("heading"), Delta::EMPTY),
+    row("journal.docs.pager_notice", Section::Elements, Kind::Style, Some("alert"), Delta::EMPTY),
     // The inventory panel's "Carrying:"/"Elsewhere:" section headers (SQ-1630) —
     // same heading role room_panel.header uses, so the two docks' headers read
     // alike.
@@ -841,6 +855,16 @@ mod tests {
         "journal.tabbar",
         "journal.tab",
         "journal.tab:active",
+        "journal.docs.row",
+        "journal.docs.row:selected",
+        "journal.docs.meta",
+        "journal.docs.spoiler",
+        "journal.docs.header",
+        "journal.docs.button",
+        "journal.docs.hint",
+        "journal.docs.pager",
+        "journal.docs.pager_title",
+        "journal.docs.pager_notice",
         "inventory_panel",
         "inventory_panel.header",
         "inventory_panel.meta",

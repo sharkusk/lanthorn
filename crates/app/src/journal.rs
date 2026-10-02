@@ -22,11 +22,15 @@ pub enum JournalTab {
     Room,
     /// The inventory panel: what is carried and where everything else was seen.
     Inventory,
+    /// The current game's documents folder: manuals, maps and feelies, read in
+    /// place (SQ-1681). A Hints tab (SQ-1685) will go between this and Inventory.
+    Documents,
 }
 
 impl JournalTab {
     /// Every tab, in display order.
-    pub const ALL: [JournalTab; 3] = [JournalTab::Map, JournalTab::Room, JournalTab::Inventory];
+    pub const ALL: [JournalTab; 4] =
+        [JournalTab::Map, JournalTab::Room, JournalTab::Inventory, JournalTab::Documents];
 
     /// The command argument and sidecar spelling.
     pub fn name(self) -> &'static str {
@@ -34,6 +38,7 @@ impl JournalTab {
             JournalTab::Map => "map",
             JournalTab::Room => "room",
             JournalTab::Inventory => "inventory",
+            JournalTab::Documents => "documents",
         }
     }
 
@@ -43,6 +48,7 @@ impl JournalTab {
             JournalTab::Map => "Map",
             JournalTab::Room => "Room",
             JournalTab::Inventory => "Inventory",
+            JournalTab::Documents => "Documents",
         }
     }
 
@@ -52,6 +58,7 @@ impl JournalTab {
             JournalTab::Map => "Map",
             JournalTab::Room => "Rm",
             JournalTab::Inventory => "Inv",
+            JournalTab::Documents => "Docs",
         }
     }
 
@@ -62,6 +69,7 @@ impl JournalTab {
             "map" => Some(JournalTab::Map),
             "room" => Some(JournalTab::Room),
             "inventory" | "inv" | "items" => Some(JournalTab::Inventory),
+            "documents" | "docs" => Some(JournalTab::Documents),
             _ => None,
         }
     }
@@ -184,8 +192,10 @@ mod tests {
             assert_eq!(JournalTab::from_name(t.name()), Some(t));
             assert_eq!(t.next().prev(), t);
         }
-        assert_eq!(JournalTab::Inventory.next(), JournalTab::Map);
-        assert_eq!(JournalTab::Map.prev(), JournalTab::Inventory);
+        assert_eq!(JournalTab::Documents.next(), JournalTab::Map);
+        assert_eq!(JournalTab::Map.prev(), JournalTab::Documents);
+        assert_eq!(JournalTab::ALL.last(), Some(&JournalTab::Documents), "Documents is the last tab");
+        assert_eq!(JournalTab::from_name("docs"), Some(JournalTab::Documents));
         assert_eq!(JournalTab::from_name("INV"), Some(JournalTab::Inventory));
         assert_eq!(JournalTab::from_name("hints"), None);
     }
@@ -194,15 +204,16 @@ mod tests {
     fn wide_bar_shows_full_labels_in_order() {
         let cells = tab_bar_cells(40, JournalTab::Map);
         let text: Vec<&str> = cells.iter().map(|c| c.text.as_str()).collect();
-        assert_eq!(text, [" Map ", " Room ", " Inventory "]);
+        assert_eq!(text, [" Map ", " Room ", " Inventory ", " Documents "]);
         assert_eq!(cells[1].col, 5);
     }
 
     #[test]
     fn narrower_bar_abbreviates_then_collapses_to_the_active_tab() {
-        let short = tab_bar_cells(14, JournalTab::Map);
+        let short = tab_bar_cells(20, JournalTab::Map);
         assert_eq!(short[2].text, " Inv ");
-        let narrow = tab_bar_cells(9, JournalTab::Room);
+        assert_eq!(short[3].text, " Docs ", "the extra tab abbreviates too");
+        let narrow = tab_bar_cells(19, JournalTab::Room);
         let kinds: Vec<TabBarHit> = narrow.iter().map(|c| c.hit).collect();
         assert_eq!(
             kinds,

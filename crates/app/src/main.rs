@@ -550,6 +550,7 @@ struct PaneRects {
     pub confirm_delete: Option<app::render::confirm_delete_dialog::ConfirmDeleteDialogRects>,
     /// Hit-rects for the confirm-overwrite dialog (when open).
     pub confirm_overwrite: Option<app::render::confirm_overwrite_dialog::ConfirmOverwriteDialogRects>,
+    pub confirm_spoiler: Option<app::render::confirm_spoiler_dialog::ConfirmSpoilerDialogRects>,
     /// Hit-rects for the quit dialog (when open).
     pub quit_dialog: Option<app::render::quit_dialog::QuitDialogRects>,
     /// Hit-rects for the launch dialog (when open).
@@ -1081,6 +1082,9 @@ fn draw_frame(
                                 &mut inv_hits,
                             );
                         }
+                        JournalTab::Documents => {
+                            app::documents_tab::draw(state, pane_layout.journal_body, buf);
+                        }
                     }
 
                     // Map pane is NEVER dimmed (always full brightness).
@@ -1290,7 +1294,7 @@ fn draw_frame(
 
     // The draw closure runs exactly once, so the overlay ladder always ran.
     let overlay_rects = overlay_rects.expect("draw_frame closure runs exactly once");
-    Ok(PaneRects { map: map_area, story: story_area, boundaries: pane_layout_out.boundary_zones(), pane_layout: pane_layout_out, room_rects: room_rects_out, map_marker_rects: map_marker_rects_out, map_view: map_control_view, room_tab: if state.room_tab_visible() && state.debug.is_none() { pane_layout_out.journal_body } else { Rect::default() }, journal_tabs: journal_tabs_out, room_dock_tabs: room_dock_tabs_out, room_dock_room: room_dock_room_out, room_dock_body_total: room_dock_body_total_out, room_dock_body_viewport: room_dock_body_viewport_out, room_menu_area: room_menu_area_out, room_menu_items: room_menu_items_out, layer_tabs: layer_tabs_out, border_controls: border_controls_out, debug_tabs: debug_tabs_out, dialog: overlay_rects.dialog, aux_dialog: overlay_rects.aux_dialog, history_prompt: overlay_rects.history_prompt, font_check: overlay_rects.font_check, fetch_keep: overlay_rects.fetch_keep, reset_dialog: overlay_rects.reset_dialog, region_prompt: overlay_rects.region_prompt, game_over: overlay_rects.game_over, save_name_dialog: overlay_rects.save_name_dialog, text_entry: overlay_rects.text_entry, confirm_delete: overlay_rects.confirm_delete, confirm_overwrite: overlay_rects.confirm_overwrite, quit_dialog: overlay_rects.quit_dialog, launch_dialog: overlay_rects.launch_dialog, hints_panel: overlay_rects.hints_panel, command_band: band_hits, inventory_dock: inv_hits, palette: palette_hits, transcript_links: transcript_links_out, win_rects: win_rects_out, transcript_max_scroll, transcript_viewport_rows, transcript_prompt_rows, transcript_total_rows, transcript_surface, transcript_top_anchored_fits, modal_list_viewport })
+    Ok(PaneRects { map: map_area, story: story_area, boundaries: pane_layout_out.boundary_zones(), pane_layout: pane_layout_out, room_rects: room_rects_out, map_marker_rects: map_marker_rects_out, map_view: map_control_view, room_tab: if state.room_tab_visible() && state.debug.is_none() { pane_layout_out.journal_body } else { Rect::default() }, journal_tabs: journal_tabs_out, room_dock_tabs: room_dock_tabs_out, room_dock_room: room_dock_room_out, room_dock_body_total: room_dock_body_total_out, room_dock_body_viewport: room_dock_body_viewport_out, room_menu_area: room_menu_area_out, room_menu_items: room_menu_items_out, layer_tabs: layer_tabs_out, border_controls: border_controls_out, debug_tabs: debug_tabs_out, dialog: overlay_rects.dialog, aux_dialog: overlay_rects.aux_dialog, history_prompt: overlay_rects.history_prompt, font_check: overlay_rects.font_check, fetch_keep: overlay_rects.fetch_keep, reset_dialog: overlay_rects.reset_dialog, region_prompt: overlay_rects.region_prompt, game_over: overlay_rects.game_over, save_name_dialog: overlay_rects.save_name_dialog, text_entry: overlay_rects.text_entry, confirm_delete: overlay_rects.confirm_delete, confirm_overwrite: overlay_rects.confirm_overwrite, confirm_spoiler: overlay_rects.confirm_spoiler, quit_dialog: overlay_rects.quit_dialog, launch_dialog: overlay_rects.launch_dialog, hints_panel: overlay_rects.hints_panel, command_band: band_hits, inventory_dock: inv_hits, palette: palette_hits, transcript_links: transcript_links_out, win_rects: win_rects_out, transcript_max_scroll, transcript_viewport_rows, transcript_prompt_rows, transcript_total_rows, transcript_surface, transcript_top_anchored_fits, modal_list_viewport })
 }
 
 // ── Command-band mouse routing ───────────────────────────────────────────────
@@ -2087,6 +2091,7 @@ fn run_event_loop(boot: startup::BootResult, launched_from_library: bool) -> Run
         // redraw contribution, OR-ed into `needs_redraw` here (order preserved).
         needs_redraw |= loop_tick::poll_style_watch(&mut state, &style_watcher, &mut watch_dirty);
         needs_redraw |= loop_tick::poll_documents(&mut state);
+        needs_redraw |= app::documents_tab::refresh_if_needed(&mut state, &story_path);
         loop_tick::sync_theme_colours(&state, &mut *session);
         needs_redraw |= loop_tick::poll_glulx_resize(
             &mut *session,
@@ -2760,6 +2765,9 @@ fn run_event_loop(boot: startup::BootResult, launched_from_library: bool) -> Run
                         }
                         // Return the saves manager (still open behind us) to default focus.
                         state.overlays.dialog_focus = 0;
+                    }
+                    OverlayAct::ConfirmSpoiler(open) => {
+                        app::documents_tab::answer_spoiler(&mut state, open);
                     }
                     OverlayAct::ConfirmOverwrite(confirmed) => {
                         // SQ-0648: resume whichever entry point asked for confirmation.
@@ -3636,6 +3644,31 @@ fn run_event_loop(boot: startup::BootResult, launched_from_library: bool) -> Run
                             continue 'event_loop;
                         }
                     }
+                }
+                // Documents tab (SQ-1681): owns every mouse event inside its body — a
+                // row click selects (a second opens), the wheel scrolls the list or
+                // pager, and the header buttons run their registry commands.
+                if let Some(dm) = app::documents_tab::mouse_action(&state, &m) {
+                    match dm {
+                        app::documents_tab::DocMouse::Action(action) => {
+                            apply_action(action, &mut state, &mut mapper);
+                        }
+                        app::documents_tab::DocMouse::Command(cmd) => {
+                            let outcome = slash::parse_in_context(
+                                cmd, state.config.command_prefix, Context::Global,
+                            );
+                            let should_break = dispatch_slash_outcome(
+                                outcome, &mut state, &mut mapper, &mut *session, &mut style_watcher,
+                                &game_dir, &ifid, &arc_file, &quick_save_file, &story_bytes, &story_path,
+                                last_panes.map, last_panes.story, true,
+                            );
+                            lifecycle::flush_pending_config_write(&mut state);
+                            if should_break {
+                                break 'event_loop state.exit_target.into();
+                            }
+                        }
+                    }
+                    continue 'event_loop;
                 }
                 // Room tab (SQ-0692): the tab owns every mouse event inside its
                 // rect. A left-click on one of its two view tabs switches the body;

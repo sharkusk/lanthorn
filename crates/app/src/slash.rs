@@ -150,6 +150,11 @@ pub enum SlashOutcome {
     /// it to [`crate::browser::BrowserAction::DownloadDocuments`]) the selected
     /// story. The one outcome that both worlds apply, see [`in_both_worlds`].
     DownloadDocuments,
+    /// Create the documents folder (SQ-1679) for the game the caller has in hand:
+    /// the running game, or in the browser (which maps it to
+    /// [`crate::browser::BrowserAction::CreateDocumentsFolder`]) the selected
+    /// story. The second outcome both worlds apply, see [`in_both_worlds`].
+    CreateDocumentsFolder,
     /// Act on the pre-game story browser. The browser has no `AppState`, so it
     /// cannot take an [`Action`]; its verbs are their own type and are applied
     /// by the picker loop. See [`crate::browser`] (SQ-0796).
@@ -493,12 +498,12 @@ pub static COMMANDS: &[CommandSpec] = &[
         usage: "toggle-focus", description: "switch focus between panes",
         dispatch: |_| SlashOutcome::Action(crate::input::Action::ToggleFocus) },
     CommandSpec { name: "journal-tab", category: Category::View, context: Context::Global,
-        usage: "journal-tab <map|room|inventory>", description: "show a tab of the Journal (the right-hand panel), revealing it if hidden; remembered per story",
+        usage: "journal-tab <map|room|inventory|documents>", description: "show a tab of the Journal (the right-hand panel), revealing it if hidden; remembered per story",
         dispatch: |a| match a.first().copied() {
-            None => err("journal-tab: a tab name is required (map | room | inventory)".to_string()),
+            None => err("journal-tab: a tab name is required (map | room | inventory | documents)".to_string()),
             Some(name) => match crate::journal::JournalTab::from_name(name) {
                 Some(tab) => SlashOutcome::Action(crate::input::Action::SetJournalTab(tab)),
-                None => err(format!("journal-tab: '{name}' is not a tab (map | room | inventory)")),
+                None => err(format!("journal-tab: '{name}' is not a tab (map | room | inventory | documents)")),
             },
         } },
     CommandSpec { name: "journal-next-tab", category: Category::View, context: Context::Global,
@@ -512,6 +517,29 @@ pub static COMMANDS: &[CommandSpec] = &[
         dispatch: |a| SlashOutcome::Action(crate::input::Action::SetInventoryFilter(
             if a.is_empty() { None } else { Some(a.join(" ")) }
         )) },
+    CommandSpec { name: "open-document", category: Category::View, context: Context::Global,
+        usage: "open-document", description: "open the selected document in the Journal's Documents tab: text in a pager, images in place, PDFs in the system viewer",
+        dispatch: |_| SlashOutcome::Action(crate::input::Action::DocTabOpen(None)) },
+    CommandSpec { name: "close-document", category: Category::View, context: Context::Global,
+        usage: "close-document", description: "close the open document and return to the Documents tab's list",
+        dispatch: |_| SlashOutcome::Action(crate::input::Action::DocTabClose) },
+    CommandSpec { name: "select-document", category: Category::View, context: Context::Global,
+        usage: "select-document <n>", description: "move the Documents tab's selection by signed n rows",
+        dispatch: |a| match a.first().and_then(|s| s.parse::<i32>().ok()) {
+            Some(n) => SlashOutcome::Action(crate::input::Action::DocTabSelect(n)),
+            None => err("select-document requires a signed integer (e.g. select-document 1)"),
+        } },
+    CommandSpec { name: "scroll-document", category: Category::View, context: Context::Global,
+        usage: "scroll-document <n>|page-up|page-down", description: "scroll the open document (or the Documents list) by signed n lines or a page",
+        dispatch: |a| match a.first().copied() {
+            Some("page-up") => SlashOutcome::Action(crate::input::Action::DocTabPage(-1)),
+            Some("page-down") => SlashOutcome::Action(crate::input::Action::DocTabPage(1)),
+            Some(s) => match s.parse::<i32>() {
+                Ok(n) => SlashOutcome::Action(crate::input::Action::DocTabScroll(n)),
+                Err(_) => err(format!("scroll-document: expected a signed integer, page-up or page-down, got '{s}'")),
+            },
+            None => err("scroll-document requires a number of lines, page-up or page-down"),
+        } },
     CommandSpec { name: "toggle-status-bar", category: Category::View, context: Context::Global,
         usage: "toggle-status-bar", description: "toggle the status/score bar",
         dispatch: |_| SlashOutcome::Action(crate::input::Action::ToggleStatusBar) },
@@ -748,9 +776,9 @@ pub static COMMANDS: &[CommandSpec] = &[
     CommandSpec { name: "set-ifdb-url", category: Category::Library, context: Context::Browser,
         usage: "set-ifdb-url", description: "point the selected story at an IFDB page by hand",
         dispatch: |_| SlashOutcome::Browser(crate::browser::BrowserAction::SetIfdbUrl) },
-    CommandSpec { name: "create-documents-folder", category: Category::Library, context: Context::Browser,
-        usage: "create-documents-folder", description: "create the selected story's documents folder (manuals, maps) beside its IFDB id",
-        dispatch: |_| SlashOutcome::Browser(crate::browser::BrowserAction::CreateDocumentsFolder) },
+    CommandSpec { name: "create-documents-folder", category: Category::Library, context: Context::Global,
+        usage: "create-documents-folder", description: "create this story's documents folder (manuals, maps) beside its IFDB id",
+        dispatch: |_| SlashOutcome::CreateDocumentsFolder },
     CommandSpec { name: "open-url", category: Category::Library, context: Context::Browser,
         usage: "open-url", description: "download a story from a URL into this library and open it",
         dispatch: |_| SlashOutcome::Browser(crate::browser::BrowserAction::OpenUrl) },
@@ -788,7 +816,7 @@ pub fn find_command(name: &str) -> Option<&'static CommandSpec> {
 /// (SQ-1680). Everything else is one or the other (SQ-0796), and the gates below
 /// keep it so; these have a counterpart on each side because the thing they act
 /// on — "this game's IFDB record" — exists on each.
-const BOTH_WORLDS: &[&str] = &["download-documents"];
+const BOTH_WORLDS: &[&str] = &["download-documents", "create-documents-folder"];
 
 /// Is `spec` available in the story browser and in the game alike?
 pub fn in_both_worlds(spec: &CommandSpec) -> bool {
@@ -1215,7 +1243,10 @@ mod tests {
         // SQ-1680 added `download-documents`: the one command that lives in both the
         // game and the story browser (`in_both_worlds`) — the chooser over a game's
         // IFDB document links.
-        assert_eq!(COMMANDS.len(), 96, "registry must match the spec's Full command table");
+        // SQ-1681 added `open-document`, `close-document`, `select-document` and
+        // `scroll-document` for the Journal's Documents tab, and made
+        // `create-documents-folder` a second command both worlds share.
+        assert_eq!(COMMANDS.len(), 100, "registry must match the spec's Full command table");
     }
 
     /// SQ-1237 unified the panel vocabulary — `command band` became `command

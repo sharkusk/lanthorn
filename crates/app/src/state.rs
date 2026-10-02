@@ -2556,6 +2556,10 @@ pub struct OverlayState {
     /// The "Download documents from IFDB" chooser and its worker (SQ-1680). A
     /// modal: it owns every key and click while open.
     pub documents: Option<crate::documents_chooser::DocumentsSession>,
+    /// The Documents tab is asking whether to open a spoiler-flagged file
+    /// (SQ-1681): the entry's file name. A two-button confirm on the common dialog
+    /// chrome; Cancel is the default.
+    pub confirm_spoiler_document: Option<String>,
 }
 
 /// Where the last v6 frame put one thing on the terminal, for `/dump-windows`
@@ -3547,6 +3551,8 @@ pub struct AppState {
     /// Which tab the Journal shows (SQ-1684). The Journal itself is on screen
     /// whenever `layout` is `Split`; this is which of its tabs is up.
     pub journal_tab: crate::journal::JournalTab,
+    /// The Journal's Documents tab: the game's documents folder and its viewer (SQ-1681).
+    pub documents_tab: crate::documents_tab::DocumentsTab,
     /// Locked player object number once detected by the heuristic. None until
     /// the player moves between two rooms and exactly one object follows.
     pub player_obj: Option<u16>,
@@ -4003,6 +4009,7 @@ impl Default for AppState {
             game_dir: std::path::PathBuf::new(),
             data_roots: None,
             journal_tab: crate::journal::JournalTab::default(),
+            documents_tab: crate::documents_tab::DocumentsTab::default(),
             player_obj: None,
             inventory_fallback: Vec::new(),
             inventory_click_words: Vec::new(),
@@ -4118,10 +4125,24 @@ impl AppState {
         self.journal_tab == crate::journal::JournalTab::Inventory && self.layout == Layout::Split
     }
 
+    /// True while the Journal's Documents tab is on screen (SQ-1681).
+    pub fn documents_tab_visible(&self) -> bool {
+        self.journal_tab == crate::journal::JournalTab::Documents && self.layout == Layout::Split
+    }
+
     /// Show `tab` in the Journal, revealing the Journal first if the layout had
     /// hidden it (SQ-1684). Selecting a tab the Journal is already on is a no-op
     /// apart from that reveal.
     pub fn set_journal_tab(&mut self, tab: crate::journal::JournalTab) {
+        use crate::journal::JournalTab;
+        if self.journal_tab == JournalTab::Documents && tab != JournalTab::Documents {
+            // The image view's upload is freed while its tab is away; the
+            // re-draw re-places it when the tab is back.
+            crate::documents_tab::release_image(self);
+        }
+        if tab == JournalTab::Documents && self.journal_tab != JournalTab::Documents {
+            self.documents_tab.mark_dirty(); // read the folder when the tab is shown
+        }
         self.journal_tab = tab;
         if self.layout == Layout::TranscriptFull {
             self.layout = Layout::Split;
@@ -4644,6 +4665,7 @@ impl AppState {
             || self.overlays.region_prompt.is_some()
             || self.overlays.room_menu.is_some()
             || self.overlays.documents.is_some()
+            || self.overlays.confirm_spoiler_document.is_some()
             || self.resize_mode
     }
 
@@ -4796,6 +4818,7 @@ impl AppState {
         if self.overlays.text_entry.is_some() { v.push("text_entry"); }
         if self.overlays.confirm_delete_save.is_some() { v.push("confirm_delete_save"); }
         if self.overlays.confirm_overwrite_save.is_some() { v.push("confirm_overwrite_save"); }
+        if self.overlays.confirm_spoiler_document.is_some() { v.push("confirm_spoiler_document"); }
         if self.overlays.fetch_keep.is_some() { v.push("fetch_keep"); }
         if self.overlays.reset_dialog { v.push("reset_dialog"); }
         if self.overlays.game_over { v.push("game_over"); }

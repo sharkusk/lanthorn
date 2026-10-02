@@ -47,7 +47,7 @@ fn the_bar_draws_in_the_journals_first_row_with_the_active_tab_accented() {
             for t in JournalTab::ALL {
                 assert!(row.contains(t.label()), "honor={honor}: {} is named: {row:?}", t.label());
             }
-            assert_eq!(hits.len(), 3, "one hit rect per label");
+            assert_eq!(hits.len(), JournalTab::ALL.len(), "one hit rect per label");
 
             let on = st.colors.theme.get("journal.tab:active").style;
             let off = st.colors.theme.get("journal.tab").style;
@@ -93,11 +93,12 @@ fn narrow_bars_abbreviate_then_show_only_the_active_tab_with_step_markers() {
     let colors = st.colors.clone();
 
     // Wide enough for abbreviations only.
-    let r = Rect::new(0, 0, 14, 1);
+    let r = Rect::new(0, 0, 20, 1);
     let mut buf = Buffer::empty(r);
     draw_tab_bar(r, JournalTab::Map, &colors, &mut buf);
     let row = text_in(&buf, r);
     assert!(row.contains("Inv") && !row.contains("Inventory"), "{row:?}");
+    assert!(row.contains("Docs") && !row.contains("Documents"), "the Documents tab abbreviates: {row:?}");
 
     // Too narrow for any strip: the active tab between markers, and the markers step.
     let r = Rect::new(0, 0, 9, 1);
@@ -117,7 +118,7 @@ fn narrow_bars_abbreviate_then_show_only_the_active_tab_with_step_markers() {
 #[test]
 fn alt_digits_switch_tabs_through_the_real_key_path_in_game_focus() {
     let mut st = AppState::default();
-    for (c, tab) in [('2', JournalTab::Room), ('3', JournalTab::Inventory), ('1', JournalTab::Map)] {
+    for (c, tab) in [('2', JournalTab::Room), ('3', JournalTab::Inventory), ('5', JournalTab::Documents), ('1', JournalTab::Map)] {
         let a = key_to_action(&st, key_alt(c));
         assert_eq!(a, Action::SetJournalTab(tab), "Alt+{c}");
         app::input::apply_action(a, &mut st, &mut mapper::mapper::Mapper::default());
