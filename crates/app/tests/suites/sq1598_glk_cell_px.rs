@@ -169,7 +169,7 @@ fn boot_via_terminal_facts(story: PathBuf, home: &Path, glk_cell_px: Option<(f64
         disk_entry: None,
         overrides: &overrides,
         cfg: headless_config(home),
-        data_base: home.join("saves"),
+        roots: app::data_roots::DataRoots::single(home.join("saves")),
         flags: LaunchFlags::default(),
         terminal: TerminalFacts { glk_cell_px, ..TerminalFacts::default() },
         fresh_start: false,

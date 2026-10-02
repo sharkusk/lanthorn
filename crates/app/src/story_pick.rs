@@ -92,12 +92,12 @@ fn subject_of(source: Option<&StorySource>) -> &'static str {
 pub fn pick(
     source: Option<&StorySource>,
     single_file: &Path,
-    data_base: &Path,
+    roots: &crate::data_roots::DataRoots,
     want: &str,
 ) -> Result<(PathBuf, Option<String>), String> {
     let entries = match source {
-        Some(source) => source.scan(data_base),
-        None => crate::picker::resolve_entries(single_file, data_base),
+        Some(source) => source.scan(roots),
+        None => crate::picker::resolve_entries(single_file, roots),
     };
     if entries.is_empty() {
         return Err(format!("no story to open on {}", single_file.display()));
@@ -124,9 +124,9 @@ pub fn pick(
 pub fn entry_on(path: &Path, want: &str) -> Result<Option<String>, String> {
     // Metadata cache only: the scan reads fetched sidecars from here and is
     // content with a directory that does not exist. Nothing is written.
-    let data_base = std::env::temp_dir().join("lanthorn-instrument-scan");
-    let source = StorySource::of(path, &data_base);
-    Ok(pick(source.as_ref(), path, &data_base, want)?.1)
+    let roots = crate::data_roots::DataRoots::single(std::env::temp_dir().join("lanthorn-instrument-scan"));
+    let source = StorySource::of(path, &roots);
+    Ok(pick(source.as_ref(), path, &roots, want)?.1)
 }
 
 /// The shared rule, over browser rows: a 1-based number, or a case-insensitive

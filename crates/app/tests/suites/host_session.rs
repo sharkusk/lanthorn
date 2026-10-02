@@ -37,7 +37,7 @@ fn boot(story: PathBuf, home: &Path) -> BootedStory {
         disk_entry: None,
         overrides: &overrides,
         cfg: headless_config(home),
-        data_base: home.join("saves"),
+        roots: app::data_roots::DataRoots::single(home.join("saves")),
         flags: LaunchFlags::default(),
         terminal: TerminalFacts::default(),
         fresh_start: false,

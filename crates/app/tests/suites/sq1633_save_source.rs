@@ -57,7 +57,7 @@ fn boot(story: PathBuf, cfg: Config, data_base: &Path) -> BootedStory {
         disk_entry: None,
         overrides: &overrides,
         cfg,
-        data_base: data_base.to_path_buf(),
+        roots: app::data_roots::DataRoots::single(data_base.to_path_buf()),
         flags: LaunchFlags::default(),
         terminal: TerminalFacts::default(),
         fresh_start: false,

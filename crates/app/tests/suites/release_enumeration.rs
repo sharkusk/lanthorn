@@ -105,9 +105,9 @@ fn builds_the_cli_offers(path: &Path) -> BTreeSet<(u16, String)> {
 /// What **lanthorn** would offer for `path`: the browser's rows, identified the
 /// same way.
 fn builds_the_browser_offers(path: &Path, base: &Path) -> BTreeSet<(u16, String)> {
-    let Some(source) = app::picker::StorySource::of(path, base) else { return BTreeSet::new() };
+    let Some(source) = app::picker::StorySource::of(path, &app::data_roots::DataRoots::single(base)) else { return BTreeSet::new() };
     source
-        .scan(base)
+        .scan(&app::data_roots::DataRoots::single(base))
         .iter()
         .filter_map(|e| Some((e.meta.release?, e.meta.serial.clone()?)))
         .collect()

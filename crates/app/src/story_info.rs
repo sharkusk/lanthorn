@@ -79,7 +79,9 @@ pub fn load(game_dir: &Path, expect_ifid: &str) -> Option<StoryInfo> {
 pub fn save(game_dir: &Path, info: &StoryInfo) -> std::io::Result<()> {
     std::fs::create_dir_all(game_dir)?;
     let json = serde_json::to_string_pretty(info)?;
-    std::fs::write(info_path(game_dir), json)
+    // Atomic (SQ-1676): the catalogue is shared, so two players may refresh the
+    // same story at once; a reader must see the old file or the new one.
+    crate::storage::atomic_write(&info_path(game_dir), json.as_bytes())
 }
 
 /// The `r`/`f` skip decision. `forced` (`f`) ignores the cache entirely.

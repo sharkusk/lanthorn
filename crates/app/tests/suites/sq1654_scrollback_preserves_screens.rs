@@ -50,7 +50,7 @@ fn boot_headless(story: std::path::PathBuf, home: &std::path::Path) -> app::host
             enable_sound: false,
             ..app::config::Config::default()
         },
-        data_base: home.join("saves"),
+        roots: app::data_roots::DataRoots::single(home.join("saves")),
         flags: LaunchFlags::default(),
         terminal: TerminalFacts::default(),
         fresh_start: true,

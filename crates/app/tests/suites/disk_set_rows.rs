@@ -150,7 +150,7 @@ fn a_single_title_floppy_is_not_a_set() {
             "{name}: a lone release floppy was read as a volume of a set",
         );
         assert!(
-            app::picker::StorySource::of(&path, Path::new("/nonexistent")).is_none(),
+            app::picker::StorySource::of(&path, &app::data_roots::DataRoots::single(Path::new("/nonexistent"))).is_none(),
             "{name}: naming it would open a browser instead of the game",
         );
     }
@@ -249,10 +249,10 @@ fn naming_a_volume_offers_the_whole_release() {
         }
         let base = data_base("offer");
         ran += 1;
-        let source = app::picker::StorySource::of(&path, &base).unwrap_or_else(|| {
+        let source = app::picker::StorySource::of(&path, &app::data_roots::DataRoots::single(&base)).unwrap_or_else(|| {
             panic!("{}: naming a volume offered no set at all — the release was never assembled", set.member)
         });
-        let rows = source.scan(&base);
+        let rows = source.scan(&app::data_roots::DataRoots::single(&base));
         assert_eq!(
             rows.len(),
             set.games,
@@ -288,12 +288,12 @@ fn the_apple_ii_launcher_disk_opens_the_collection() {
     }
     // It really does carry no story — the premise, checked rather than assumed.
     assert!(
-        app::picker::resolve_entries(&path, &data_base("premise")).is_empty(),
+        app::picker::resolve_entries(&path, &app::data_roots::DataRoots::single(data_base("premise"))).is_empty(),
         "the premise moved: disk 1 now carries a story of its own",
     );
     let base = data_base("launcher");
-    let source = app::picker::StorySource::of(&path, &base).expect("disk 1 opens the collection");
-    let rows = source.scan(&base);
+    let source = app::picker::StorySource::of(&path, &app::data_roots::DataRoots::single(&base)).expect("disk 1 opens the collection");
+    let rows = source.scan(&app::data_roots::DataRoots::single(&base));
     assert_eq!(rows.len(), 30, "the Lost Treasures shelf is 30 games");
     let _ = std::fs::remove_dir_all(&base);
 }
@@ -312,7 +312,7 @@ fn a_set_offering_one_game_still_opens_that_game() {
     let base = data_base("onegame");
     assert!(app::disk_set::members(&path).is_some(), "the set is still recognised");
     assert!(
-        app::picker::StorySource::of(&path, &base).is_none(),
+        app::picker::StorySource::of(&path, &app::data_roots::DataRoots::single(&base)).is_none(),
         "a one-game set must not put a browser in front of the game",
     );
     let _ = std::fs::remove_dir_all(&base);
@@ -424,9 +424,9 @@ fn a_build_carried_by_two_volumes_is_one_row() {
         let base = data_base("dedupe");
         ran += 1;
         let members = app::disk_set::members(&path).expect("a set");
-        let rows = app::picker::StorySource::of(&path, &base)
+        let rows = app::picker::StorySource::of(&path, &app::data_roots::DataRoots::single(&base))
             .expect("a set worth offering")
-            .scan(&base);
+            .scan(&app::data_roots::DataRoots::single(&base));
 
         // What the mounts hold, before anything folds: the `raw` column.
         let on_disk = ifids_on(&members);
@@ -493,7 +493,7 @@ fn trinity_is_offered_once_by_the_atari_st_shelf() {
 
     let base = data_base("trinity");
     let rows =
-        app::picker::StorySource::of(&c5, &base).expect("the ST shelf is a set").scan(&base);
+        app::picker::StorySource::of(&c5, &app::data_roots::DataRoots::single(&base)).expect("the ST shelf is a set").scan(&app::data_roots::DataRoots::single(&base));
     let offered: Vec<&app::picker::StoryEntry> =
         rows.iter().filter(|r| r.meta.ifid == TRINITY).collect();
     assert_eq!(offered.len(), 1, "Trinity r11/860509 is offered {} times", offered.len());
@@ -516,7 +516,7 @@ fn different_builds_of_one_game_are_never_folded_together() {
         return;
     }
     let base = data_base("zork0");
-    let rows = app::picker::scan_stories(&dir, &base);
+    let rows = app::picker::scan_stories(&dir, &app::data_roots::DataRoots::single(&base));
     let zz: BTreeSet<&str> = rows
         .iter()
         .filter(|r| r.title.contains("Zork Zero"))
@@ -579,10 +579,10 @@ fn a_releases_games_keep_their_own_saves() {
         let base = data_base("saves");
         ran += 1;
         let members = app::disk_set::members(&path).expect("a set");
-        let rows = app::picker::StorySource::of(&path, &base).expect("a set").scan(&base);
+        let rows = app::picker::StorySource::of(&path, &app::data_roots::DataRoots::single(&base)).expect("a set").scan(&app::data_roots::DataRoots::single(&base));
         let mut dirs: BTreeSet<PathBuf> = BTreeSet::new();
         for r in &rows {
-            let dir = r.game_dir(&base);
+            let dir = r.game_dir(&app::data_roots::DataRoots::single(&base));
             assert!(dirs.insert(dir.clone()), "{}: two games share {}", set.member, dir.display());
             // The launch arrives at the same key from (path, selector) alone.
             assert_eq!(
@@ -627,8 +627,8 @@ fn a_single_image_is_exactly_what_it_was() {
             continue;
         }
         let base = data_base("single");
-        let rows = app::picker::resolve_entries(&path, &base);
-        let Some(old) = app::picker::resolve_entry(&path, &base) else {
+        let rows = app::picker::resolve_entries(&path, &app::data_roots::DataRoots::single(&base));
+        let Some(old) = app::picker::resolve_entry(&path, &app::data_roots::DataRoots::single(&base)) else {
             let _ = std::fs::remove_dir_all(&base);
             continue; // mountable but carrying nothing launchable
         };
@@ -639,7 +639,7 @@ fn a_single_image_is_exactly_what_it_was() {
         assert_eq!(rows[0].story_key(), app::storage::story_key_at(&path), "{name}: key moved");
 
         // …and it survives the whole-directory scan as exactly one row.
-        let listed = app::picker::scan_stories(&stories_dir(), &base);
+        let listed = app::picker::scan_stories(&stories_dir(), &app::data_roots::DataRoots::single(&base));
         assert_eq!(
             listed.iter().filter(|e| e.path == path).count(),
             1,
@@ -659,7 +659,7 @@ fn loose_story_files_are_untouched() {
         return;
     }
     let base = data_base("loose");
-    let listed = app::picker::scan_stories(&dir, &base);
+    let listed = app::picker::scan_stories(&dir, &app::data_roots::DataRoots::single(&base));
     let mut ran = 0;
     for name in ["zork1.z5", "trinity-r12-s860926.z4", "stationfall-r107-s870430.z3"] {
         let path = dir.join(name);
@@ -765,7 +765,7 @@ fn the_scan_loses_no_game_anywhere() {
         return;
     }
     let base = data_base("whole");
-    let listed = app::picker::scan_stories(&dir, &base);
+    let listed = app::picker::scan_stories(&dir, &app::data_roots::DataRoots::single(&base));
     let offered: BTreeSet<&str> = listed.iter().map(|e| e.meta.ifid.as_str()).collect();
     let Ok(rd) = std::fs::read_dir(&dir) else { return };
     let images: Vec<PathBuf> = rd.flatten().map(|e| e.path()).filter(|p| p.is_file()).collect();

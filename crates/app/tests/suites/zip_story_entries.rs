@@ -97,10 +97,10 @@ fn two_stories_in_one_zip_get_two_save_directories() {
     let data = scratch("sq1098-key-data");
     let zip = two_game_zip(&dir);
 
-    let rows = app::picker::resolve_entries(&zip, &data);
+    let rows = app::picker::resolve_entries(&zip, &app::data_roots::DataRoots::single(&data));
     assert_eq!(rows.len(), 2, "one row per game in the archive: {rows:?}");
 
-    let dirs: Vec<PathBuf> = rows.iter().map(|r| r.game_dir(&data)).collect();
+    let dirs: Vec<PathBuf> = rows.iter().map(|r| r.game_dir(&app::data_roots::DataRoots::single(&data))).collect();
     assert_ne!(dirs[0], dirs[1], "one zip, one save directory, was the defect");
 
     // …and neither of them is the ARCHIVE's directory, which is what they shared.
@@ -139,7 +139,7 @@ fn the_launch_and_the_list_key_a_zipped_story_alike() {
     let data = scratch("sq1098-doors-data");
     let zip = two_game_zip(&dir);
 
-    for row in app::picker::resolve_entries(&zip, &data) {
+    for row in app::picker::resolve_entries(&zip, &app::data_roots::DataRoots::single(&data)) {
         let entry = row.meta.disk_entry.as_deref();
         assert!(entry.is_some(), "a row off a two-game archive names its entry");
         assert_eq!(
@@ -168,15 +168,15 @@ fn a_loose_storys_key_is_unchanged_and_a_lone_zip_keys_on_itself() {
 
     let loose = dir.join("amber.z5");
     std::fs::write(&loose, amber()).unwrap();
-    let rows = app::picker::resolve_entries(&loose, &data);
+    let rows = app::picker::resolve_entries(&loose, &app::data_roots::DataRoots::single(&data));
     assert_eq!(rows.len(), 1);
     assert_eq!(rows[0].meta.disk_entry, None, "a loose file has no entry to name");
     assert_eq!(rows[0].story_key(), "amber.z5");
-    assert_eq!(rows[0].game_dir(&data), data.join("amber.z5.save"));
+    assert_eq!(rows[0].game_dir(&app::data_roots::DataRoots::single(&data)), data.join("amber.z5.save"));
 
     let lone = dir.join("solo.zip");
     write_zip(&lone, &[("amber.z5", amber())]);
-    let rows = app::picker::resolve_entries(&lone, &data);
+    let rows = app::picker::resolve_entries(&lone, &app::data_roots::DataRoots::single(&data));
     assert_eq!(rows.len(), 1, "a one-game archive is one row, with no selector");
     assert_eq!(rows[0].meta.disk_entry, None);
     assert_eq!(rows[0].story_key(), "solo.zip");
@@ -200,7 +200,7 @@ fn both_stories_in_a_zip_are_listed_as_their_own_rows() {
     let data = scratch("sq1098-list-data");
     let zip = two_game_zip(&dir);
 
-    let rows = app::picker::resolve_entries(&zip, &data);
+    let rows = app::picker::resolve_entries(&zip, &app::data_roots::DataRoots::single(&data));
     assert_eq!(rows.len(), 2, "{rows:?}");
     let mut entries: Vec<&str> =
         rows.iter().filter_map(|r| r.meta.disk_entry.as_deref()).collect();
@@ -216,7 +216,7 @@ fn both_stories_in_a_zip_are_listed_as_their_own_rows() {
     assert_eq!(releases, vec![41, 77], "two builds, not one read twice");
 
     // And a library scan lists them too — the browser's own door.
-    let rows = app::picker::scan_stories(&dir, &data);
+    let rows = app::picker::scan_stories(&dir, &app::data_roots::DataRoots::single(&data));
     assert_eq!(rows.len(), 2, "a zip in a library contributes a row per game");
 
     for d in [dir, data] {
@@ -235,14 +235,14 @@ fn a_two_game_zip_is_a_source_and_a_one_game_zip_is_not() {
     let data = scratch("sq1098-source-data");
 
     let zip = two_game_zip(&dir);
-    let source = app::picker::StorySource::of(&zip, &data)
+    let source = app::picker::StorySource::of(&zip, &app::data_roots::DataRoots::single(&data))
         .expect("an archive holding several games offers a choice");
-    assert_eq!(source.scan(&data).len(), 2);
+    assert_eq!(source.scan(&app::data_roots::DataRoots::single(&data)).len(), 2);
 
     let lone = dir.join("solo.zip");
     write_zip(&lone, &[("amber.z5", amber())]);
     assert!(
-        app::picker::StorySource::of(&lone, &data).is_none(),
+        app::picker::StorySource::of(&lone, &app::data_roots::DataRoots::single(&data)).is_none(),
         "a one-game archive is not a menu",
     );
 
@@ -262,9 +262,9 @@ fn story_by_entry_name_opens_the_second_game_in_the_zip() {
     let dir = scratch("sq1098-pick");
     let data = scratch("sq1098-pick-data");
     let zip = two_game_zip(&dir);
-    let source = app::picker::StorySource::of(&zip, &data).expect("a source");
+    let source = app::picker::StorySource::of(&zip, &app::data_roots::DataRoots::single(&data)).expect("a source");
 
-    let (path, entry) = app::story_pick::pick(Some(&source), &zip, &data, "beacon")
+    let (path, entry) = app::story_pick::pick(Some(&source), &zip, &app::data_roots::DataRoots::single(&data), "beacon")
         .expect("the second game is reachable by name");
     assert_eq!(path, zip);
     assert_eq!(entry.as_deref(), Some("beacon.z5"));
@@ -278,7 +278,7 @@ fn story_by_entry_name_opens_the_second_game_in_the_zip() {
     assert_eq!(medium, None, "a zip is not a pressed medium and must not claim one");
 
     // …and a number picks from the same list.
-    let (_, first) = app::story_pick::pick(Some(&source), &zip, &data, "1").expect("in range");
+    let (_, first) = app::story_pick::pick(Some(&source), &zip, &app::data_roots::DataRoots::single(&data), "1").expect("in range");
     assert!(first.is_some(), "a numbered pick names its entry too");
 
     for d in [dir, data] {
@@ -293,9 +293,9 @@ fn a_name_that_matches_nothing_in_the_zip_refuses_and_calls_it_an_archive() {
     let dir = scratch("sq1098-miss");
     let data = scratch("sq1098-miss-data");
     let zip = two_game_zip(&dir);
-    let source = app::picker::StorySource::of(&zip, &data).expect("a source");
+    let source = app::picker::StorySource::of(&zip, &app::data_roots::DataRoots::single(&data)).expect("a source");
 
-    let err = app::story_pick::pick(Some(&source), &zip, &data, "trinity")
+    let err = app::story_pick::pick(Some(&source), &zip, &app::data_roots::DataRoots::single(&data), "trinity")
         .expect_err("a miss refuses rather than opening the first entry");
     assert!(err.starts_with("no story on this archive is named 'trinity':"), "{err}");
     assert!(err.contains("beacon"), "the menu rides along with the refusal: {err}");
@@ -348,12 +348,12 @@ fn a_game_packed_with_its_blorb_is_still_one_row() {
     let zip = dir.join("amber-with-art.zip");
     write_zip(&zip, &[("amber.z5", amber()), ("Amber.blb", resource_only_blorb())]);
 
-    let rows = app::picker::resolve_entries(&zip, &data);
+    let rows = app::picker::resolve_entries(&zip, &app::data_roots::DataRoots::single(&data));
     assert_eq!(rows.len(), 1, "the resources are not a second game: {rows:?}");
     assert_eq!(rows[0].meta.disk_entry, None, "one game means no selector");
     assert_eq!(rows[0].story_key(), "amber-with-art.zip");
     assert!(
-        app::picker::StorySource::of(&zip, &data).is_none(),
+        app::picker::StorySource::of(&zip, &app::data_roots::DataRoots::single(&data)).is_none(),
         "a game and its artwork is not a choice to make",
     );
 

@@ -305,22 +305,40 @@ pub struct GlulxSession {
 pub struct GameStore {
     dir: std::path::PathBuf,
     writable: bool,
+    /// Where the story's SHARED learned-address files (`room-global`,
+    /// `player-global`) live (SQ-1676). `None` keeps them beside the saves in
+    /// `dir`, which is the single-player layout; a launch with a named player
+    /// points this at the shared catalogue folder so every player benefits from
+    /// what any of them taught lanthorn about the build.
+    catalogue: Option<std::path::PathBuf>,
 }
 
 impl GameStore {
     /// A store the game may read and write — a launched session.
     pub fn writable(dir: std::path::PathBuf) -> GameStore {
-        GameStore { dir, writable: true }
+        GameStore { dir, writable: true, catalogue: None }
     }
 
     /// A store the game may READ and never write — a shadow.
     pub fn read_only(dir: std::path::PathBuf) -> GameStore {
-        GameStore { dir, writable: false }
+        GameStore { dir, writable: false, catalogue: None }
     }
 
     /// No store at all: the game's own fixed-name saves auto-fail.
     pub fn none() -> GameStore {
         GameStore::default()
+    }
+
+    /// Keep the shared learned-address files in `dir` rather than beside the saves.
+    pub fn with_catalogue(mut self, dir: std::path::PathBuf) -> GameStore {
+        self.catalogue = Some(dir);
+        self
+    }
+
+    /// Where the shared learned-address files live: the catalogue folder when
+    /// one was named, else the store's own directory.
+    fn shared_dir(&self) -> &std::path::Path {
+        self.catalogue.as_deref().unwrap_or(&self.dir)
     }
 
     /// The directory, or an empty path when there is no store.
@@ -661,7 +679,7 @@ impl GlulxSession {
     }
 
     #[allow(clippy::too_many_arguments)]
-    fn new_with_store(
+    pub fn new_with_store(
         store: GameStore,
         image: Vec<u8>,
         cols: u32,
@@ -2355,7 +2373,7 @@ impl GlulxSession {
 
     /// Where the learned `location` address is remembered for this story.
     fn room_global_path(&self) -> Option<std::path::PathBuf> {
-        (!self.store.absent()).then(|| self.store.dir().join("room-global"))
+        (!self.store.absent()).then(|| self.store.shared_dir().join("room-global"))
     }
 
     /// An identity for the RUNNING image, cheap enough to stamp on every write
@@ -2425,7 +2443,7 @@ impl GlulxSession {
                 let _ = std::fs::create_dir_all(dir);
             }
             let (checksum, extstart) = self.image_identity();
-            let _ = std::fs::write(p, format!("{addr} {checksum:x}:{extstart:x}"));
+            let _ = crate::storage::atomic_write(&p, format!("{addr} {checksum:x}:{extstart:x}").as_bytes());
         }
     }
 
@@ -2454,7 +2472,7 @@ impl GlulxSession {
 
     /// Where the learned `player` address is remembered for this story.
     fn player_global_path(&self) -> Option<std::path::PathBuf> {
-        (!self.store.absent()).then(|| self.store.dir().join("player-global"))
+        (!self.store.absent()).then(|| self.store.shared_dir().join("player-global"))
     }
 
     /// The address learned in an earlier run of THIS BUILD of this story, if
@@ -2482,7 +2500,7 @@ impl GlulxSession {
                 let _ = std::fs::create_dir_all(dir);
             }
             let (checksum, extstart) = self.image_identity();
-            let _ = std::fs::write(p, format!("{addr} {checksum:x}:{extstart:x}"));
+            let _ = crate::storage::atomic_write(&p, format!("{addr} {checksum:x}:{extstart:x}").as_bytes());
         }
     }
 

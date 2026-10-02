@@ -54,6 +54,14 @@ pub fn reload_style(state: &mut AppState) -> ReloadOutcome {
         }
     };
 
+    // The named player's own style.toml (SQ-1676) sits between the shared style
+    // and the per-game override.
+    let doc = match crate::style::read_player_style(&state.config) {
+        Ok(Some(over)) => crate::style::merge(&doc, &over),
+        Ok(None) => doc,
+        Err(msg) => return ReloadOutcome::Failed { msg },
+    };
+
     // Layer the per-game override (<game_dir>/style.toml) over the global.
     let doc = if !state.game_dir.as_os_str().is_empty() {
         let pg_path = crate::styles::per_game_style_path(&state.game_dir);
@@ -147,6 +155,10 @@ pub fn reload_style(state: &mut AppState) -> ReloadOutcome {
                 .unwrap_or_default()
         };
         let global = parse_file(resolved_style_path(pointer.as_deref(), &user_dir));
+        let global = match crate::style::player_style_path(&state.config) {
+            Some(p) => global.overlaid(&parse_file(Some(p))),
+            None => global,
+        };
         let per_game = if state.game_dir.as_os_str().is_empty() {
             toml_schema::ParsedStyle::default()
         } else {
@@ -647,6 +659,43 @@ mod tests {
             "per-game box_style wins"
         );
         assert!(!state.symbols.diagonal_corners, "global diagonal_corners stands");
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// SQ-1676: a named player's own `style.toml` sits between the shared style and
+    /// the per-game sidecar, through BOTH the legacy symbols and the theme.
+    #[test]
+    fn reload_layers_a_players_style_between_the_shared_one_and_the_per_game_one() {
+        use ratatui::style::Color;
+        let dir = temp_dir("player-style");
+        let global = dir.join("style.toml");
+        std::fs::write(
+            &global,
+            "[map]\nbox_style = \"double\"\ndiagonal_corners = false\n[roles]\naccent = { fg = \"blue\" }\n",
+        )
+        .unwrap();
+        let player_dir = dir.join("users").join("bob");
+        std::fs::create_dir_all(&player_dir).unwrap();
+        std::fs::write(
+            player_dir.join("style.toml"),
+            "[map]\nbox_style = \"ascii\"\n[roles]\naccent = { fg = \"red\" }\n",
+        )
+        .unwrap();
+
+        let mut state = AppState::default();
+        state.config.user_dir = dir.clone();
+        state.config.style = Some(global.to_string_lossy().to_string());
+        state.config.player_dir = Some(player_dir.clone());
+        assert!(matches!(reload_style(&mut state), ReloadOutcome::Reloaded { .. }));
+        assert_eq!(state.symbols.room_normal, crate::symbols::BoxStyle::preset("ascii").unwrap(), "the player's box_style wins");
+        assert!(!state.symbols.diagonal_corners, "the shared diagonal_corners stands");
+        assert_eq!(state.colors.theme.get("accent").style.fg, Some(Color::Red), "the player's [roles] wins in the theme");
+
+        // Without a player the shared style reads as it always did.
+        state.config.player_dir = None;
+        assert!(matches!(reload_style(&mut state), ReloadOutcome::Reloaded { .. }));
+        assert_eq!(state.symbols.room_normal, crate::symbols::BoxStyle::preset("double").unwrap());
+        assert_eq!(state.colors.theme.get("accent").style.fg, Some(Color::Blue));
         let _ = std::fs::remove_dir_all(&dir);
     }
 

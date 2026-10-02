@@ -29,7 +29,7 @@ use app::config::{config_path, resolve, Cli, Config, OnOff};
 use app::engine::Engine;
 use app::state::AppState;
 
-use crate::{install_panic_hook, loading_line, picker_ui, restore_terminal, saves_dir};
+use crate::{install_panic_hook, loading_line, picker_ui, restore_terminal};
 
 /// Everything [`boot`] produces that `main()`'s event loop then owns: the boxed
 /// engine, the mapper, the UI state, the terminal handle, and the per-story
@@ -49,7 +49,7 @@ pub(crate) struct BootResult {
     pub resume_source_file: std::path::PathBuf,
     pub story_bytes: Vec<u8>,
     pub story_path: std::path::PathBuf,
-    pub data_base: std::path::PathBuf,
+    pub roots: app::data_roots::DataRoots,
 }
 
 /// The one-time launch context resolved before the picker→play loop: parsed
@@ -60,7 +60,7 @@ pub(crate) struct BootResult {
 pub(crate) struct LaunchCtx {
     pub cli: Cli,
     pub cfg: Config,
-    pub data_base: std::path::PathBuf,
+    pub roots: app::data_roots::DataRoots,
     /// The story directory when launched from a library (the picker source),
     /// else `None`.
     pub library_dir: Option<std::path::PathBuf>,
@@ -96,13 +96,26 @@ pub(crate) fn resolve_launch() -> LaunchCtx {
         std::process::exit(0);
     }
 
+    // Who is playing (SQ-1676): `--player`, else LANTHORN_PLAYER, else the default
+    // player. Lanthorn only takes the name; it never checks who is entitled to it.
+    // A bad name stops the launch here, before anything is read or written under it.
+    if let Err(e) = app::data_roots::select_player_from_env(cli.player.as_deref()) {
+        eprintln!("lanthorn: {e}");
+        std::process::exit(2);
+    }
+
     let mut cfg = resolve(&cli);
+
+    // The SHARED config file: `cfg.config_file` is the named player's own bare file
+    // (never seeded, absent until they change a setting), so the first-run test, the
+    // template seed and the top-up all look at this one instead.
+    let shared_config_file = app::config::config_path(&cli);
 
     // Asked BEFORE the seed below creates the file, because "there is no
     // config.toml" is the whole definition of a first run (SQ-1104). Read after
     // it, the answer would be "there is one" every time and the font check would
     // never fire.
-    let first_run = !cfg.config_file.exists();
+    let first_run = !shared_config_file.exists();
 
     // Auto-seed a fresh style.toml (SQ-0309, Task 6b) on every startup — before the
     // story picker — so browsing (even without launching a story) leaves the fully
@@ -118,7 +131,7 @@ pub(crate) fn resolve_launch() -> LaunchCtx {
     // path (`--config`/`--user-dir`/default), not `user_dir`, so the file we seed is
     // the file we read (SQ-0574). Runtime edits still go through `write_config_file`,
     // which is format-preserving and keeps these comments.
-    app::config_template::auto_seed(&cfg.config_file);
+    app::config_template::auto_seed(&shared_config_file);
 
     // The seed above only ever writes a file that is not there, so a config written
     // by an older release never learns about a setting added since — and one of them
@@ -131,7 +144,7 @@ pub(crate) fn resolve_launch() -> LaunchCtx {
     // line added is either a comment or a key at the value `resolve` already assumed
     // for its absence — so this run reads exactly as it would have.
     if cfg.config_error.is_none() {
-        app::config_template::top_up(&cfg.config_file);
+        app::config_template::top_up(&shared_config_file);
     }
 
     // A path may be omitted; fall back to the configured default story dir.
@@ -225,7 +238,7 @@ pub(crate) fn resolve_launch() -> LaunchCtx {
     if ask_font {
         match ask_font_check(&cfg) {
             FontCheckOutcome::Answered { nerdfont, diagonal } => {
-                match app::style::style_write_path(cfg.style.as_deref(), &cfg.user_dir) {
+                match app::style::style_write_path_for(&cfg) {
                     Some(path) => {
                         if let Err(e) = app::style::write_font_check_answer(&path, nerdfont, diagonal) {
                             eprintln!("lanthorn: could not save the font choice: {e}");
@@ -250,9 +263,11 @@ pub(crate) fn resolve_launch() -> LaunchCtx {
         }
     }
 
-    // Storage base for saves/sidecars (SQ-0284): `--data-dir` overrides the
-    // default `<user_dir>/saves`. Each story gets `<data_base>/<story-key>/`.
-    let data_base = cli.data_dir.clone().unwrap_or_else(|| saves_dir(&cfg.user_dir));
+    // Storage bases (SQ-0284, SQ-1676): `--data-dir` overrides the default
+    // `<user_dir>/saves` (the shared catalogue, and the default player's saves);
+    // a named player's own saves sit under `<user_dir>/users/<name>/saves`. Each
+    // story gets `<base>/<story-key>.save/` in both.
+    let roots = app::data_roots::DataRoots::resolve(&cfg.user_dir, cli.data_dir.as_deref(), cfg.player.as_deref());
 
     // A directory launches the pre-game picker (a library); a file plays directly.
     let (library_dir, single_file) = if story_path.is_dir() {
@@ -261,7 +276,7 @@ pub(crate) fn resolve_launch() -> LaunchCtx {
         (None, Some(story_path))
     };
 
-    LaunchCtx { cli, cfg, data_base, library_dir, single_file, fetched }
+    LaunchCtx { cli, cfg, roots, library_dir, single_file, fetched }
 }
 
 /// Fetch `arg` when it is a URL, returning the local file the rest of the boot
@@ -409,7 +424,7 @@ fn ask_fetch_keep(
 
     // Themed the way the game and the browser are, so the prompt does not arrive
     // in a palette the player has never seen.
-    let (base, _w1) = app::style::load_style(cfg.style.as_deref(), &cfg.user_dir);
+    let (base, _w1) = app::style::load_style_for(cfg);
     // No story is booted yet, so there is no machine to resolve a colour number
     // through: §8.3.1's own table (SQ-1393).
     let (colors, _syms, _w2) =
@@ -605,7 +620,7 @@ fn ask_font_check(cfg: &Config) -> FontCheckOutcome {
     // Themed the way the game and the browser are, so the question does not
     // arrive in a palette the player has never seen — and so the sample rows are
     // drawn in the colours the map will actually use.
-    let (base, _w1) = app::style::load_style(cfg.style.as_deref(), &cfg.user_dir);
+    let (base, _w1) = app::style::load_style_for(cfg);
     // No story is booted yet, so there is no machine to resolve a colour number
     // through: §8.3.1's own table (SQ-1393).
     let (colors, _syms, _w2) =
@@ -920,7 +935,7 @@ pub(crate) fn boot_story(
         disk_entry,
         overrides,
         cfg: cfg.clone(),
-        data_base: ctx.data_base.clone(),
+        roots: ctx.roots.clone(),
         flags: app::host::LaunchFlags::from(&ctx.cli),
         terminal,
         // `--fresh-start` (SQ-1626): a host-requested boot that skips resume
@@ -942,7 +957,7 @@ pub(crate) fn boot_story(
         resume_source_file,
         story_bytes,
         story_path,
-        data_base,
+        roots,
         resumed: _,
     } = match booted {
         Ok(b) => b,
@@ -1078,7 +1093,7 @@ pub(crate) fn boot_story(
         resume_source_file,
         story_bytes,
         story_path,
-        data_base,
+        roots,
     }
 }
 

@@ -147,7 +147,7 @@ fn a_press_is_one_row_in_the_browser_and_the_first_volume_keeps_it() {
         return;
     };
     let dir = stories_dir();
-    let rows = app::picker::scan_stories(&dir, &dir);
+    let rows = app::picker::scan_stories(&dir, &app::data_roots::DataRoots::single(&dir));
     let dsk: Vec<String> = rows
         .iter()
         .filter(|e| {
@@ -306,7 +306,7 @@ fn a_dsk_that_is_not_a_prodos_volume_is_not_listed() {
     story[0x1a..0x1c].copy_from_slice(&((4096u16 / 2).to_be_bytes()));
     std::fs::write(dir.join("game.z3"), &story).unwrap();
 
-    let rows = app::picker::scan_stories(&dir, &dir);
+    let rows = app::picker::scan_stories(&dir, &app::data_roots::DataRoots::single(&dir));
     let names: Vec<String> = rows.iter().map(|e| e.filename.clone()).collect();
     // They ARE grouped as a set — the rule is about names and does not open
     // anything — and they still list nothing, because the mount refuses them.

@@ -54,7 +54,7 @@ fn boot_headless(story: std::path::PathBuf, home: &std::path::Path) -> app::host
             virtual_screen_rows: Some(PANE.1),
             ..app::config::Config::default()
         },
-        data_base: home.join("saves"),
+        roots: app::data_roots::DataRoots::single(home.join("saves")),
         flags: LaunchFlags::default(),
         terminal: TerminalFacts { size: Some(PANE), ..TerminalFacts::default() },
         fresh_start: true,

@@ -815,20 +815,20 @@ pub struct SearchWorker {
 }
 
 impl SearchWorker {
-    /// `covers` and `data_base` are SQ-0474's post-download metadata/cover
+    /// `covers` and `roots` are SQ-0474's post-download metadata/cover
     /// persistence: `covers` is only ever asked for a `fetch_cover` (never
     /// `fetch`/`fetch_by_id`, which would be an extra metadata request —
-    /// see [`crate::ifdb::MetadataSource`]); `data_base` locates each
+    /// see [`crate::ifdb::MetadataSource`]); `roots` locates each
     /// story's `info.json` sidecar the same way the picker/fetch worker do
-    /// (`crate::storage::game_dir`).
-    pub fn new(source: Box<dyn SearchSource>, covers: Box<dyn MetadataSource>, data_base: PathBuf) -> Self {
+    /// (its catalogue folder).
+    pub fn new(source: Box<dyn SearchSource>, covers: Box<dyn MetadataSource>, roots: crate::data_roots::DataRoots) -> Self {
         let (req_tx, req_rx) = mpsc::channel::<SearchJob>();
         let (res_tx, res_rx) = mpsc::channel::<SearchEvent>();
         let busy = Arc::new(AtomicBool::new(false));
         let worker_busy = Arc::clone(&busy);
         let worker = thread::spawn(move || {
             while let Ok(job) = req_rx.recv() {
-                let event = run_job(source.as_ref(), covers.as_ref(), &data_base, job);
+                let event = run_job(source.as_ref(), covers.as_ref(), &roots, job);
                 worker_busy.store(false, Ordering::Relaxed);
                 if res_tx.send(event).is_err() {
                     return;
@@ -855,7 +855,7 @@ impl SearchWorker {
 }
 
 /// Run one job to an event, mapping every error to a friendly display string.
-fn run_job(source: &dyn SearchSource, covers: &dyn MetadataSource, data_base: &Path, job: SearchJob) -> SearchEvent {
+fn run_job(source: &dyn SearchSource, covers: &dyn MetadataSource, roots: &crate::data_roots::DataRoots, job: SearchJob) -> SearchEvent {
     match job {
         SearchJob::Seed => match source.hot() {
             Ok(hits) => SearchEvent::Results(hits),
@@ -871,7 +871,7 @@ fn run_job(source: &dyn SearchSource, covers: &dyn MetadataSource, data_base: &P
         },
         SearchJob::Download { url, dest, record } => match source.download(&url, &dest) {
             Ok(path) => {
-                persist_metadata_and_cover(covers, data_base, &path, record.as_deref());
+                persist_metadata_and_cover(covers, roots, &path, record.as_deref());
                 SearchEvent::Downloaded(path)
             }
             Err(e) => SearchEvent::Failed(e.to_string()),
@@ -889,7 +889,7 @@ fn run_job(source: &dyn SearchSource, covers: &dyn MetadataSource, data_base: &P
 /// download into a failure.
 fn persist_metadata_and_cover(
     covers: &dyn MetadataSource,
-    data_base: &Path,
+    roots: &crate::data_roots::DataRoots,
     story_path: &Path,
     record: Option<&IFiction>,
 ) {
@@ -911,8 +911,8 @@ fn persist_metadata_and_cover(
     // image carries no `UUID://` marker falls through to the Z-machine
     // derivation reading an IFF header as a story header. *City of Secrets* —
     // Inform 6, Glulx, served as a `.gblorb` — is both at once.
-    let Some(entry) = crate::picker::resolve_entry(story_path, data_base) else { return };
-    let game_dir = entry.game_dir(data_base);
+    let Some(entry) = crate::picker::resolve_entry(story_path, roots) else { return };
+    let game_dir = entry.catalogue_dir(roots);
     let cover = crate::fetch_worker::maybe_fetch_cover(covers, &game_dir, story_path, iff);
     crate::fetch_worker::write_fetched(
         &game_dir,
@@ -1316,7 +1316,7 @@ mod tests {
         };
         let source = Fake { hits: vec![hit.clone()], options: vec![opt], record: None, fail: false };
         let data_base = std::env::temp_dir().join(format!("bm_ifdb_worker_data_{}", std::process::id()));
-        let w = SearchWorker::new(Box::new(source), Box::new(FakeCovers::new()), data_base.clone());
+        let w = SearchWorker::new(Box::new(source), Box::new(FakeCovers::new()), crate::data_roots::DataRoots::single(data_base.clone()));
 
         w.request(SearchJob::Search("test".into()));
         match drain_one(&w) {
@@ -1377,7 +1377,7 @@ mod tests {
     fn worker_maps_a_transport_error_to_a_friendly_failed_event() {
         let source = Fake { hits: vec![], options: vec![], record: None, fail: true };
         let data_base = std::env::temp_dir().join(format!("bm_ifdb_worker_fail_{}", std::process::id()));
-        let w = SearchWorker::new(Box::new(source), Box::new(FakeCovers::new()), data_base);
+        let w = SearchWorker::new(Box::new(source), Box::new(FakeCovers::new()), crate::data_roots::DataRoots::single(data_base));
         w.request(SearchJob::Search("x".into()));
         match drain_one(&w) {
             SearchEvent::Failed(msg) => assert_eq!(msg, "IFDB unreachable"),
@@ -1476,7 +1476,7 @@ mod tests {
         let dest = data_base.join("stories");
         let source =
             FakeStoryDownload { name: "CoS.gblorb".into(), bytes: glulx_blorb(&glulx_image()) };
-        let w = SearchWorker::new(Box::new(source), Box::new(FakeCovers::new()), data_base.clone());
+        let w = SearchWorker::new(Box::new(source), Box::new(FakeCovers::new()), crate::data_roots::DataRoots::single(data_base.clone()));
 
         let record = IFiction {
             title: Some("City of Secrets".into()),
@@ -1497,7 +1497,7 @@ mod tests {
         };
 
         // The row the browser builds for the file that just landed.
-        let entry = crate::picker::resolve_entry(&path, &data_base)
+        let entry = crate::picker::resolve_entry(&path, &crate::data_roots::DataRoots::single(&data_base))
             .expect("the downloaded blorb scans as a playable story");
         assert!(
             entry.meta.ifid.starts_with("GLULX-"),
@@ -1506,7 +1506,7 @@ mod tests {
             entry.meta.ifid
         );
 
-        let fetched = crate::story_info::load(&entry.game_dir(&data_base), &entry.meta.ifid)
+        let fetched = crate::story_info::load(&entry.game_dir(&crate::data_roots::DataRoots::single(&data_base)), &entry.meta.ifid)
             .and_then(|i| i.fetched)
             .expect("the row's own IFID finds the sidecar the download wrote");
         assert_eq!(fetched.title.as_deref(), Some("City of Secrets"));
@@ -1528,7 +1528,7 @@ mod tests {
         let covers = FakeCovers::new();
         let cover_calls = Arc::clone(&covers.calls);
         let source = Fake { hits: vec![], options: vec![], record: None, fail: false };
-        let w = SearchWorker::new(Box::new(source), Box::new(covers), data_base.clone());
+        let w = SearchWorker::new(Box::new(source), Box::new(covers), crate::data_roots::DataRoots::single(data_base.clone()));
 
         let record = IFiction {
             title: Some("Deep Space Drifter".into()),
@@ -1578,7 +1578,7 @@ mod tests {
         let covers = FakeCovers::new();
         let cover_calls = Arc::clone(&covers.calls);
         let source = Fake { hits: vec![], options: vec![], record: None, fail: false };
-        let w = SearchWorker::new(Box::new(source), Box::new(covers), data_base.clone());
+        let w = SearchWorker::new(Box::new(source), Box::new(covers), crate::data_roots::DataRoots::single(data_base.clone()));
 
         let record = IFiction { title: Some("No Cover Game".into()), ..Default::default() };
         w.request(SearchJob::Download {
@@ -1613,7 +1613,7 @@ mod tests {
         let data_base = std::env::temp_dir().join(format!("bm_ifdb_ifid_fallback_{}", std::process::id()));
         let dest = data_base.join("stories");
         let source = Fake { hits: vec![], options: vec![], record: None, fail: false };
-        let w = SearchWorker::new(Box::new(source), Box::new(FakeCovers::new()), data_base.clone());
+        let w = SearchWorker::new(Box::new(source), Box::new(FakeCovers::new()), crate::data_roots::DataRoots::single(data_base.clone()));
 
         let record = IFiction {
             title: Some("Grouped Editions".into()),
@@ -1657,7 +1657,7 @@ mod tests {
         let data_base = std::env::temp_dir().join(format!("bm_ifdb_ifid_single_{}", std::process::id()));
         let dest = data_base.join("stories");
         let source = Fake { hits: vec![], options: vec![], record: None, fail: false };
-        let w = SearchWorker::new(Box::new(source), Box::new(FakeCovers::new()), data_base.clone());
+        let w = SearchWorker::new(Box::new(source), Box::new(FakeCovers::new()), crate::data_roots::DataRoots::single(data_base.clone()));
 
         let record = IFiction {
             title: Some("Single Edition".into()),
@@ -1698,7 +1698,7 @@ mod tests {
         let covers = FakeCovers::new();
         let cover_calls = Arc::clone(&covers.calls);
         let source = Fake { hits: vec![], options: vec![], record: None, fail: false };
-        let w = SearchWorker::new(Box::new(source), Box::new(covers), data_base.clone());
+        let w = SearchWorker::new(Box::new(source), Box::new(covers), crate::data_roots::DataRoots::single(data_base.clone()));
 
         w.request(SearchJob::Download { url: "https://x/game.z5".into(), dest: dest.clone(), record: None });
         let path = match drain_one(&w) {

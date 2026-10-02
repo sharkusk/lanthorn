@@ -34,6 +34,71 @@ pub struct RawDelta {
     pub shadow: Option<bool>,
 }
 
+impl RawDelta {
+    /// Field-level overlay: each field `over` sets wins, the rest stay `self`'s.
+    fn overlaid(&self, over: &RawDelta) -> RawDelta {
+        RawDelta {
+            parent: over.parent.clone().or_else(|| self.parent.clone()),
+            fg: over.fg.clone().or_else(|| self.fg.clone()),
+            bg: over.bg.clone().or_else(|| self.bg.clone()),
+            bold: over.bold.or(self.bold),
+            italic: over.italic.or(self.italic),
+            underline: over.underline.or(self.underline),
+            dim: over.dim.or(self.dim),
+            reversed: over.reversed.or(self.reversed),
+            glyph: over.glyph.clone().or_else(|| self.glyph.clone()),
+            style: over.style.clone().or_else(|| self.style.clone()),
+            style_top: over.style_top.clone().or_else(|| self.style_top.clone()),
+            style_bottom: over.style_bottom.clone().or_else(|| self.style_bottom.clone()),
+            style_left: over.style_left.clone().or_else(|| self.style_left.clone()),
+            style_right: over.style_right.clone().or_else(|| self.style_right.clone()),
+            header: over.header.or(self.header),
+            shadow: over.shadow.or(self.shadow),
+        }
+    }
+}
+
+impl ParsedStyle {
+    /// Layer `over` on top of `self` with present-keys-only semantics (SQ-1676):
+    /// a selector both name is merged field by field, a non-empty rule list or
+    /// status-bar segment list replaces, and the scheme `over` names wins. This is
+    /// the step that lets a player's own `style.toml` sit between the shared one
+    /// and a per-game sidecar.
+    pub fn overlaid(&self, over: &ParsedStyle) -> ParsedStyle {
+        let layer = |base: &BTreeMap<String, RawDelta>, o: &BTreeMap<String, RawDelta>| {
+            let mut out = base.clone();
+            for (k, d) in o {
+                let merged = match out.get(k) {
+                    Some(b) => b.overlaid(d),
+                    None => d.clone(),
+                };
+                out.insert(k.clone(), merged);
+            }
+            out
+        };
+        ParsedStyle {
+            version: self.version.or(over.version),
+            scheme: over.scheme.clone().or_else(|| self.scheme.clone()),
+            roles: layer(&self.roles, &over.roles),
+            decls: layer(&self.decls, &over.decls),
+            transcript_rules: if over.transcript_rules.is_empty() {
+                self.transcript_rules.clone()
+            } else {
+                over.transcript_rules.clone()
+            },
+            statusbar: RawStatusBar {
+                border: over.statusbar.border.clone().or_else(|| self.statusbar.border.clone()),
+                border_fg: over.statusbar.border_fg.clone().or_else(|| self.statusbar.border_fg.clone()),
+                segments: if over.statusbar.segments.is_empty() {
+                    self.statusbar.segments.clone()
+                } else {
+                    over.statusbar.segments.clone()
+                },
+            },
+        }
+    }
+}
+
 /// A raw `[[transcript.rule]]`: a regex `match` plus style keys.
 #[derive(Debug, Clone, Default, PartialEq)]
 pub struct RawRule {

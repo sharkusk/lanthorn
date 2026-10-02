@@ -1028,7 +1028,7 @@ fn a_floppy_and_the_story_file_beside_it_are_pinned_against_each_other() {
 fn every_release_medium_is_offered_by_the_story_picker() {
     let dir = stories_dir();
     let data_base = std::env::temp_dir().join(format!("lanthorn-sq0849-{}", std::process::id()));
-    let rows = app::picker::scan_stories(&dir, &data_base);
+    let rows = app::picker::scan_stories(&dir, &app::data_roots::DataRoots::single(&data_base));
     let listed: Vec<PathBuf> = rows.iter().map(|e| e.path.clone()).collect();
     let _ = std::fs::remove_dir_all(&data_base);
 

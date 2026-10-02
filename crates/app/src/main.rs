@@ -463,13 +463,6 @@ fn write_crash_log(
     writeln!(f, "\n=== lanthorn panic ===\n{info}\n\nbacktrace:\n{backtrace}")
 }
 
-/// Directory holding per-game save archives (`.lanthorn`, default + named) and
-/// the game's own standard `.qzl` saves. Kept separate from the map
-/// directory. Defaults to `config.user_dir/saves`.
-fn saves_dir(user_dir: &std::path::Path) -> std::path::PathBuf {
-    user_dir.join("saves")
-}
-
 // ── Draw helper ───────────────────────────────────────────────────────────────
 
 /// Both pane inner-content rects returned by `draw_frame`.
@@ -1695,10 +1688,10 @@ fn clear_terminal<B: ratatui::backend::Backend>(
 fn run_headless_fetch(
     source: &app::picker::StorySource,
     mode: app::config::FetchMode,
-    data_base: &std::path::Path,
+    roots: &app::data_roots::DataRoots,
 ) -> i32 {
     use app::fetch_worker::{FetchOrder, Fetcher, Outcome};
-    let targets = app::picker::fetch_targets(source, data_base);
+    let targets = app::picker::fetch_targets(source, roots);
     let total = targets.len();
     if total == 0 {
         eprintln!("lanthorn: no stories under {}", source.dir().display());
@@ -1707,7 +1700,7 @@ fn run_headless_fetch(
     eprintln!("lanthorn: fetching IFDB metadata for {total} stories under {}", source.dir().display());
     let fetcher = Fetcher::new(
         Box::new(app::ifdb::IfdbClient::new()),
-        data_base.to_path_buf(),
+        roots.catalogue().to_path_buf(),
         std::time::Duration::from_millis(500),
     );
     fetcher.request(FetchOrder { stories: targets, forced: mode.forced(), id_override: None });
@@ -1804,7 +1797,7 @@ fn main() {
         None => ctx
             .single_file
             .as_ref()
-            .and_then(|p| app::picker::StorySource::of(p, &ctx.data_base)),
+            .and_then(|p| app::picker::StorySource::of(p, &ctx.roots)),
     };
     // `--story <n|name>` makes the browser's choice on the command line
     // (SQ-1078). Resolved ONCE, here, against the very list the browser would
@@ -1818,7 +1811,7 @@ fn main() {
     // `--import-metadata`: curated rows for what `--fetch` could not settle.
     if let Some(tsv) = ctx.cli.import_metadata.as_deref() {
         let source = app::ifdb::IfdbClient::new();
-        std::process::exit(app::metadata_import::run(tsv, &ctx.data_base, &source, std::time::Duration::from_millis(500)));
+        std::process::exit(app::metadata_import::run(tsv, &ctx.roots, &source, std::time::Duration::from_millis(500)));
     }
 
     if let Some(mode) = ctx.cli.fetch {
@@ -1826,12 +1819,12 @@ fn main() {
             eprintln!("lanthorn: --fetch needs a library directory or a story file");
             std::process::exit(2);
         };
-        std::process::exit(run_headless_fetch(source, mode, &ctx.data_base));
+        std::process::exit(run_headless_fetch(source, mode, &ctx.roots));
     }
 
     let direct = ctx.cli.story_pick.as_deref().map(|want| {
         let single = ctx.single_file.clone().unwrap_or_default();
-        match app::story_pick::pick(source.as_ref(), &single, &ctx.data_base, want) {
+        match app::story_pick::pick(source.as_ref(), &single, &ctx.roots, want) {
             Ok(chosen) => chosen,
             Err(msg) => {
                 eprintln!("lanthorn: {msg}");
@@ -1872,7 +1865,7 @@ fn main() {
             match picker_ui::run_story_picker(
                 source.clone(),
                 &ctx.cfg,
-                &ctx.data_base,
+                &ctx.roots,
                 picker_position.as_ref(),
             ) {
                 Some(p) => {
@@ -1965,7 +1958,7 @@ fn run_event_loop(boot: startup::BootResult, launched_from_library: bool) -> Run
         resume_source_file,
         story_bytes,
         story_path,
-        data_base,
+        roots,
     } = boot;
 
     // Whether a story library exists to return to; gates `/quit-to-library`. Set
@@ -2609,10 +2602,7 @@ fn run_event_loop(boot: startup::BootResult, launched_from_library: bool) -> Run
                         // so the map changes under the player's eyes rather
                         // than at the next launch — which is also the only way
                         // they can see whether they answered correctly.
-                        let msg = match app::style::style_write_path(
-                            state.config.style.as_deref(),
-                            &state.config.user_dir,
-                        ) {
+                        let msg = match app::style::style_write_path_for(&state.config) {
                             Some(path) => match app::style::write_font_check_answer(&path, nerdfont, diagonal) {
                                 Ok(()) => {
                                     let _ = app::reload::reload_style(&mut state);
@@ -4069,8 +4059,8 @@ fn run_event_loop(boot: startup::BootResult, launched_from_library: bool) -> Run
                 state.overlays.saves = None;
                 let start_dir = if game_dir.is_dir() {
                     game_dir.clone()
-                } else if data_base.is_dir() {
-                    data_base.clone()
+                } else if roots.player().is_dir() {
+                    roots.player().to_path_buf()
                 } else {
                     state.config.user_dir.clone()
                 };
@@ -5532,13 +5522,6 @@ mod tests {
     // The former app-level `key_to_zscii` and its unit tests were relocated into
     // the zvm engine adapter as `GameSession::key_input_to_zscii` (tested in
     // session.rs); the neutral crossterm→KeyInput mapping is tested in engine.rs.
-
-    #[test]
-    fn saves_dir_is_user_dir_join_saves() {
-        // Save archives live under user_dir/saves.
-        let d = super::saves_dir(std::path::Path::new("/tmp/bm"));
-        assert_eq!(d, std::path::Path::new("/tmp/bm/saves"));
-    }
 
     // ── char-mode gate predicate test ─────────────────────────────────────────
 

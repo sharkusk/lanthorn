@@ -888,6 +888,44 @@ pub fn personal_style_path(user_dir: &std::path::Path) -> std::path::PathBuf {
     user_dir.join("style.toml")
 }
 
+/// The named player's own `style.toml` (SQ-1676), if this run has a player.
+pub fn player_style_path(cfg: &crate::config::Config) -> Option<std::path::PathBuf> {
+    cfg.player_dir.as_ref().map(|d| d.join("style.toml"))
+}
+
+/// Read the named player's style layer: `Ok(None)` when there is no player or
+/// the file does not exist (it starts absent and is never seeded).
+pub fn read_player_style(cfg: &crate::config::Config) -> Result<Option<StyleDoc>, String> {
+    let Some(path) = player_style_path(cfg) else { return Ok(None) };
+    let Ok(text) = std::fs::read_to_string(&path) else { return Ok(None) };
+    parse_style_toml(&text).map(Some).map_err(|e| format!("{}: {e}", path.display()))
+}
+
+/// [`load_style`] for a configured run: the shared style, then the named
+/// player's `style.toml` layered over it (SQ-1676). A player file that does not
+/// parse is skipped with one warning, never fatal.
+pub fn load_style_for(cfg: &crate::config::Config) -> (StyleDoc, Vec<String>) {
+    let (doc, mut warnings) = load_style(cfg.style.as_deref(), &cfg.user_dir);
+    match read_player_style(cfg) {
+        Ok(Some(over)) => (merge(&doc, &over), warnings),
+        Ok(None) => (doc, warnings),
+        Err(e) => {
+            warnings.push(format!("could not parse player style file {e}; ignoring it"));
+            (doc, warnings)
+        }
+    }
+}
+
+/// [`style_write_path`] for a configured run: with no explicit `style` pointer, a
+/// named player writes to their OWN `style.toml` layer (SQ-1676) rather than
+/// editing the shared one under everybody else.
+pub fn style_write_path_for(cfg: &crate::config::Config) -> Option<std::path::PathBuf> {
+    match (&cfg.style, player_style_path(cfg)) {
+        (None, Some(own)) => Some(own),
+        _ => style_write_path(cfg.style.as_deref(), &cfg.user_dir),
+    }
+}
+
 // ── The font check's answer (SQ-1104) ─────────────────────────────────────────
 
 /// The style file a setting should be WRITTEN to, resolved the same way

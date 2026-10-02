@@ -30,7 +30,7 @@ fn masterpieces() -> Option<(PathBuf, app::picker::StorySource, PathBuf)> {
         return None;
     }
     let data_base = std::env::temp_dir().join("lanthorn-sq1078-story-pick");
-    let source = app::picker::StorySource::of(&path, &data_base)
+    let source = app::picker::StorySource::of(&path, &app::data_roots::DataRoots::single(&data_base))
         .expect("a disc holding several games is a source of stories");
     Some((path, source, data_base))
 }
@@ -47,10 +47,10 @@ fn a_name_reaches_the_game_the_discs_own_tiebreak_does_not() {
     let Some((path, source, data_base)) = masterpieces() else { return };
 
     // NON-VACUITY: a shelf, not a floppy — and one whose default is not Arthur.
-    let rows = source.scan(&data_base);
+    let rows = source.scan(&app::data_roots::DataRoots::single(&data_base));
     assert!(rows.len() > 2, "a compilation offering a choice: {} rows", rows.len());
 
-    let (chosen, entry) = app::story_pick::pick(Some(&source), &path, &data_base, "arthur")
+    let (chosen, entry) = app::story_pick::pick(Some(&source), &path, &app::data_roots::DataRoots::single(&data_base), "arthur")
         .expect("Arthur is on this platter");
     assert_eq!(chosen, path, "the CONTAINER is what gets opened");
     let entry = entry.expect("and which story on it — the thing that reaches the right game");
@@ -69,7 +69,7 @@ fn a_name_reaches_the_game_the_discs_own_tiebreak_does_not() {
     // are the browser's, in the browser's order.
     let i = 1 + rows.iter().position(|r| r.meta.disk_entry.as_deref() == Some(&entry)).unwrap();
     let (by_number, entry_by_number) =
-        app::story_pick::pick(Some(&source), &path, &data_base, &i.to_string()).expect("in range");
+        app::story_pick::pick(Some(&source), &path, &app::data_roots::DataRoots::single(&data_base), &i.to_string()).expect("in range");
     assert_eq!((by_number, entry_by_number.as_deref()), (path, Some(entry.as_str())));
 }
 
@@ -80,13 +80,13 @@ fn a_name_reaches_the_game_the_discs_own_tiebreak_does_not() {
 fn a_name_no_game_on_the_disc_answers_to_is_refused_with_the_menu() {
     let Some((path, source, data_base)) = masterpieces() else { return };
 
-    let err = app::story_pick::pick(Some(&source), &path, &data_base, "photopia")
+    let err = app::story_pick::pick(Some(&source), &path, &app::data_roots::DataRoots::single(&data_base), "photopia")
         .expect_err("Photopia is not an Infocom game");
     assert!(err.starts_with("no story on this disk is named 'photopia':"), "{err}");
     assert!(err.to_ascii_uppercase().contains("ZORK ZERO"), "the menu rides along: {err}");
 
     // Out of range says the range rather than clamping to an end of the list.
-    let err = app::story_pick::pick(Some(&source), &path, &data_base, "999")
+    let err = app::story_pick::pick(Some(&source), &path, &app::data_roots::DataRoots::single(&data_base), "999")
         .expect_err("no 999th game anywhere");
     assert!(err.starts_with("no story 999 on this disk — pick 1 to "), "{err}");
 }
@@ -97,7 +97,7 @@ fn a_name_no_game_on_the_disc_answers_to_is_refused_with_the_menu() {
 fn a_name_several_games_share_refuses_rather_than_guessing() {
     let Some((path, source, data_base)) = masterpieces() else { return };
 
-    let err = app::story_pick::pick(Some(&source), &path, &data_base, "story.data")
+    let err = app::story_pick::pick(Some(&source), &path, &app::data_roots::DataRoots::single(&data_base), "story.data")
         .expect_err("this disc stores several games under that name");
     assert!(err.starts_with("'story.data' matches more than one story on this disk:"), "{err}");
 }
@@ -115,13 +115,13 @@ fn a_lone_story_file_is_a_list_of_one() {
     }
     let data_base = std::env::temp_dir().join("lanthorn-sq1078-story-pick-lone");
     // Not a source of stories: there is no choice on a single file (SQ-0844).
-    assert!(app::picker::StorySource::of(&path, &data_base).is_none());
+    assert!(app::picker::StorySource::of(&path, &app::data_roots::DataRoots::single(&data_base)).is_none());
 
-    let (chosen, entry) = app::story_pick::pick(None, &path, &data_base, "1").expect("the one row");
+    let (chosen, entry) = app::story_pick::pick(None, &path, &app::data_roots::DataRoots::single(&data_base), "1").expect("the one row");
     assert_eq!(chosen, path);
     assert_eq!(entry, None, "a loose file has no entry to name");
 
-    let err = app::story_pick::pick(None, &path, &data_base, "arthur")
+    let err = app::story_pick::pick(None, &path, &app::data_roots::DataRoots::single(&data_base), "arthur")
         .expect_err("this file is not Arthur");
     assert!(err.starts_with("no story on this file is named 'arthur':"), "{err}");
 }

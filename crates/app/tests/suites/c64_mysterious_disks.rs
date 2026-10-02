@@ -76,7 +76,7 @@ fn the_picker_lists_the_same_six_rows_as_the_disk_menu() {
         return;
     }
     let base = data_base("picker-rows");
-    let rows = app::picker::resolve_entries(&path, &base);
+    let rows = app::picker::resolve_entries(&path, &app::data_roots::DataRoots::single(&base));
     assert_eq!(rows.len(), 6, "MYSTADV1.D64 must offer six rows: {:?}", rows.iter().map(|r| &r.meta.disk_entry).collect::<Vec<_>>());
     for row in &rows {
         assert_eq!(row.meta.engine, app::picker::Engine::Scott, "{}: not classified Scott", row.title);
@@ -136,8 +136,8 @@ fn the_two_disks_rows_have_distinct_save_keys() {
         return;
     }
     let base = data_base("keys");
-    let rows1 = app::picker::resolve_entries(&path1, &base);
-    let rows2 = app::picker::resolve_entries(&path2, &base);
+    let rows1 = app::picker::resolve_entries(&path1, &app::data_roots::DataRoots::single(&base));
+    let rows2 = app::picker::resolve_entries(&path2, &app::data_roots::DataRoots::single(&base));
     assert_eq!(rows1.len(), 6);
     assert_eq!(rows2.len(), 5);
 
@@ -151,7 +151,7 @@ fn the_two_disks_rows_have_distinct_save_keys() {
             row.meta.disk_entry
         );
         assert!(
-            dirs.insert(row.game_dir(&base)),
+            dirs.insert(row.game_dir(&app::data_roots::DataRoots::single(&base))),
             "duplicate save directory for {:?}",
             row.meta.disk_entry
         );

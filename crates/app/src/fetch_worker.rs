@@ -103,7 +103,7 @@ pub struct Fetcher {
 }
 
 impl Fetcher {
-    pub fn new(source: Box<dyn MetadataSource>, data_base: PathBuf, delay: Duration) -> Self {
+    pub fn new(source: Box<dyn MetadataSource>, catalogue: PathBuf, delay: Duration) -> Self {
         let (req_tx, req_rx) = mpsc::channel::<FetchOrder>();
         let (res_tx, res_rx) = mpsc::channel::<FetchProgress>();
         let cancel = Arc::new(AtomicBool::new(false));
@@ -119,7 +119,7 @@ impl Fetcher {
                         break;
                     }
                     let progress = fetch_one(
-                        source.as_ref(), &data_base, target, order.forced,
+                        source.as_ref(), &catalogue, target, order.forced,
                         id_override.as_deref(), delay, i, total,
                     );
                     if res_tx.send(progress).is_err() {
@@ -187,7 +187,7 @@ fn scott_ifdb_id(path: &Path, disk_entry: Option<&str>) -> Option<String> {
 #[allow(clippy::too_many_arguments)]
 fn fetch_one(
     source: &dyn MetadataSource,
-    data_base: &Path,
+    catalogue: &Path,
     target: FetchTarget,
     forced: bool,
     id_override: Option<&str>,
@@ -200,7 +200,7 @@ fn fetch_one(
     // fetching *Leather Goddesses* off `INFOCOM6` must not write its metadata
     // (and its cover) into *Sherlock*'s directory (SQ-0859).
     let game_dir = crate::storage::game_dir(
-        data_base,
+        catalogue,
         &crate::storage::story_key_at_from(&path, disk_entry.as_deref()),
     );
     let existing = story_info::load(&game_dir, &ifid);

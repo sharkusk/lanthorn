@@ -111,11 +111,11 @@ pub enum RowOutcome {
 
 /// Apply one row. `source` fetches by id and downloads covers (the picker's
 /// own `IfdbClient` in production; a fake in tests).
-pub fn import_row(row: &ImportRow, data_base: &Path, source: &dyn MetadataSource) -> RowOutcome {
-    let Some(entry) = crate::picker::resolve_entry_from(&row.path, row.entry.as_deref(), data_base) else {
+pub fn import_row(row: &ImportRow, roots: &crate::data_roots::DataRoots, source: &dyn MetadataSource) -> RowOutcome {
+    let Some(entry) = crate::picker::resolve_entry_from(&row.path, row.entry.as_deref(), roots) else {
         return RowOutcome::Skipped(format!("{} is not a story lanthorn can open", label(row)));
     };
-    let game_dir = entry.game_dir(data_base);
+    let game_dir = entry.catalogue_dir(roots);
     let ifid = entry.meta.ifid.clone();
 
     if let Some(tuid) = &row.ifdb_tuid {
@@ -232,7 +232,7 @@ fn set_cover(game_dir: &Path, ifid: &str, cover: &str) {
 /// The whole file: parse, apply each row with a pause between network calls,
 /// print one line per row, and return the process exit code (0 unless a row
 /// failed).
-pub fn run(tsv: &Path, data_base: &Path, source: &dyn MetadataSource, delay: std::time::Duration) -> i32 {
+pub fn run(tsv: &Path, roots: &crate::data_roots::DataRoots, source: &dyn MetadataSource, delay: std::time::Duration) -> i32 {
     let text = match std::fs::read_to_string(tsv) {
         Ok(t) => t,
         Err(e) => {
@@ -250,7 +250,7 @@ pub fn run(tsv: &Path, data_base: &Path, source: &dyn MetadataSource, delay: std
     let total = rows.len();
     let (mut by_id, mut curated, mut covers, mut skipped, mut failed) = (0, 0, 0, 0, 0);
     for (i, row) in rows.iter().enumerate() {
-        let outcome = import_row(row, data_base, source);
+        let outcome = import_row(row, roots, source);
         let word = match &outcome {
             RowOutcome::FetchedById { title, cover } => {
                 by_id += 1;
@@ -380,15 +380,15 @@ mod tests {
             cover_url: Some("https://covers.example/g.png".into()),
             ..Default::default()
         };
-        let out = import_row(&row, &dir, &src);
+        let out = import_row(&row, &crate::data_roots::DataRoots::single(&dir), &src);
         assert_eq!(out, RowOutcome::FetchedById { title: "A Known Game".into(), cover: true });
-        let entry = crate::picker::resolve_entry(&story, &dir).unwrap();
-        let info = story_info::load(&entry.game_dir(&dir), &entry.meta.ifid).unwrap();
+        let entry = crate::picker::resolve_entry(&story, &crate::data_roots::DataRoots::single(&dir)).unwrap();
+        let info = story_info::load(&entry.game_dir(&crate::data_roots::DataRoots::single(&dir)), &entry.meta.ifid).unwrap();
         let f = info.fetched.unwrap();
         assert_eq!(f.source, "ifdb");
         assert_eq!(f.title.as_deref(), Some("A Known Game"));
         assert_eq!(f.cover.as_deref(), Some("cover.png"), "IFDB had no cover, so the row's was taken");
-        assert!(entry.game_dir(&dir).join("cover.png").exists());
+        assert!(entry.game_dir(&crate::data_roots::DataRoots::single(&dir)).join("cover.png").exists());
         let _ = std::fs::remove_dir_all(&dir);
     }
 
@@ -408,17 +408,17 @@ mod tests {
             cover_url: Some("https://covers.example/page.html".into()),
             ..Default::default()
         };
-        let out = import_row(&row, &dir, &src);
+        let out = import_row(&row, &crate::data_roots::DataRoots::single(&dir), &src);
         assert_eq!(out, RowOutcome::Curated { title: "Die Burg (The Castle)".into(), cover: false });
-        let entry = crate::picker::resolve_entry(&story, &dir).unwrap();
-        let f = story_info::load(&entry.game_dir(&dir), &entry.meta.ifid).unwrap().fetched.unwrap();
+        let entry = crate::picker::resolve_entry(&story, &crate::data_roots::DataRoots::single(&dir)).unwrap();
+        let f = story_info::load(&entry.game_dir(&crate::data_roots::DataRoots::single(&dir)), &entry.meta.ifid).unwrap().fetched.unwrap();
         assert_eq!(f.source, "curated");
         assert_eq!(f.author.as_deref(), Some("Jemand"));
         assert_eq!(f.first_published.as_deref(), Some("2004"));
         assert_eq!(f.cover, None, "an HTML page is not a cover");
-        assert!(!entry.game_dir(&dir).join("cover.png").exists());
+        assert!(!entry.game_dir(&crate::data_roots::DataRoots::single(&dir)).join("cover.png").exists());
         // The picker reads it: the row's title is what the list shows.
-        let listed = crate::picker::resolve_entry(&story, &dir).unwrap();
+        let listed = crate::picker::resolve_entry(&story, &crate::data_roots::DataRoots::single(&dir)).unwrap();
         assert_eq!(listed.title, "Die Burg (The Castle)");
         let _ = std::fs::remove_dir_all(&dir);
     }
@@ -431,22 +431,22 @@ mod tests {
         let src = Fake { calls: Mutex::new(vec![]) };
         // First an IFDB record without a cover.
         let first = ImportRow { path: story.clone(), ifdb_tuid: Some("known0000tuid".into()), ..Default::default() };
-        assert_eq!(import_row(&first, &dir, &src), RowOutcome::FetchedById { title: "A Known Game".into(), cover: false });
+        assert_eq!(import_row(&first, &crate::data_roots::DataRoots::single(&dir), &src), RowOutcome::FetchedById { title: "A Known Game".into(), cover: false });
         // Then a cover for it.
         let second = ImportRow { path: story.clone(), cover_url: Some("https://covers.example/g.png".into()), ..Default::default() };
-        assert_eq!(import_row(&second, &dir, &src), RowOutcome::CoverAdded);
-        let entry = crate::picker::resolve_entry(&story, &dir).unwrap();
-        let f = story_info::load(&entry.game_dir(&dir), &entry.meta.ifid).unwrap().fetched.unwrap();
+        assert_eq!(import_row(&second, &crate::data_roots::DataRoots::single(&dir), &src), RowOutcome::CoverAdded);
+        let entry = crate::picker::resolve_entry(&story, &crate::data_roots::DataRoots::single(&dir)).unwrap();
+        let f = story_info::load(&entry.game_dir(&crate::data_roots::DataRoots::single(&dir)), &entry.meta.ifid).unwrap().fetched.unwrap();
         assert_eq!(f.source, "ifdb", "the record itself is untouched");
         assert_eq!(f.cover.as_deref(), Some("cover.png"));
         // A curated title never replaces the IFDB record.
         let curated = ImportRow { path: story.clone(), title: Some("Collection".into()), ..Default::default() };
-        assert!(matches!(import_row(&curated, &dir, &src), RowOutcome::Skipped(_)));
-        let f = story_info::load(&entry.game_dir(&dir), &entry.meta.ifid).unwrap().fetched.unwrap();
+        assert!(matches!(import_row(&curated, &crate::data_roots::DataRoots::single(&dir), &src), RowOutcome::Skipped(_)));
+        let f = story_info::load(&entry.game_dir(&crate::data_roots::DataRoots::single(&dir)), &entry.meta.ifid).unwrap().fetched.unwrap();
         assert_eq!(f.title.as_deref(), Some("A Known Game"));
         // A row with nothing to apply is skipped, not an error.
         let empty = ImportRow { path: story.clone(), ..Default::default() };
-        assert!(matches!(import_row(&empty, &dir, &src), RowOutcome::Skipped(_)));
+        assert!(matches!(import_row(&empty, &crate::data_roots::DataRoots::single(&dir), &src), RowOutcome::Skipped(_)));
         let _ = std::fs::remove_dir_all(&dir);
     }
 }

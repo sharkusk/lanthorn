@@ -78,7 +78,7 @@ fn a_hybrid_volumes_own_machines_survive_the_cross_volume_fold() {
     }
     let dir = treasures_dir();
     let base = data_base("beyondzork");
-    let rows = app::picker::scan_stories(&dir, &base);
+    let rows = app::picker::scan_stories(&dir, &app::data_roots::DataRoots::single(&base));
     assert!(
         rows.len() >= 60,
         "expected close to the union of both discs' own 40+28 raw stories, got {}: \
@@ -123,7 +123,7 @@ fn a_nested_disk_images_save_key_matches_the_pickers_own_row() {
     }
     let dir = treasures_dir();
     let base = data_base("zork0key");
-    let rows = app::picker::scan_stories(&dir, &base);
+    let rows = app::picker::scan_stories(&dir, &app::data_roots::DataRoots::single(&base));
     let dos_zork0 = rows
         .iter()
         .find(|r| r.meta.ifid == "ZCODE-393-890714-791C")

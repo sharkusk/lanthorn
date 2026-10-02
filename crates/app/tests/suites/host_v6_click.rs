@@ -47,7 +47,7 @@ fn boot(file: &str, release: u16, tag: &str) -> Option<BootedStory> {
         disk_entry: None,
         overrides: &overrides,
         cfg: config(&home),
-        data_base: home.join("saves"),
+        roots: app::data_roots::DataRoots::single(home.join("saves")),
         flags: LaunchFlags::default(),
         terminal: TerminalFacts::default(),
         fresh_start: false,

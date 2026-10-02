@@ -337,7 +337,7 @@ fn boot_host(file: &str, want_release: u16, tag: &str) -> Option<BootedStory> {
             random_seed: Some(1),
             ..app::config::Config::default()
         },
-        data_base: home.join("saves"),
+        roots: app::data_roots::DataRoots::single(home.join("saves")),
         flags: LaunchFlags::default(),
         terminal: TerminalFacts::default(),
         fresh_start: false,

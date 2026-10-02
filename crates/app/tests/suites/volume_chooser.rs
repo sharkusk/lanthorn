@@ -93,9 +93,9 @@ fn a_lone_volume_of_several_games_offers_all_of_them() {
         assert!(app::disk_set::members(&path).is_none(), "the copy must be in no set");
         assert!(stories_on(&path) >= 2, "the premise: this platter holds several stories");
 
-        let source = app::picker::StorySource::of(&path, &base)
+        let source = app::picker::StorySource::of(&path, &app::data_roots::DataRoots::single(&base))
             .expect("a disk of games is a source of stories");
-        let rows = source.scan(&base);
+        let rows = source.scan(&app::data_roots::DataRoots::single(&base));
         let b = builds(&rows);
         assert!(rows.len() >= 2, "one row for a disk of two games: {:?}", b);
         // Beyond Zork r57/871221 is the tiebreak the launch used to take; The
@@ -108,9 +108,9 @@ fn a_lone_volume_of_several_games_offers_all_of_them() {
     if masterpieces.exists() {
         ran += 1;
         assert!(app::disk_set::members(&masterpieces).is_none(), "it belongs to no set");
-        let source = app::picker::StorySource::of(&masterpieces, &base)
+        let source = app::picker::StorySource::of(&masterpieces, &app::data_roots::DataRoots::single(&base))
             .expect("thirty-three games are a source of stories");
-        assert_eq!(source.scan(&base).len(), 33, "the whole disc, not its tiebreak");
+        assert_eq!(source.scan(&app::data_roots::DataRoots::single(&base)).len(), 33, "the whole disc, not its tiebreak");
     }
 
     let _ = std::fs::remove_dir_all(&base);
@@ -132,7 +132,7 @@ fn a_lone_volume_of_one_game_still_opens_it() {
         ran += 1;
         assert_eq!(stories_on(&path), 1, "the premise: this platter holds one story");
         assert!(
-            app::picker::StorySource::of(&path, &base).is_none(),
+            app::picker::StorySource::of(&path, &app::data_roots::DataRoots::single(&base)).is_none(),
             "a one-game disk needs no chooser",
         );
     }
@@ -144,7 +144,7 @@ fn a_lone_volume_of_one_game_still_opens_it() {
         }
         ran += 1;
         assert!(
-            app::picker::StorySource::of(&path, &base).is_none(),
+            app::picker::StorySource::of(&path, &app::data_roots::DataRoots::single(&base)).is_none(),
             "{name}: a single-title floppy opens itself",
         );
     }
@@ -179,8 +179,8 @@ fn a_lone_hybrid_disc_keeps_one_row_per_machine() {
     }
     let base = scratch("hybrid-base");
     let source =
-        app::picker::StorySource::of(&disc, &base).expect("a hybrid compilation is a source");
-    let rows = source.scan(&base);
+        app::picker::StorySource::of(&disc, &app::data_roots::DataRoots::single(&base)).expect("a hybrid compilation is a source");
+    let rows = source.scan(&app::data_roots::DataRoots::single(&base));
 
     // Zork I release 88 / serial 840726 sits on both sides of this disc.
     let zork1: Vec<&app::picker::StoryEntry> = rows

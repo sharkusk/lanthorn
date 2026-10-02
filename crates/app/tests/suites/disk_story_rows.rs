@@ -62,7 +62,7 @@ fn data_base(tag: &str) -> PathBuf {
 /// Every row `scan_stories` produces for one image, by mounting the whole
 /// directory once and keeping the rows whose path is that image.
 fn rows_for(image: &Path, base: &Path) -> Vec<app::picker::StoryEntry> {
-    app::picker::scan_stories(&stories_dir(), base)
+    app::picker::scan_stories(&stories_dir(), &app::data_roots::DataRoots::single(base))
         .into_iter()
         .filter(|e| e.path == image)
         .collect()
@@ -103,11 +103,11 @@ fn a_single_story_floppy_is_one_unchanged_row() {
         if !path.is_file() {
             continue;
         }
-        let Some(old) = app::picker::resolve_entry(&path, &base) else {
+        let Some(old) = app::picker::resolve_entry(&path, &app::data_roots::DataRoots::single(&base)) else {
             continue; // not launchable on this corpus; nothing to compare
         };
         ran += 1;
-        let rows = app::picker::resolve_entries(&path, &base);
+        let rows = app::picker::resolve_entries(&path, &app::data_roots::DataRoots::single(&base));
         assert_eq!(rows.len(), 1, "{image}: a single-title floppy is one row");
         assert_eq!(
             rows[0].meta.disk_entry, None,
@@ -154,7 +154,7 @@ fn a_single_story_floppy_is_one_unchanged_row() {
 #[test]
 fn every_game_on_a_compilation_is_its_own_row() {
     let base = data_base("rows");
-    let listed = app::picker::scan_stories(&stories_dir(), &base);
+    let listed = app::picker::scan_stories(&stories_dir(), &app::data_roots::DataRoots::single(&base));
     let mut ran = 0;
     for image in COMPILATIONS {
         let path = stories_dir().join(image);
@@ -207,7 +207,7 @@ fn leather_goddesses_is_reachable_on_infocom6() {
     let rows = rows_for(&image, &base);
 
     // The tiebreak — what the browser used to offer, and all it used to offer.
-    let tiebreak = app::picker::resolve_entry(&image, &base).expect("the image mounts");
+    let tiebreak = app::picker::resolve_entry(&image, &app::data_roots::DataRoots::single(&base)).expect("the image mounts");
     assert!(
         rows.len() > 1,
         "INFOCOM6 holds five games; the list offered {} row(s)",
@@ -312,7 +312,7 @@ fn each_row_keeps_its_own_saves() {
         ran += 1;
         let mut dirs: BTreeSet<PathBuf> = BTreeSet::new();
         for row in &rows {
-            let dir = row.game_dir(&base);
+            let dir = row.game_dir(&app::data_roots::DataRoots::single(&base));
             assert!(dirs.insert(dir.clone()), "{image}: two rows share {}", dir.display());
             // The launch does not have the row in hand — it has the path and the
             // selector — so it must arrive at the same key from those alone.
@@ -390,7 +390,7 @@ fn the_scan_gains_a_row_per_hidden_game_and_loses_none() {
         return;
     }
     let base = data_base("scan");
-    let listed = app::picker::scan_stories(&dir, &base);
+    let listed = app::picker::scan_stories(&dir, &app::data_roots::DataRoots::single(&base));
     let mut ran = 0;
     for image in COMPILATIONS.iter().chain(SINGLE_TITLE.iter()) {
         let path = dir.join(image);

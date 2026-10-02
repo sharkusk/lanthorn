@@ -252,6 +252,19 @@ pub struct Cli {
     #[arg(long, value_name = "PATH")]
     pub data_dir: Option<PathBuf>,
 
+    /// Play as a named player (also read from the LANTHORN_PLAYER environment
+    /// variable; the flag wins). Each player keeps their own saves, settings and
+    /// per-game sidecars under `<user-dir>/users/<name>/`, layered over the
+    /// shared config.toml and style.toml, while story info and covers stay
+    /// shared. Absent or empty means the default player (the classic layout).
+    /// 1-29 characters from A-Z a-z 0-9 . _ - (no leading dot). Lanthorn never
+    /// checks WHO you are: put a login or a picker in front of it.
+    ///
+    /// `--data-dir` stands in for `<user-dir>/saves`, the shared catalogue
+    /// base; a named player's own files always sit under `<user-dir>/users/`.
+    #[arg(long, value_name = "NAME")]
+    pub player: Option<String>,
+
     /// Path to a non-default config file
     #[arg(long, value_name = "PATH")]
     pub config: Option<PathBuf>,
@@ -1944,6 +1957,20 @@ pub struct Config {
     /// persisted, and not part of the file's schema.
     #[serde(skip, default = "default_config_file")]
     pub config_file: PathBuf,
+    /// The named player this run belongs to (SQ-1676); `None` is the default
+    /// player. When set, [`Config::config_file`] is that player's own bare-lines
+    /// `users/<name>/config.toml`, layered over the shared one.
+    #[serde(skip)]
+    pub player: Option<String>,
+    /// `<user_dir>/users/<name>`: the named player's root. Never persisted.
+    #[serde(skip)]
+    pub player_dir: Option<PathBuf>,
+    /// What a named player inherits: the shared config, resolved. A settings
+    /// write stores only the keys that differ from THIS, not from
+    /// [`Config::default`], so a key the player never touched keeps following
+    /// the shared file. `None` for the default player.
+    #[serde(skip)]
+    pub inherited: Option<Box<Config>>,
     /// Set when the config file exists but does not LOAD: the error, carried so
     /// startup can say what broke instead of running on defaults in silence
     /// (SQ-0580). One bad line costs the user the WHOLE file — TOML is parsed as one
@@ -2389,6 +2416,9 @@ impl Default for Config {
             period_look: default_period_look(),
             honor_timed_input: default_honor_timed_input(),
             config_file: default_config_file(),
+            player: None,
+            player_dir: None,
+            inherited: None,
             config_error: None,
             interpreter_number: None,
             random_seed: None,
@@ -2451,7 +2481,10 @@ pub fn resolve(cli: &Cli) -> Config {
     // Determine which config file to read.
     let config_path = config_path(cli);
 
-    let mut cfg = resolve_config_file(config_path, cli.user_dir.clone());
+    // An invalid name is rejected at startup before this runs; a host that never
+    // validated simply gets the default player here.
+    let player = crate::data_roots::select_player_from_env(cli.player.as_deref()).ok().flatten();
+    let mut cfg = resolve_config_layers(config_path, cli.user_dir.clone(), player.as_deref());
 
     // CLI overrides beat the file — and every one of them that lands on a key
     // `write_config_at` persists is PINNED as it lands, so a later settings save
@@ -2580,11 +2613,71 @@ pub fn resolve(cli: &Cli) -> Config {
 /// by `resolve` itself, after this returns, because those have no meaning
 /// outside an actual command-line launch.
 fn resolve_config_file(config_path: PathBuf, user_dir_override: Option<PathBuf>) -> Config {
+    resolve_config_layers(config_path, user_dir_override, None)
+}
+
+/// Overlay `over` onto `base`: tables merge key by key (so a player's partial
+/// `[keymap]` adds to the shared one), anything else is replaced.
+fn overlay_toml(base: &mut toml::Table, over: toml::Table) {
+    for (k, v) in over {
+        match (base.get_mut(&k), v) {
+            (Some(toml::Value::Table(b)), toml::Value::Table(o)) => overlay_toml(b, o),
+            (_, v) => {
+                base.insert(k, v);
+            }
+        }
+    }
+}
+
+/// [`resolve_config_file`] for a launch that may name a player (SQ-1676).
+///
+/// The layers, lowest first: defaults, the shared `config_path`, then the named
+/// player's `<user_dir>/users/<name>/config.toml` (bare lines, never seeded, so
+/// absent until the player first changes a setting). The returned `Config` reads
+/// as the merge, but its `config_file` is the PLAYER's file and its `inherited`
+/// is the shared config alone, so [`write_config_at`] stores only what differs.
+fn resolve_config_layers(
+    config_path: PathBuf,
+    user_dir_override: Option<PathBuf>,
+    player: Option<&str>,
+) -> Config {
     // Start from defaults.
     let mut cfg = Config { config_file: config_path.clone(), ..Config::default() };
 
+    let mut text = std::fs::read_to_string(&config_path).ok();
+    let mut layer_error: Option<String> = None;
+    let mut baseline: Option<Box<Config>> = None;
+    if let Some(name) = player {
+        let shared = resolve_config_layers(config_path.clone(), user_dir_override.clone(), None);
+        // The player root hangs off the user dir the shared layer resolved to.
+        let root = crate::data_roots::player_root(&shared.user_dir, name);
+        let player_file = root.join("config.toml");
+        if let Some(e) = &shared.config_error {
+            layer_error = Some(format!("the shared config {} is broken: {e}", config_path.display()));
+        }
+        if let Ok(ptext) = std::fs::read_to_string(&player_file) {
+            match ptext.parse::<toml::Table>() {
+                Ok(over) => {
+                    let mut merged = text
+                        .as_deref()
+                        .and_then(|t| t.parse::<toml::Table>().ok())
+                        .unwrap_or_default();
+                    overlay_toml(&mut merged, over);
+                    text = toml::to_string(&merged).ok();
+                }
+                Err(e) => layer_error = Some(e.to_string()),
+            }
+        }
+        cfg.config_file = player_file;
+        cfg.player = Some(name.to_string());
+        cfg.player_dir = Some(root);
+        baseline = Some(Box::new(shared));
+    }
+    cfg.config_error = layer_error;
+    cfg.inherited = baseline;
+
     // Layer in the config file if it exists.
-    if let Ok(text) = std::fs::read_to_string(&config_path) {
+    if let Some(text) = text {
         let parsed = toml::from_str::<Config>(&text);
         // A file that exists but doesn't load used to be dropped in silence, so one
         // stray character reverted every setting to its default with nothing said —
@@ -2699,6 +2792,9 @@ pub fn resolve_at(user_dir: &std::path::Path) -> Config {
 struct ConfigDoc<'a> {
     doc: toml_edit::DocumentMut,
     one_run: &'a OneRunOverrides,
+    /// True when writing a named player's file (SQ-1676): a key whose value
+    /// matches what the player inherits is not added, so the file holds overrides only.
+    player_file: bool,
 }
 
 impl std::ops::Deref for ConfigDoc<'_> {
@@ -2741,9 +2837,15 @@ impl ConfigDoc<'_> {
     /// `Some` writes it whatever it is, `None` REMOVES it. Leaving a `None` in place
     /// meant a reset-to-default in the settings panel held for exactly as long as the
     /// session, since an absent key and a present one are different states here.
-    fn put_or_remove(&mut self, key: &str, value: Option<toml_edit::Value>) {
+    fn put_or_remove(&mut self, key: &str, value: Option<toml_edit::Value>, inherited: Option<toml_edit::Value>) {
         match value {
             Some(v) if self.one_run.still_holds(key, &v) => {}
+            // A player's file holds overrides only: a value equal to the inherited
+            // one is not worth a line unless the file already carries the key.
+            Some(v)
+                if self.player_file
+                    && !self.doc.contains_key(key)
+                    && inherited.as_ref().is_some_and(|i| i.to_string() == v.to_string()) => {}
             Some(v) => { self.doc[key] = toml_edit::Item::Value(v); }
             None => { self.doc.remove(key); }
         }
@@ -2833,16 +2935,25 @@ pub fn write_config_at(config_path: &std::path::Path, cfg: &Config) -> std::io::
     // Defaults to compare against, so a setting nobody changed is not written out —
     // and the one-run pins, so a value this launch was handed is not written out at
     // all (SQ-0807).
-    let def = Config::default();
-    let mut doc = ConfigDoc { doc: parsed, one_run: &cfg.one_run };
+    //
+    // For a named player (SQ-1676) "default" is what they INHERIT: the shared
+    // config, not `Config::default()`. A key they never changed then stays out of
+    // their file and keeps following the shared one.
+    let def = cfg.inherited.as_deref().cloned().unwrap_or_default();
+    let player_file = cfg.inherited.is_some();
+    let mut doc = ConfigDoc { doc: parsed, one_run: &cfg.one_run, player_file };
 
     // Top-level scalar fields. Always stamp the current schema version — writing
-    // the file brings it up to the format this build produces.
-    doc["version"] = toml_edit::value(CONFIG_SCHEMA_VERSION as i64);
+    // the file brings it up to the format this build produces. (A player's file is
+    // bare lines with no template or stamp: the shared file owns the version.)
+    if !player_file {
+        doc["version"] = toml_edit::value(CONFIG_SCHEMA_VERSION as i64);
+    }
     doc.put("user_dir", cfg.user_dir.to_string_lossy().as_ref().into(), cfg.user_dir == def.user_dir);
     doc.put_or_remove(
         "default_story_dir",
         cfg.default_story_dir.as_ref().map(|p| p.to_string_lossy().as_ref().into()),
+        def.default_story_dir.as_ref().map(|p| p.to_string_lossy().as_ref().into()),
     );
     doc.put("auto_load", cfg.auto_load.into(), cfg.auto_load == def.auto_load);
     doc.put("auto_save", cfg.auto_save.into(), cfg.auto_save == def.auto_save);
@@ -2926,17 +3037,18 @@ pub fn write_config_at(config_path: &std::path::Path, cfg: &Config) -> std::io::
     doc.put_or_remove(
         "interpreter_number",
         cfg.interpreter_number.map(|n| (n as i64).into()),
+        def.interpreter_number.map(|n| (n as i64).into()),
     );
     // Written only when the user pinned one. An absent key is "a fresh seed every
     // launch", and writing back the seed THIS session happened to draw would turn
     // one entropy draw into a permanent pin — every later launch replaying the one
     // game the user happened to get today (SQ-0811).
-    doc.put_or_remove("random_seed", cfg.random_seed.map(|n| i64::from(n).into()));
+    doc.put_or_remove("random_seed", cfg.random_seed.map(|n| i64::from(n).into()), def.random_seed.map(|n| i64::from(n).into()));
     // Written only when the user pinned one: an absent key means "follow the
     // story pane" (ZMSD §8.4), and emitting the measured size would silently turn
     // this session's terminal into a permanent override. (SQ-0532/A-F1)
-    doc.put_or_remove("virtual_screen_cols", cfg.virtual_screen_cols.map(|n| i64::from(n).into()));
-    doc.put_or_remove("virtual_screen_rows", cfg.virtual_screen_rows.map(|n| i64::from(n).into()));
+    doc.put_or_remove("virtual_screen_cols", cfg.virtual_screen_cols.map(|n| i64::from(n).into()), def.virtual_screen_cols.map(|n| i64::from(n).into()));
+    doc.put_or_remove("virtual_screen_rows", cfg.virtual_screen_rows.map(|n| i64::from(n).into()), def.virtual_screen_rows.map(|n| i64::from(n).into()));
     doc.put("split_ratio", i64::from(cfg.split_ratio).into(), cfg.split_ratio == def.split_ratio);
     doc.put("inv_dock_pct", i64::from(cfg.inv_dock_pct).into(), cfg.inv_dock_pct == def.inv_dock_pct);
     doc.put("room_dock_pct", i64::from(cfg.room_dock_pct).into(), cfg.room_dock_pct == def.room_dock_pct);
@@ -2951,7 +3063,7 @@ pub fn write_config_at(config_path: &std::path::Path, cfg: &Config) -> std::io::
     // style pointer — the only visual key written to config.toml. The actual
     // colors/symbols live in the style file ([colors]/[symbols] are no longer
     // emitted here). Visual override sections, if present, are preserved as-is.
-    doc.put_or_remove("style", cfg.style.as_deref().map(|s| s.into()));
+    doc.put_or_remove("style", cfg.style.as_deref().map(|s| s.into()), def.style.as_deref().map(|s| s.into()));
 
     // [search] table — only materialized once something in it is non-default, so a
     // seeded config keeps the commented block instead of gaining an all-defaults table.
@@ -3415,6 +3527,7 @@ mod tests {
             story: Some(PathBuf::from("foo.z5")),
             user_dir: None,
             data_dir: None,
+            player: None,
             config: Some(path.to_path_buf()),
             accel: None,
             sound: None,
@@ -3507,6 +3620,7 @@ mod tests {
             story: Some(PathBuf::from("foo.z5")),
             user_dir: Some(PathBuf::from("/tmp/from-cli")),
             data_dir: None,
+            player: None,
             config: Some(cfg_path.clone()),
             accel: None,
             sound: None,
@@ -3543,6 +3657,7 @@ mod tests {
             story: Some(PathBuf::from("foo.z5")),
             user_dir: None,
             data_dir: None,
+            player: None,
             config: Some(PathBuf::from("/nonexistent/path/config.toml")),
             accel: None,
             sound: None,
@@ -3579,6 +3694,7 @@ mod tests {
             story: Some(PathBuf::from("foo.z5")),
             user_dir: None,
             data_dir: None,
+            player: None,
             config: Some(cfg_path.clone()),
             accel: None,
             sound: None,
@@ -3615,6 +3731,7 @@ mod tests {
             story: Some(PathBuf::from("foo.z5")),
             user_dir: Some(dir.to_path_buf()),
             data_dir: None,
+            player: None,
             config: None,
             accel: None,
             sound: None,
@@ -4000,6 +4117,9 @@ use_defaults = false
             period_look: true,
             honor_timed_input: true,
             config_file: default_config_file(),
+            player: None,
+            player_dir: None,
+            inherited: None,
             config_error: None,
             interpreter_number: None,
             random_seed: None,
@@ -4374,6 +4494,7 @@ use_defaults = false
             story: Some(PathBuf::from("foo.z5")),
             user_dir: None,
             data_dir: None,
+            player: None,
             config: Some(PathBuf::from("/nonexistent/path/config.toml")),
             accel: Some(OnOff::Off),
             sound: None,
@@ -4408,6 +4529,7 @@ use_defaults = false
             story: Some(PathBuf::from("foo.z5")),
             user_dir: None,
             data_dir: None,
+            player: None,
             config: Some(PathBuf::from("/nonexistent/path/config.toml")),
             accel: None,
             sound: None,
@@ -4459,6 +4581,7 @@ use_defaults = false
             story: Some(PathBuf::from("foo.z6")),
             user_dir: None,
             data_dir: None,
+            player: None,
             config: Some(cfg_path.clone()),
             accel: None,
             sound: None,
@@ -4560,6 +4683,7 @@ use_defaults = false
             story: Some(PathBuf::from("foo.z5")),
             user_dir: None,
             data_dir: None,
+            player: None,
             config: Some(cfg_path.clone()),
             accel: None,
             sound: None,
@@ -4596,6 +4720,7 @@ use_defaults = false
             story: Some(PathBuf::from("foo.z5")),
             user_dir: None,
             data_dir: None,
+            player: None,
             config: Some(PathBuf::from("/nonexistent/path/config.toml")),
             accel: None,
             sound: None,
@@ -4633,6 +4758,7 @@ use_defaults = false
             story: Some(PathBuf::from("foo.z5")),
             user_dir: None,
             data_dir: None,
+            player: None,
             config: Some(PathBuf::from("/nonexistent/path/config.toml")),
             accel: None,
             sound: None,
@@ -4705,6 +4831,7 @@ use_defaults = false
             story: Some(PathBuf::from("foo.z5")),
             user_dir: Some(dir.clone()),
             data_dir: None,
+            player: None,
             config: None,
             accel: None,
             sound: None,
@@ -4770,6 +4897,7 @@ use_defaults = false
             story: Some(PathBuf::from("foo.z5")),
             user_dir: None,
             data_dir: None,
+            player: None,
             config: Some(home.join("config.toml")),
             accel: None,
             sound: None,
@@ -4823,6 +4951,7 @@ use_defaults = false
             story: Some(PathBuf::from("foo.z5")),
             user_dir: None,
             data_dir: None,
+            player: None,
             config: Some(path.clone()),
             accel: None,
             sound: None,
@@ -5060,6 +5189,7 @@ use_defaults = false
             story: Some(PathBuf::from("foo.z6")),
             user_dir: None,
             data_dir: None,
+            player: None,
             config: Some(cfg_path.clone()),
             accel: None,
             sound: None,
@@ -5124,6 +5254,7 @@ use_defaults = false
             story: Some(PathBuf::from("foo.z6")),
             user_dir: None,
             data_dir: None,
+            player: None,
             config: Some(cfg_path.clone()),
             accel: None,
             sound: None,
@@ -5186,6 +5317,7 @@ use_defaults = false
             story: Some(PathBuf::from("foo.z5")),
             user_dir: None,
             data_dir: None,
+            player: None,
             config: Some(cfg_path.clone()),
             accel: None,
             sound: None,

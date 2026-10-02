@@ -64,7 +64,7 @@ fn atari_side_a_specimens_yield_one_named_row_each() {
         }
         ran += 1;
         let base = data_base(&format!("atari-{file}"));
-        let rows = app::picker::resolve_entries(&path, &base);
+        let rows = app::picker::resolve_entries(&path, &app::data_roots::DataRoots::single(&base));
         assert_eq!(rows.len(), 1, "{file}: must offer exactly one row, got {rows:?}");
         assert_eq!(rows[0].meta.engine, app::picker::Engine::Scott, "{file}: not classified Scott");
         assert_eq!(&rows[0].title, want_title, "{file}: wrong content-identified title");
@@ -93,7 +93,7 @@ fn mission_impossible_atari_side_a_yields_no_rows_and_no_panic() {
         assert!(stories.is_empty(), "a damaged database must not be offered: {stories:?}");
     }
     let base = data_base("mission-impossible-damaged");
-    let rows = app::picker::resolve_entries(&path, &base);
+    let rows = app::picker::resolve_entries(&path, &app::data_roots::DataRoots::single(&base));
     assert!(rows.is_empty(), "a damaged database must not be offered: {rows:?}");
     let _ = std::fs::remove_dir_all(&base);
 }
@@ -158,7 +158,7 @@ fn apple_ii_boot_sides_yield_one_named_row_each() {
         }
         ran += 1;
         let base = data_base(&format!("apple-{file}"));
-        let rows = app::picker::resolve_entries(&path, &base);
+        let rows = app::picker::resolve_entries(&path, &app::data_roots::DataRoots::single(&base));
         assert_eq!(rows.len(), 1, "{file}: must offer exactly one row, got {rows:?}");
         assert_eq!(rows[0].meta.engine, app::picker::Engine::Scott, "{file}: not classified Scott");
         assert_eq!(&rows[0].title, want_title, "{file}: wrong content-identified title");
@@ -214,7 +214,7 @@ fn questpr1_yields_the_hulk_row() {
         return;
     }
     let base = data_base("questpr1");
-    let rows = app::picker::resolve_entries(&path, &base);
+    let rows = app::picker::resolve_entries(&path, &app::data_roots::DataRoots::single(&base));
     assert_eq!(rows.len(), 1, "QUESTPR1.D64 must offer exactly one row: {rows:?}");
     assert_eq!(rows[0].meta.engine, app::picker::Engine::Scott);
     assert_eq!(rows[0].title, "The Hulk (Commodore 64)");
@@ -284,8 +284,8 @@ fn voodoo_castle_atari_and_apple_ii_have_distinct_save_keys() {
         return;
     }
     let base = data_base("voodoo-keys");
-    let atari_rows = app::picker::resolve_entries(&atari, &base);
-    let apple_rows = app::picker::resolve_entries(&apple, &base);
+    let atari_rows = app::picker::resolve_entries(&atari, &app::data_roots::DataRoots::single(&base));
+    let apple_rows = app::picker::resolve_entries(&apple, &app::data_roots::DataRoots::single(&base));
     assert_eq!(atari_rows.len(), 1);
     assert_eq!(apple_rows.len(), 1);
     assert_ne!(
@@ -293,7 +293,7 @@ fn voodoo_castle_atari_and_apple_ii_have_distinct_save_keys() {
         apple_rows[0].story_key(),
         "the same release build on two platforms must not share a save key"
     );
-    assert_ne!(atari_rows[0].game_dir(&base), apple_rows[0].game_dir(&base));
+    assert_ne!(atari_rows[0].game_dir(&app::data_roots::DataRoots::single(&base)), apple_rows[0].game_dir(&app::data_roots::DataRoots::single(&base)));
     let _ = std::fs::remove_dir_all(&base);
 }
 
@@ -313,8 +313,8 @@ fn the_count_and_claymorgue_castle_do_not_share_a_save_key() {
         return;
     }
     let base = data_base("database-collision");
-    let count_rows = app::picker::resolve_entries(&count, &base);
-    let claymorgue_rows = app::picker::resolve_entries(&claymorgue, &base);
+    let count_rows = app::picker::resolve_entries(&count, &app::data_roots::DataRoots::single(&base));
+    let claymorgue_rows = app::picker::resolve_entries(&claymorgue, &app::data_roots::DataRoots::single(&base));
     assert_eq!(count_rows.len(), 1);
     assert_eq!(claymorgue_rows.len(), 1);
     assert_ne!(
@@ -322,6 +322,6 @@ fn the_count_and_claymorgue_castle_do_not_share_a_save_key() {
         claymorgue_rows[0].story_key(),
         "two different games named DATABASE must not share a save key"
     );
-    assert_ne!(count_rows[0].game_dir(&base), claymorgue_rows[0].game_dir(&base));
+    assert_ne!(count_rows[0].game_dir(&app::data_roots::DataRoots::single(&base)), claymorgue_rows[0].game_dir(&app::data_roots::DataRoots::single(&base)));
     let _ = std::fs::remove_dir_all(&base);
 }

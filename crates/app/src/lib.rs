@@ -66,6 +66,7 @@ pub mod config_template;
 pub mod docs_reference;
 pub mod corpus;
 pub mod cover;
+pub mod data_roots;
 pub mod debug_panel;
 /// Which files are volumes of one multi-disk release (SQ-0844).
 ///

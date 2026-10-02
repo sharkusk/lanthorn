@@ -44,7 +44,7 @@ fn every_row_reports_the_machine_its_own_story_came_off() {
     let base = std::env::temp_dir().join("bm-masterpieces-sides");
     // 66, not 83: seventeen DOS builds are on the disc twice and fold
     // (SQ-0878, pinned in full below).
-    let rows = app::picker::resolve_entries(&disc, &base);
+    let rows = app::picker::resolve_entries(&disc, &app::data_roots::DataRoots::single(&base));
     assert_eq!(rows.len(), 66, "one row per launchable build, per machine");
 
     let mut mac = 0;
@@ -84,7 +84,7 @@ fn one_build_per_machine_survives_and_the_cross_machine_pairs_do_not_fold() {
         return;
     };
     let base = std::env::temp_dir().join("bm-masterpieces-dedupe");
-    let rows = app::picker::resolve_entries(&disc, &base);
+    let rows = app::picker::resolve_entries(&disc, &app::data_roots::DataRoots::single(&base));
     assert_eq!(rows.len(), 66, "83 stories, seventeen of them the same build twice");
 
     let entry = |row: &app::picker::StoryEntry| row.meta.disk_entry.clone().unwrap_or_default();

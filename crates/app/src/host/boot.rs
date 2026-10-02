@@ -34,7 +34,7 @@ use crate::hints;
 use crate::ifid::compute_ifid;
 use crate::session::{apply_turn, GameSession};
 use crate::state::AppState;
-use crate::storage::{default_state_path, game_dir as story_game_dir, quick_save_state_path, story_key_for};
+use crate::storage::{default_state_path, quick_save_state_path, story_key_for};
 
 use super::{flush_screen_trace, flush_v6_trace};
 
@@ -53,8 +53,9 @@ pub struct BootRequest<'a> {
     pub overrides: &'a crate::launch_options::LaunchOverrides,
     /// The launch config (see the type's own docs for why it is owned).
     pub cfg: Config,
-    /// Where per-story saves and sidecars live: `<data_base>/<story-key>/`.
-    pub data_base: PathBuf,
+    /// Where per-story saves and sidecars live (`<player base>/<story-key>.save/`)
+    /// and where the shared catalogue lives (`<catalogue base>/<story-key>.save/`).
+    pub roots: crate::data_roots::DataRoots,
     /// The command-line facts boot reads ([`LaunchFlags::from`] a [`Cli`]).
     pub flags: LaunchFlags,
     /// What the terminal answered, or nothing for a headless host.
@@ -208,7 +209,7 @@ pub struct BootedStory {
     pub resume_source_file: PathBuf,
     pub story_bytes: Vec<u8>,
     pub story_path: PathBuf,
-    pub data_base: PathBuf,
+    pub roots: crate::data_roots::DataRoots,
     /// Whether this boot resumed a past game from the archive at `arc_file`
     /// (`cfg.auto_load` on, a save present, and `Engine::restore_state`
     /// succeeded) rather than starting fresh. A headless host had no way to
@@ -542,7 +543,7 @@ pub(super) fn bump_dim_for_floor(current: u16, floor: u16, probe: impl Fn(u16) -
 // See `pre_boot_host_screen` for the lint.
 #[allow(clippy::field_reassign_with_default)]
 pub fn boot_story(req: BootRequest<'_>, hooks: &mut dyn BootHooks) -> Result<BootedStory, BootError> {
-    let BootRequest { story_path, disk_entry, overrides, mut cfg, data_base, flags, terminal, fresh_start } = req;
+    let BootRequest { story_path, disk_entry, overrides, mut cfg, roots, flags, terminal, fresh_start } = req;
     let TerminalFacts {
         game_picker,
         game_picker_query_answered,
@@ -576,7 +577,7 @@ pub fn boot_story(req: BootRequest<'_>, hooks: &mut dyn BootHooks) -> Result<Boo
     // title table applies is an engine question (SQ-0766).
     let is_scott = matches!(loaded, hints::LoadedStory::Scott(_));
 
-    // Storage (SQ-0284): saves/sidecars live in `<data_base>/<story-key>.save/`,
+    // Storage (SQ-0284): saves/sidecars live in `<player base>/<story-key>.save/`,
     // keyed by the story filename — or, for a story mounted out of a disk image,
     // by that story's own release and serial, because one image holds several
     // games and the filename cannot tell them apart (SQ-0850). Both inputs are
@@ -590,17 +591,18 @@ pub fn boot_story(req: BootRequest<'_>, hooks: &mut dyn BootHooks) -> Result<Boo
     // header names a KNOWN, CATALOGUED commercial release, in which case its
     // saves are unified with a disk-mounted copy of the same build (SQ-1635).
     let disk_build = crate::storage::build_for_key(&story_bytes, disk_image);
-    let game_dir = story_game_dir(
-        &data_base,
-        &story_key_for(crate::storage::StoryOrigin {
+    let story_key = story_key_for(crate::storage::StoryOrigin {
             path: &story_path,
             // The zip half of the same fact (SQ-1098): a container's entry is
             // what tells two of its games apart, and a zip has no build to be
             // keyed by, so leaving this out gave both of them one directory.
             entry: disk_entry,
             build: disk_build.as_ref(),
-        }),
-    );
+        });
+    let game_dir = roots.player_dir(&story_key);
+    // The shared half (SQ-1676): fetched metadata and covers. The same folder as
+    // `game_dir` for the default player.
+    let catalogue_dir = roots.catalogue_dir(&story_key);
     // SQ-0734 tier 3: has the user named a picture archive for this story? Read
     // and PARSED here, ahead of everything, because the flavour it turns out to
     // be is an input to the profile immediately below. The archive itself is
@@ -1300,8 +1302,11 @@ pub fn boot_story(req: BootRequest<'_>, hooks: &mut dyn BootHooks) -> Result<Boo
         }
         crate::hints::LoadedStory::Glulx(bytes) => {
             let pict_blorb = resolve_pict_blorb(&story_path, cfg.images);
-            match GlulxSession::new_in(
-                game_dir.clone(),
+            // The learned-address sidecars (`room-global`/`player-global`) are the
+            // catalogue's, shared by every player (SQ-1676); the saves are not.
+            match GlulxSession::new_with_store(
+                crate::glulx_session::GameStore::writable(game_dir.clone())
+                    .with_catalogue(catalogue_dir.clone()),
                 bytes,
                 cfg.virtual_screen_cols.unwrap_or(crate::config::FALLBACK_SCREEN_COLS) as u32,
                 cfg.virtual_screen_rows.unwrap_or(crate::config::FALLBACK_SCREEN_ROWS) as u32,
@@ -1747,7 +1752,7 @@ pub fn boot_story(req: BootRequest<'_>, hooks: &mut dyn BootHooks) -> Result<Boo
     // names the game the way the list does. The banner heuristic is the tier
     // below it, and the filename stem is the last resort it was meant to be.
     let meta_title =
-        crate::picker::metadata_title_in(&story_path, &game_dir, &ifid, is_scott, &story_bytes);
+        crate::picker::metadata_title_in(&story_path, &catalogue_dir, &ifid, is_scott, &story_bytes);
     state.title =
         crate::session::resolve_title(None, meta_title.as_deref(), banner_title.as_deref(), &story_path);
     let story_filename = story_path.file_name().and_then(|n| n.to_str()).unwrap_or("");
@@ -1996,7 +2001,7 @@ pub fn boot_story(req: BootRequest<'_>, hooks: &mut dyn BootHooks) -> Result<Boo
         resume_source_file: resume_path.unwrap_or(arc_file),
         story_bytes,
         story_path,
-        data_base,
+        roots,
         resumed,
     })
 }

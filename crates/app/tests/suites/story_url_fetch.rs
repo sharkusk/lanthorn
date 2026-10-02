@@ -196,7 +196,7 @@ fn keeping_a_fetched_story_puts_it_where_the_picker_will_find_it() {
     let data_base = scratch("keep-data");
 
     assert!(
-        app::picker::scan_stories(&library, &data_base).is_empty(),
+        app::picker::scan_stories(&library, &app::data_roots::DataRoots::single(&data_base)).is_empty(),
         "the library starts empty, so the row below can only come from the keep"
     );
 
@@ -207,7 +207,7 @@ fn keeping_a_fetched_story_puts_it_where_the_picker_will_find_it() {
     assert_eq!(kept, library.join("curses.z5"));
     assert!(got.path.exists(), "the running game's own file survives the copy");
 
-    let rows = app::picker::scan_stories(&library, &data_base);
+    let rows = app::picker::scan_stories(&library, &app::data_roots::DataRoots::single(&data_base));
     assert_eq!(rows.len(), 1, "the picker lists exactly the story that was kept");
     assert_eq!(rows[0].path, kept);
 
@@ -228,7 +228,7 @@ fn declining_leaves_the_library_exactly_as_it_was() {
         .expect("fetchable");
     let got = story(got);
     // No `keep_in_library` call is what "declined" means.
-    assert!(app::picker::scan_stories(&library, &data_base).is_empty());
+    assert!(app::picker::scan_stories(&library, &app::data_roots::DataRoots::single(&data_base)).is_empty());
     assert!(got.path.exists(), "and it still plays from where it landed");
 
     for d in [temp, library, data_base] {
@@ -411,7 +411,7 @@ fn a_kept_zip_is_visible_to_the_picker() {
     let kept = keep_in_library(&got.path, &library, KeepMode::KeepBoth).expect("kept");
     assert_eq!(kept.extension().unwrap(), "zip");
 
-    let rows = app::picker::scan_stories(&library, &data_base);
+    let rows = app::picker::scan_stories(&library, &app::data_roots::DataRoots::single(&data_base));
     assert_eq!(rows.len(), 1, "the archive the player kept is listed");
     assert_eq!(rows[0].path, kept);
 
@@ -440,7 +440,7 @@ fn an_archive_holding_no_story_is_not_listed() {
     std::fs::write(library.join("photos.zip"), buf.into_inner()).unwrap();
 
     assert!(
-        app::picker::scan_stories(&library, &data_base).is_empty(),
+        app::picker::scan_stories(&library, &app::data_roots::DataRoots::single(&data_base)).is_empty(),
         "an archive with no story in it costs one open and yields no row"
     );
 
@@ -465,7 +465,7 @@ fn a_hint_archive_folds_into_its_game_rather_than_listing_as_one() {
     std::fs::write(library.join("deadline.z5"), zcode_v5()).unwrap();
     std::fs::write(library.join("deadline-hints.zip"), zip_of_a_story()).unwrap();
 
-    let rows = app::picker::scan_stories(&library, &data_base);
+    let rows = app::picker::scan_stories(&library, &app::data_roots::DataRoots::single(&data_base));
     assert_eq!(rows.len(), 1, "one game, not a game plus its clues: {rows:?}");
     assert_eq!(rows[0].filename, "deadline.z5");
     assert_eq!(
@@ -492,7 +492,7 @@ fn a_loose_hint_file_still_outranks_an_archived_one() {
     std::fs::write(library.join("deadlineinv.z5"), zcode_v5()).unwrap();
     std::fs::write(library.join("deadline-hints.zip"), zip_of_a_story()).unwrap();
 
-    let rows = app::picker::scan_stories(&library, &data_base);
+    let rows = app::picker::scan_stories(&library, &app::data_roots::DataRoots::single(&data_base));
     let game = rows.iter().find(|r| r.filename == "deadline.z5").expect("the game is listed");
     assert_eq!(
         game.hint_sidecar.as_deref(),

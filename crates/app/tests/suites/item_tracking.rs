@@ -1337,7 +1337,7 @@ fn sq1662_boot_anchorhead_host(home: &std::path::Path, data_base: &std::path::Pa
         disk_entry: None,
         overrides: &overrides,
         cfg: sq1662_headless_config(home),
-        data_base: data_base.to_path_buf(),
+        roots: app::data_roots::DataRoots::single(data_base.to_path_buf()),
         flags: LaunchFlags::default(),
         terminal: TerminalFacts::default(),
         fresh_start: true,

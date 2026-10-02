@@ -506,14 +506,14 @@ fn ensure_aux(
     cache: &mut [Option<app::picker::StoryAux>],
     stories: &[app::picker::StoryEntry],
     idx: usize,
-    data_base: &std::path::Path,
+    roots: &app::data_roots::DataRoots,
     hint_index: &app::hints::HintIndex,
 ) {
     if let Some(slot) = cache.get_mut(idx) {
         if slot.is_none() {
             // A folder has no aux to resolve (and nothing to open).
             if let Some(entry) = stories.get(idx).filter(|e| !e.is_folder()) {
-                *slot = Some(app::picker::resolve_aux(entry, data_base, hint_index));
+                *slot = Some(app::picker::resolve_aux(entry, roots, hint_index));
             }
         }
     }
@@ -526,11 +526,11 @@ fn rows_for(
     source: &app::picker::StorySource,
     dir: &std::path::Path,
     root: &std::path::Path,
-    data_base: &std::path::Path,
+    roots: &app::data_roots::DataRoots,
 ) -> Vec<app::picker::StoryEntry> {
     match source {
-        app::picker::StorySource::Library(_) => app::picker::library_rows(dir, root, data_base),
-        other @ app::picker::StorySource::DiskSet { .. } => other.scan(data_base),
+        app::picker::StorySource::Library(_) => app::picker::library_rows(dir, root, roots),
+        other @ app::picker::StorySource::DiskSet { .. } => other.scan(roots),
     }
 }
 
@@ -560,17 +560,17 @@ fn first_story(stories: &[app::picker::StoryEntry]) -> Option<&app::picker::Stor
 fn resolve_picker_position(
     source: &app::picker::StorySource,
     root: &std::path::Path,
-    data_base: &std::path::Path,
+    roots: &app::data_roots::DataRoots,
     restore: Option<&PickerPosition>,
 ) -> (std::path::PathBuf, Vec<app::picker::StoryEntry>, usize) {
     let mut dir = restore
         .map(|p| p.dir.clone())
         .filter(|d| d.is_dir())
         .unwrap_or_else(|| root.to_path_buf());
-    let mut stories = rows_for(source, &dir, root, data_base);
+    let mut stories = rows_for(source, &dir, root, roots);
     if stories.is_empty() && dir != root {
         dir = root.to_path_buf();
-        stories = rows_for(source, &dir, root, data_base);
+        stories = rows_for(source, &dir, root, roots);
     }
     let selected = restore
         .and_then(|p| stories.iter().position(|e| e.is(&p.path, p.disk_entry.as_deref())))
@@ -602,16 +602,16 @@ fn enter_folder(
     row_badges: &mut Vec<app::picker::RowBadges>,
     aux_cache: &mut Vec<Option<app::picker::StoryAux>>,
     list: &mut app::list_scroll::ListScroll,
-    data_base: &std::path::Path,
+    roots: &app::data_roots::DataRoots,
     hint_index: &app::hints::HintIndex,
     viewport: usize,
     anim: &app::config::AnimationConfig,
 ) {
     let came_from = std::mem::replace(dir, target.to_path_buf());
-    *stories = rows_for(source, dir, root, data_base);
+    *stories = rows_for(source, dir, root, roots);
     *row_badges = stories
         .iter()
-        .map(|e| app::picker::compute_row_badges(e, data_base, hint_index))
+        .map(|e| app::picker::compute_row_badges(e, roots, hint_index))
         .collect();
     *aux_cache = (0..stories.len()).map(|_| None).collect();
     list.len(stories.len());
@@ -630,13 +630,13 @@ fn apply_find(
     row_badges: &mut Vec<app::picker::RowBadges>,
     aux_cache: &mut Vec<Option<app::picker::StoryAux>>,
     list: &mut app::list_scroll::ListScroll,
-    data_base: &std::path::Path,
+    roots: &app::data_roots::DataRoots,
     hint_index: &app::hints::HintIndex,
 ) {
     *stories = app::picker::search_library(index, root, query);
     *row_badges = stories
         .iter()
-        .map(|e| app::picker::compute_row_badges(e, data_base, hint_index))
+        .map(|e| app::picker::compute_row_badges(e, roots, hint_index))
         .collect();
     *aux_cache = (0..stories.len()).map(|_| None).collect();
     list.len(stories.len());
@@ -661,14 +661,14 @@ fn show_gallery_scope(
     row_badges: &mut Vec<app::picker::RowBadges>,
     aux_cache: &mut Vec<Option<app::picker::StoryAux>>,
     list: &mut app::list_scroll::ListScroll,
-    data_base: &std::path::Path,
+    roots: &app::data_roots::DataRoots,
     hint_index: &app::hints::HintIndex,
 ) {
     let keep = stories.get(list.selected).filter(|e| !e.is_folder()).map(|e| (e.path.clone(), e.meta.disk_entry.clone()));
     *stories = app::picker::search_library_under(index, root, dir, "");
     *row_badges = stories
         .iter()
-        .map(|e| app::picker::compute_row_badges(e, data_base, hint_index))
+        .map(|e| app::picker::compute_row_badges(e, roots, hint_index))
         .collect();
     *aux_cache = (0..stories.len()).map(|_| None).collect();
     list.len(stories.len());
@@ -829,13 +829,13 @@ fn resort_list(
     sort: app::picker::Sort,
     row_badges: &mut Vec<app::picker::RowBadges>,
     aux_cache: &mut Vec<Option<app::picker::StoryAux>>,
-    data_base: &std::path::Path,
+    roots: &app::data_roots::DataRoots,
     hint_index: &app::hints::HintIndex,
 ) -> usize {
     let new_idx = app::picker::resort_preserving_selection(stories, selected, sort);
     *row_badges = stories
         .iter()
-        .map(|e| app::picker::compute_row_badges(e, data_base, hint_index))
+        .map(|e| app::picker::compute_row_badges(e, roots, hint_index))
         .collect();
     *aux_cache = (0..stories.len()).map(|_| None).collect();
     new_idx
@@ -1097,9 +1097,9 @@ fn launch_scroll_recipe(
 fn open_launch_options(
     entry: &app::picker::StoryEntry,
     cfg: &app::config::Config,
-    data_base: &std::path::Path,
+    roots: &app::data_roots::DataRoots,
 ) -> app::launch_options::LaunchOptionsState {
-    let game_dir = entry.game_dir(data_base);
+    let game_dir = entry.game_dir(roots);
     // What this story already inherits, which is what every "did the user change
     // it?" comparison is against.
     let inherited_pictures = app::styles::read_per_game_pictures(&game_dir);
@@ -1236,7 +1236,7 @@ fn right_click_action(hit: Option<(usize, bool)>) -> (Option<usize>, Option<usiz
 pub(crate) fn run_story_picker(
     mut source: app::picker::StorySource,
     cfg: &app::config::Config,
-    data_base: &std::path::Path,
+    roots: &app::data_roots::DataRoots,
     restore: Option<&PickerPosition>,
 ) -> Option<PickedStory> {
     // The library root, and the folder currently listed. They part company the
@@ -1244,26 +1244,26 @@ pub(crate) fn run_story_picker(
     // meet again on Backspace; downloads land in `dir`, the folder on screen.
     let root = source.dir().to_path_buf();
     let (mut dir, mut stories, restored_idx) =
-        resolve_picker_position(&source, &root, data_base, restore);
+        resolve_picker_position(&source, &root, roots, restore);
     if stories.is_empty() {
         eprintln!("lanthorn: no Z-machine story files found in '{}'", dir.display());
         std::process::exit(1);
     }
 
     // Resolve themed colors the same way the game does, so the picker matches.
-    let (base, _w1) = app::style::load_style(cfg.style.as_deref(), &cfg.user_dir);
+    let (base, _w1) = app::style::load_style_for(cfg);
     // No story is booted here, so no machine names a colour table: the picker
     // resolves standard colour numbers through §8.3.1's own (SQ-1393).
     let (cs, _set, _w2) =
         app::style::resolve(&base, &cfg.user_dir, zvm::screen::Palette::Standard);
 
-    // Row badges: each story's per-game dir under `data_base` + one shared hint
+    // Row badges: each story's per-game dir under `roots` + one shared hint
     // index, computed once (SQ-0284). Recomputed by `resort_list` whenever the
     // list reorders, so it stays index-aligned with `stories`.
     let hint_index = app::hints::load_hint_index(&cfg.user_dir);
     let mut row_badges: Vec<app::picker::RowBadges> = stories
         .iter()
-        .map(|e| app::picker::compute_row_badges(e, data_base, &hint_index))
+        .map(|e| app::picker::compute_row_badges(e, roots, &hint_index))
         .collect();
     let sym_cfg = app::style::finalize_symbols(&base.symbols);
     let badge_glyphs = app::picker::BadgeGlyphs::from_symbols(&sym_cfg);
@@ -1354,7 +1354,7 @@ pub(crate) fn run_story_picker(
     // sender, which ends the worker thread's `recv()` loop.
     let fetcher = app::fetch_worker::Fetcher::new(
         Box::new(app::ifdb::IfdbClient::new()),
-        data_base.to_path_buf(),
+        roots.catalogue().to_path_buf(),
         Duration::from_millis(500),
     );
     // On-demand InvisiClues downloader (SQ-0445): `H` fetches a matching hint
@@ -1393,7 +1393,7 @@ pub(crate) fn run_story_picker(
     let mut find_field: Option<app::text_field::TextField> = None;
     let index_rx = match &source {
         app::picker::StorySource::Library(_) => {
-            Some(app::picker::spawn_library_index(root.clone(), data_base.to_path_buf()))
+            Some(app::picker::spawn_library_index(root.clone(), roots.clone()))
         }
         // A multi-disk set is one release, not a tree; there is nothing to walk.
         app::picker::StorySource::DiskSet { .. } => None,
@@ -1416,7 +1416,7 @@ pub(crate) fn run_story_picker(
     let search_worker = app::ifdb_search::SearchWorker::new(
         Box::new(app::ifdb_search::IfdbSearchClient::new()),
         Box::new(app::ifdb::IfdbClient::new()),
-        data_base.to_path_buf(),
+        roots.clone(),
     );
     let mut search_modal: Option<app::ifdb_search_modal::SearchModal> = None;
     let mut search_area = Rect::new(0, 0, 0, 0);
@@ -1564,7 +1564,7 @@ pub(crate) fn run_story_picker(
                             &stories, list.selected, &mut gallery_first_row,
                             &mut gallery_restore_rows_from_top, &heading, &cs, &keymap,
                             cover_picker.as_ref(), gallery_scroll_in_motion(gallery_scroll_motion_at),
-                            &mut cover, &mut tile_encoder, data_base, list_area, buf,
+                            &mut cover, &mut tile_encoder, roots, list_area, buf,
                         );
                         gallery_cols = cols.max(1);
                         gallery_vis = vis.max(1);
@@ -1639,7 +1639,7 @@ pub(crate) fn run_story_picker(
                         cover_picker.as_ref(),
                         &mut cover,
                         &entry.path,
-                        &entry.cover_key(data_base),
+                        &entry.cover_key(roots),
                         slide.active(),
                         entry.hint_sidecar.as_deref(),
                         &cs,
@@ -1741,11 +1741,11 @@ pub(crate) fn run_story_picker(
                 stories
                     .get(list.selected)
                     .filter(|e| !e.is_folder())
-                    .map(|e| (e.cover_key(data_base), e.game_dir(data_base)))
+                    .map(|e| (e.cover_key(roots), e.catalogue_dir(roots)))
             })
             .flatten()
         {
-            ensure_aux(&mut aux_cache, &stories, list.selected, data_base, &hint_index);
+            ensure_aux(&mut aux_cache, &stories, list.selected, roots, &hint_index);
             if list.selected != last_sel {
                 last_sel = list.selected;
                 sel_changed_at = Instant::now();
@@ -1768,9 +1768,9 @@ pub(crate) fn run_story_picker(
         if view == PickerView::Gallery {
             for &idx in &gallery_visible {
                 if let Some(entry) = stories.get(idx).filter(|e| !e.is_folder()) {
-                    let p = entry.cover_key(data_base);
+                    let p = entry.cover_key(roots);
                     if !cover.has(&p) && !requested.contains(&p) {
-                        decoder.request(p.clone(), entry.game_dir(data_base));
+                        decoder.request(p.clone(), entry.catalogue_dir(roots));
                         requested.insert(p);
                     }
                 }
@@ -1807,9 +1807,9 @@ pub(crate) fn run_story_picker(
         }
         if index_grew {
             if let Some(field) = &find_field {
-                apply_find(&index, &root, field.as_str(), &mut stories, &mut row_badges, &mut aux_cache, &mut list, data_base, &hint_index);
+                apply_find(&index, &root, field.as_str(), &mut stories, &mut row_badges, &mut aux_cache, &mut list, roots, &hint_index);
             } else if gallery_all_folders(view, false, index_rx.is_some()) {
-                show_gallery_scope(&index, &root, &dir, &mut stories, &mut row_badges, &mut aux_cache, &mut list, data_base, &hint_index);
+                show_gallery_scope(&index, &root, &dir, &mut stories, &mut row_badges, &mut aux_cache, &mut list, roots, &hint_index);
             }
         }
 
@@ -1833,7 +1833,7 @@ pub(crate) fn run_story_picker(
                 // that share one path, and only the disk entry says which of
                 // them this result belongs to (SQ-0859).
                 let disk_entry = p.disk_entry.as_deref();
-                if let Some(fresh) = app::picker::resolve_entry_from(&p.path, disk_entry, data_base)
+                if let Some(fresh) = app::picker::resolve_entry_from(&p.path, disk_entry, roots)
                 {
                     if let Some(slot) = stories.iter_mut().find(|e| e.is(&p.path, disk_entry)) {
                         *slot = fresh;
@@ -1846,7 +1846,7 @@ pub(crate) fn run_story_picker(
                     if let Some(key) = stories
                         .iter()
                         .find(|e| e.is(&p.path, disk_entry))
-                        .map(|e| e.cover_key(data_base))
+                        .map(|e| e.cover_key(roots))
                     {
                         cover.forget(&key);
                         requested.remove(&key);
@@ -1882,7 +1882,7 @@ pub(crate) fn run_story_picker(
                 }
             }
             list.select(
-                resort_list(&mut stories, list.selected, sort, &mut row_badges, &mut aux_cache, data_base, &hint_index),
+                resort_list(&mut stories, list.selected, sort, &mut row_badges, &mut aux_cache, roots, &hint_index),
                 viewport,
                 anim,
             );
@@ -1902,7 +1902,7 @@ pub(crate) fn run_story_picker(
                         stories.iter().position(|e| e.is(&r.story, r.disk_entry.as_deref()))
                     {
                         stories[idx].hint_sidecar = Some(r.dest);
-                        row_badges[idx] = app::picker::compute_row_badges(&stories[idx], data_base, &hint_index);
+                        row_badges[idx] = app::picker::compute_row_badges(&stories[idx], roots, &hint_index);
                     }
                     progress_line = Some(format!("Downloaded hints for {}", r.title));
                 }
@@ -1935,15 +1935,15 @@ pub(crate) fn run_story_picker(
                             members.push(new_path.clone());
                         }
                     }
-                    stories = rows_for(&source, &dir, &root, data_base);
+                    stories = rows_for(&source, &dir, &root, roots);
                     merge_index(&mut index, &stories);
                     if gallery_all_folders(view, find_field.is_some(), index_rx.is_some()) {
-                        show_gallery_scope(&index, &root, &dir, &mut stories, &mut row_badges, &mut aux_cache, &mut list, data_base, &hint_index);
+                        show_gallery_scope(&index, &root, &dir, &mut stories, &mut row_badges, &mut aux_cache, &mut list, roots, &hint_index);
                     }
                     app::picker::resort_preserving_selection(&mut stories, 0, sort);
                     row_badges = stories
                         .iter()
-                        .map(|e| app::picker::compute_row_badges(e, data_base, &hint_index))
+                        .map(|e| app::picker::compute_row_badges(e, roots, &hint_index))
                         .collect();
                     aux_cache = (0..stories.len()).map(|_| None).collect();
                     list.len(stories.len());
@@ -1990,15 +1990,15 @@ pub(crate) fn run_story_picker(
                         members.push(new_path.clone());
                     }
                 }
-                stories = rows_for(&source, &dir, &root, data_base);
+                stories = rows_for(&source, &dir, &root, roots);
                     merge_index(&mut index, &stories);
                     if gallery_all_folders(view, find_field.is_some(), index_rx.is_some()) {
-                        show_gallery_scope(&index, &root, &dir, &mut stories, &mut row_badges, &mut aux_cache, &mut list, data_base, &hint_index);
+                        show_gallery_scope(&index, &root, &dir, &mut stories, &mut row_badges, &mut aux_cache, &mut list, roots, &hint_index);
                     }
                 app::picker::resort_preserving_selection(&mut stories, 0, sort);
                 row_badges = stories
                     .iter()
-                    .map(|e| app::picker::compute_row_badges(e, data_base, &hint_index))
+                    .map(|e| app::picker::compute_row_badges(e, roots, &hint_index))
                     .collect();
                 aux_cache = (0..stories.len()).map(|_| None).collect();
                 list.len(stories.len());
@@ -2129,8 +2129,7 @@ pub(crate) fn run_story_picker(
                                 // Keyed on the story the dialog was opened
                                 // for, which on a compilation is not the one
                                 // the image's path resolves to (SQ-0859).
-                                let game_dir = app::storage::game_dir(
-                                    data_base,
+                                let game_dir = roots.player_dir(
                                     &app::storage::story_key_at_from(
                                         &lo.story_path,
                                         lo.disk_entry.as_deref(),
@@ -2231,10 +2230,10 @@ pub(crate) fn run_story_picker(
                             find_field = None;
                             panel_scroll = 0;
                             if gallery_all_folders(view, false, index_rx.is_some()) {
-                                show_gallery_scope(&index, &root, &dir, &mut stories, &mut row_badges, &mut aux_cache, &mut list, data_base, &hint_index);
+                                show_gallery_scope(&index, &root, &dir, &mut stories, &mut row_badges, &mut aux_cache, &mut list, roots, &hint_index);
                             } else {
                                 let here = dir.clone();
-                                enter_folder(&source, &mut dir, &root, &here, &mut stories, &mut row_badges, &mut aux_cache, &mut list, data_base, &hint_index, viewport, anim);
+                                enter_folder(&source, &mut dir, &root, &here, &mut stories, &mut row_badges, &mut aux_cache, &mut list, roots, &hint_index, viewport, anim);
                             }
                         }
                         Enter => {
@@ -2271,7 +2270,7 @@ pub(crate) fn run_story_picker(
                     if refilter {
                         panel_scroll = 0;
                         let query = find_field.as_ref().map(|f| f.as_str().to_string()).unwrap_or_default();
-                        apply_find(&index, &root, &query, &mut stories, &mut row_badges, &mut aux_cache, &mut list, data_base, &hint_index);
+                        apply_find(&index, &root, &query, &mut stories, &mut row_badges, &mut aux_cache, &mut list, roots, &hint_index);
                     }
                 } else if let Some(field) = manual_ifdb.as_mut() {
                     match k.code {
@@ -2462,8 +2461,7 @@ pub(crate) fn run_story_picker(
                                 // Keyed on the story the dialog was opened
                                 // for, which on a compilation is not the one
                                 // the image's path resolves to (SQ-0859).
-                                let game_dir = app::storage::game_dir(
-                                    data_base,
+                                let game_dir = roots.player_dir(
                                     &app::storage::story_key_at_from(
                                         &lo.story_path,
                                         lo.disk_entry.as_deref(),
@@ -2543,7 +2541,7 @@ pub(crate) fn run_story_picker(
                             // A double-click on a folder enters it, like Enter.
                             let target = stories[idx].path.clone();
                             panel_scroll = 0;
-                            enter_folder(&source, &mut dir, &root, &target, &mut stories, &mut row_badges, &mut aux_cache, &mut list, data_base, &hint_index, viewport, anim);
+                            enter_folder(&source, &mut dir, &root, &target, &mut stories, &mut row_badges, &mut aux_cache, &mut list, roots, &hint_index, viewport, anim);
                             last_click = None;
                         } else if double {
                             let (rows_from_top, gallery_rows_from_top) =
@@ -2555,7 +2553,7 @@ pub(crate) fn run_story_picker(
                             panel_scroll = 0;
                             list.select(idx, viewport, anim);
                             if slide.open {
-                                ensure_aux(&mut aux_cache, &stories, list.selected, data_base, &hint_index);
+                                ensure_aux(&mut aux_cache, &stories, list.selected, roots, &hint_index);
                             }
                             last_click = Some((idx, now));
                         }
@@ -2569,7 +2567,7 @@ pub(crate) fn run_story_picker(
                             sort.desc = false;
                         }
                         list.select(
-                            resort_list(&mut stories, list.selected, sort, &mut row_badges, &mut aux_cache, data_base, &hint_index),
+                            resort_list(&mut stories, list.selected, sort, &mut row_badges, &mut aux_cache, roots, &hint_index),
                             viewport,
                             anim,
                         );
@@ -2712,7 +2710,7 @@ pub(crate) fn run_story_picker(
                 Some(entry) if entry.is_folder() => {
                     let target = entry.path.clone();
                     panel_scroll = 0;
-                    enter_folder(&source, &mut dir, &root, &target, &mut stories, &mut row_badges, &mut aux_cache, &mut list, data_base, &hint_index, viewport, anim);
+                    enter_folder(&source, &mut dir, &root, &target, &mut stories, &mut row_badges, &mut aux_cache, &mut list, roots, &hint_index, viewport, anim);
                 }
                 Some(entry) => {
                     let (rows_from_top, gallery_rows_from_top) =
@@ -2729,7 +2727,7 @@ pub(crate) fn run_story_picker(
             // as well.
             Some(app::browser::BrowserAction::OpenLaunchOptions) => {
                 if let Some(entry) = stories.get(list.selected).filter(|e| !e.is_folder()) {
-                    launch_opts = Some(open_launch_options(entry, cfg, data_base));
+                    launch_opts = Some(open_launch_options(entry, cfg, roots));
                 }
             }
             // The per-story menu (SQ-1227). A folder has none of these
@@ -2752,7 +2750,7 @@ pub(crate) fn run_story_picker(
                     find_field = Some(app::text_field::TextField::new(""));
                     progress_line = None;
                     panel_scroll = 0;
-                    apply_find(&index, &root, "", &mut stories, &mut row_badges, &mut aux_cache, &mut list, data_base, &hint_index);
+                    apply_find(&index, &root, "", &mut stories, &mut row_badges, &mut aux_cache, &mut list, roots, &hint_index);
                 }
             }
             // Up one folder; inert at the root.
@@ -2762,9 +2760,9 @@ pub(crate) fn run_story_picker(
                         panel_scroll = 0;
                         if gallery_all_folders(view, find_field.is_some(), index_rx.is_some()) {
                             dir = parent;
-                            show_gallery_scope(&index, &root, &dir, &mut stories, &mut row_badges, &mut aux_cache, &mut list, data_base, &hint_index);
+                            show_gallery_scope(&index, &root, &dir, &mut stories, &mut row_badges, &mut aux_cache, &mut list, roots, &hint_index);
                         } else {
-                            enter_folder(&source, &mut dir, &root, &parent, &mut stories, &mut row_badges, &mut aux_cache, &mut list, data_base, &hint_index, viewport, anim);
+                            enter_folder(&source, &mut dir, &root, &parent, &mut stories, &mut row_badges, &mut aux_cache, &mut list, roots, &hint_index, viewport, anim);
                         }
                     }
                 }
@@ -2787,7 +2785,7 @@ pub(crate) fn run_story_picker(
                     slide.arm(&cfg.animation);
                     if target {
                         panel_scroll = 0;
-                        ensure_aux(&mut aux_cache, &stories, list.selected, data_base, &hint_index);
+                        ensure_aux(&mut aux_cache, &stories, list.selected, roots, &hint_index);
                     }
                 }
             }
@@ -2807,11 +2805,11 @@ pub(crate) fn run_story_picker(
                 if find_field.is_none() && index_rx.is_some() {
                     panel_scroll = 0;
                     if matches!(view, PickerView::Gallery) {
-                        show_gallery_scope(&index, &root, &dir, &mut stories, &mut row_badges, &mut aux_cache, &mut list, data_base, &hint_index);
+                        show_gallery_scope(&index, &root, &dir, &mut stories, &mut row_badges, &mut aux_cache, &mut list, roots, &hint_index);
                     } else {
                         let keep = stories.get(list.selected).map(|e| e.path.clone());
                         let here = dir.clone();
-                        enter_folder(&source, &mut dir, &root, &here, &mut stories, &mut row_badges, &mut aux_cache, &mut list, data_base, &hint_index, viewport, anim);
+                        enter_folder(&source, &mut dir, &root, &here, &mut stories, &mut row_badges, &mut aux_cache, &mut list, roots, &hint_index, viewport, anim);
                         if let Some(idx) = keep.and_then(|p| stories.iter().position(|e| e.path == p)) {
                             list.select(idx, viewport, anim);
                         }
@@ -2939,7 +2937,7 @@ pub(crate) fn run_story_picker(
                     app::picker::SortKey::Type => app::picker::SortKey::Title,
                 };
                 list.select(
-                    resort_list(&mut stories, list.selected, sort, &mut row_badges, &mut aux_cache, data_base, &hint_index),
+                    resort_list(&mut stories, list.selected, sort, &mut row_badges, &mut aux_cache, roots, &hint_index),
                     viewport,
                     anim,
                 );
@@ -2947,7 +2945,7 @@ pub(crate) fn run_story_picker(
             Some(app::browser::BrowserAction::ReverseSort) => {
                 sort.desc = !sort.desc;
                 list.select(
-                    resort_list(&mut stories, list.selected, sort, &mut row_badges, &mut aux_cache, data_base, &hint_index),
+                    resort_list(&mut stories, list.selected, sort, &mut row_badges, &mut aux_cache, roots, &hint_index),
                     viewport,
                     anim,
                 );
@@ -3293,7 +3291,7 @@ fn draw_story_gallery(
     // Where per-game directories live: a tile's cover is cached under the ROW's
     // key, which for one of several stories off a disk image is that story's own
     // directory (SQ-0859).
-    data_base: &std::path::Path,
+    roots: &app::data_roots::DataRoots,
     area: Rect,
     buf: &mut ratatui::buffer::Buffer,
 ) -> (Vec<(usize, Rect)>, usize, usize) {
@@ -3372,7 +3370,7 @@ fn draw_story_gallery(
             }
             let mut drew_cover = false;
             if let Some(picker) = picker.filter(|_| !entry.is_folder()) {
-                let key = entry.cover_key(data_base);
+                let key = entry.cover_key(roots);
                 if cover.has(&key) {
                     // Centre the cover in the tile via a self-computed fitted rect
                     // (image aspect + cell size), so it centres on both axes no
@@ -4894,7 +4892,7 @@ mod tests {
                 "z5" | "z6" => None,
                 _ => continue,
             };
-            let Some(entry) = app::picker::resolve_entry(&path, &data_base) else {
+            let Some(entry) = app::picker::resolve_entry(&path, &app::data_roots::DataRoots::single(&data_base)) else {
                 continue; // not launchable — the picker wouldn't list it either
             };
             let label = super::interp_label(&entry.meta, false);
@@ -6376,7 +6374,7 @@ mod tests {
             &story,
             Some(app::picker::ScottPictures::NativeC64 { pictures: 11 }),
         );
-        let st = super::open_launch_options(&native, &cfg, &dir);
+        let st = super::open_launch_options(&native, &cfg, &app::data_roots::DataRoots::single(&dir));
         assert!(st.scott_native_pictures, "a native C64 entry must offer the row");
 
         // SQ-1480: the ZX Spectrum releases decode through the SAME
@@ -6385,15 +6383,15 @@ mod tests {
             &story,
             Some(app::picker::ScottPictures::NativeZx { pictures: 11 }),
         );
-        let st = super::open_launch_options(&native_zx, &cfg, &dir);
+        let st = super::open_launch_options(&native_zx, &cfg, &app::data_roots::DataRoots::single(&dir));
         assert!(st.scott_native_pictures, "a native ZX Spectrum entry must offer the row too");
 
         let blorb = scott_entry_with_pictures(&story, Some(app::picker::ScottPictures::Blorb));
-        let st = super::open_launch_options(&blorb, &cfg, &dir);
+        let st = super::open_launch_options(&blorb, &cfg, &app::data_roots::DataRoots::single(&dir));
         assert!(!st.scott_native_pictures, "a Blorb's pictures have no second resolution");
 
         let text_only = scott_entry_with_pictures(&story, None);
-        let st = super::open_launch_options(&text_only, &cfg, &dir);
+        let st = super::open_launch_options(&text_only, &cfg, &app::data_roots::DataRoots::single(&dir));
         assert!(!st.scott_native_pictures, "a text-only story has no row at all");
 
         // SQ-1475: family C is bitmaps, so there is no second resolution to
@@ -6405,7 +6403,7 @@ mod tests {
                 pictures: 70,
             }),
         );
-        let st = super::open_launch_options(&saga, &cfg, &dir);
+        let st = super::open_launch_options(&saga, &cfg, &app::data_roots::DataRoots::single(&dir));
         assert!(!st.scott_native_pictures, "family C is bitmaps — one resolution only");
 
         // SQ-1524/SQ-1525/SQ-1526: the Atari's line-art format draws at a
@@ -6420,7 +6418,7 @@ mod tests {
                 pictures: 12,
             }),
         );
-        let st = super::open_launch_options(&atari_bitmap, &cfg, &dir);
+        let st = super::open_launch_options(&atari_bitmap, &cfg, &app::data_roots::DataRoots::single(&dir));
         assert!(!st.scott_native_pictures, "Atari family-C is bitmaps too — one resolution only");
 
         let atari_line_art = scott_entry_with_pictures(
@@ -6430,7 +6428,7 @@ mod tests {
                 pictures: 92,
             }),
         );
-        let st = super::open_launch_options(&atari_line_art, &cfg, &dir);
+        let st = super::open_launch_options(&atari_line_art, &cfg, &app::data_roots::DataRoots::single(&dir));
         assert!(st.scott_native_pictures, "Atari line art must offer the resolution row");
 
         let _ = std::fs::remove_dir_all(&dir);
@@ -7416,15 +7414,15 @@ mod tests {
         let data_base = temp_dir("resort-align-data");
         let hint_index = app::hints::load_hint_index(&data_base);
 
-        let mut stories = app::picker::scan_stories(&stories_dir, &data_base);
+        let mut stories = app::picker::scan_stories(&stories_dir, &app::data_roots::DataRoots::single(&data_base));
         assert_eq!(stories.len(), 2);
         let mut row_badges: Vec<app::picker::RowBadges> = stories
             .iter()
-            .map(|e| app::picker::compute_row_badges(e, &data_base, &hint_index))
+            .map(|e| app::picker::compute_row_badges(e, &app::data_roots::DataRoots::single(&data_base), &hint_index))
             .collect();
         let mut aux_cache: Vec<Option<app::picker::StoryAux>> = vec![Some(app::picker::resolve_aux(
             &stories[0],
-            &data_base,
+            &app::data_roots::DataRoots::single(&data_base),
             &hint_index,
         ))];
         aux_cache.push(None);
@@ -7436,7 +7434,7 @@ mod tests {
             app::picker::Sort { key: app::picker::SortKey::Title, desc: true },
             &mut row_badges,
             &mut aux_cache,
-            &data_base,
+            &app::data_roots::DataRoots::single(&data_base),
             &hint_index,
         );
 
@@ -7518,7 +7516,7 @@ mod tests {
         std::fs::write(stories_dir.join("zork2.z5"), b_bytes.clone()).unwrap();
         let data_base = temp_dir("sweep-data");
 
-        let mut stories = app::picker::scan_stories(&stories_dir, &data_base);
+        let mut stories = app::picker::scan_stories(&stories_dir, &app::data_roots::DataRoots::single(&data_base));
         assert_eq!(stories.len(), 2);
         let selected = stories.iter().position(|e| e.path.ends_with("zork2.z5")).unwrap();
         let ifid_b = stories[selected].meta.ifid.clone();
@@ -7548,7 +7546,7 @@ mod tests {
 
         // Exactly what the picker loop's drain handler does per progress item.
         for p in &progress {
-            if let Some(fresh) = app::picker::resolve_entry(&p.path, &data_base) {
+            if let Some(fresh) = app::picker::resolve_entry(&p.path, &app::data_roots::DataRoots::single(&data_base)) {
                 if let Some(slot) = stories.iter_mut().find(|e| e.path == p.path) {
                     *slot = fresh;
                 }
@@ -7582,7 +7580,7 @@ mod tests {
         let mut first_row = 0usize;
         // No picker → no cover art → each tile shows its title centred in the band.
         let (rects, cols, vis) = super::draw_story_gallery(
-            &stories, 1, &mut first_row, &mut None, &super::PickerHeading::browse(std::path::Path::new("/tmp")), &cs, &km(), None, false, &mut cover, &mut tiles, std::path::Path::new("/tmp"), area, &mut buf,
+            &stories, 1, &mut first_row, &mut None, &super::PickerHeading::browse(std::path::Path::new("/tmp")), &cs, &km(), None, false, &mut cover, &mut tiles, &app::data_roots::DataRoots::single(std::path::Path::new("/tmp")), area, &mut buf,
         );
 
         assert!(cols >= 1 && vis >= 1);
@@ -7831,7 +7829,7 @@ mod tests {
         let mut tiles = app::cover::TileEncoder::detached();
         let mut first_row = 0usize;
         let (rects, _cols, _vis) = super::draw_story_gallery(
-            &stories, 39, &mut first_row, &mut None, &super::PickerHeading::browse(std::path::Path::new("/tmp")), &cs, &km(), None, false, &mut cover, &mut tiles, std::path::Path::new("/tmp"), area, &mut buf,
+            &stories, 39, &mut first_row, &mut None, &super::PickerHeading::browse(std::path::Path::new("/tmp")), &cs, &km(), None, false, &mut cover, &mut tiles, &app::data_roots::DataRoots::single(std::path::Path::new("/tmp")), area, &mut buf,
         );
         assert!(first_row > 0, "grid scrolled down to keep the last cover visible");
         assert!(rects.iter().any(|(i, _)| *i == 39), "the selected tile is on screen");
@@ -7854,7 +7852,7 @@ mod tests {
         let (_, cols, vis) = super::draw_story_gallery(
             &stories, 23, &mut first_row, &mut restore,
             &super::PickerHeading::browse(std::path::Path::new("/tmp")), &cs, &km(), None, false,
-            &mut cover, &mut tiles, std::path::Path::new("/tmp"), area, &mut buf,
+            &mut cover, &mut tiles, &app::data_roots::DataRoots::single(std::path::Path::new("/tmp")), area, &mut buf,
         );
         assert_eq!(cols, 4, "sanity: the grid really is 4 columns wide at this area");
         assert_eq!(vis, 3, "sanity: 3 rows visible");
@@ -7869,7 +7867,7 @@ mod tests {
         super::draw_story_gallery(
             &stories, 0, &mut first_row, &mut restore,
             &super::PickerHeading::browse(std::path::Path::new("/tmp")), &cs, &km(), None, false,
-            &mut cover, &mut tiles, std::path::Path::new("/tmp"), area, &mut buf,
+            &mut cover, &mut tiles, &app::data_roots::DataRoots::single(std::path::Path::new("/tmp")), area, &mut buf,
         );
         assert_eq!(first_row, 0, "ordinary scroll_to pulled the window back up to the new selection");
     }
@@ -7963,7 +7961,7 @@ mod tests {
             let mut buf = Buffer::empty(area);
             super::draw_story_gallery(
                 &stories, 0, &mut first_row, &mut None, &super::PickerHeading::browse(std::path::Path::new("/tmp")),
-                &cs, &km(), Some(&picker), true, &mut cover, &mut tiles, std::path::Path::new("/tmp"), area, &mut buf,
+                &cs, &km(), Some(&picker), true, &mut cover, &mut tiles, &app::data_roots::DataRoots::single(std::path::Path::new("/tmp")), area, &mut buf,
             );
             assert!(!has_payload(&buf), "mid-scroll must not carry a sixel payload");
             assert!(!tiles.pending(), "mid-scroll must not queue an encode either");
@@ -7973,7 +7971,7 @@ mod tests {
         let mut buf = Buffer::empty(area);
         super::draw_story_gallery(
             &stories, 0, &mut first_row, &mut None, &super::PickerHeading::browse(std::path::Path::new("/tmp")),
-            &cs, &km(), Some(&picker), false, &mut cover, &mut tiles, std::path::Path::new("/tmp"), area, &mut buf,
+            &cs, &km(), Some(&picker), false, &mut cover, &mut tiles, &app::data_roots::DataRoots::single(std::path::Path::new("/tmp")), area, &mut buf,
         );
         assert!(tiles.pending(), "the settled render queues the tile's encode");
 
@@ -7984,7 +7982,7 @@ mod tests {
         let mut buf = Buffer::empty(area);
         super::draw_story_gallery(
             &stories, 0, &mut first_row, &mut None, &super::PickerHeading::browse(std::path::Path::new("/tmp")),
-            &cs, &km(), Some(&picker), false, &mut cover, &mut tiles, std::path::Path::new("/tmp"), area, &mut buf,
+            &cs, &km(), Some(&picker), false, &mut cover, &mut tiles, &app::data_roots::DataRoots::single(std::path::Path::new("/tmp")), area, &mut buf,
         );
         assert!(has_payload(&buf), "settled render must place the real sixel payload");
     }
@@ -8033,7 +8031,7 @@ mod tests {
         let mut buf = Buffer::empty(area);
         let (rects, _, _) = super::draw_story_gallery(
             &stories, 0, &mut first_row, &mut None, &super::PickerHeading::browse(std::path::Path::new("/tmp")),
-            &cs, &km(), Some(&picker), false, &mut cover, &mut tiles, std::path::Path::new("/tmp"), area, &mut buf,
+            &cs, &km(), Some(&picker), false, &mut cover, &mut tiles, &app::data_roots::DataRoots::single(std::path::Path::new("/tmp")), area, &mut buf,
         );
         assert_eq!(rects.len(), stories.len(), "sanity: every tile is on screen");
         assert!(!has_payload(&buf), "the draw must not build a protocol on this thread");
@@ -8044,7 +8042,7 @@ mod tests {
         let mut buf = Buffer::empty(area);
         super::draw_story_gallery(
             &stories, 0, &mut first_row, &mut None, &super::PickerHeading::browse(std::path::Path::new("/tmp")),
-            &cs, &km(), Some(&picker), false, &mut cover, &mut tiles, std::path::Path::new("/tmp"), area, &mut buf,
+            &cs, &km(), Some(&picker), false, &mut cover, &mut tiles, &app::data_roots::DataRoots::single(std::path::Path::new("/tmp")), area, &mut buf,
         );
         assert!(tiles.take_requests().is_empty(), "in-flight tiles are not re-requested");
 
@@ -8066,7 +8064,7 @@ mod tests {
         let mut buf = Buffer::empty(area);
         super::draw_story_gallery(
             &stories, 0, &mut first_row, &mut None, &super::PickerHeading::browse(std::path::Path::new("/tmp")),
-            &cs, &km(), Some(&picker), false, &mut cover, &mut tiles, std::path::Path::new("/tmp"), area, &mut buf,
+            &cs, &km(), Some(&picker), false, &mut cover, &mut tiles, &app::data_roots::DataRoots::single(std::path::Path::new("/tmp")), area, &mut buf,
         );
         assert!(has_payload(&buf), "delivered tiles paint on the next draw");
     }
@@ -8100,7 +8098,7 @@ mod tests {
         let mut buf = Buffer::empty(area);
         super::draw_story_gallery(
             &stories, 0, &mut first_row, &mut None, &super::PickerHeading::browse(std::path::Path::new("/tmp")),
-            &cs, &km(), Some(&picker), false, &mut cover, &mut tiles, std::path::Path::new("/tmp"), area, &mut buf,
+            &cs, &km(), Some(&picker), false, &mut cover, &mut tiles, &app::data_roots::DataRoots::single(std::path::Path::new("/tmp")), area, &mut buf,
         );
         let queued = tiles.take_requests();
         assert_eq!(queued.len(), 1, "one tile, one request");
@@ -8132,7 +8130,7 @@ mod tests {
         let mut buf = Buffer::empty(area);
         super::draw_story_gallery(
             &stories, 0, &mut first_row, &mut None, &super::PickerHeading::browse(std::path::Path::new("/tmp")),
-            &cs, &km(), Some(&wide), false, &mut cover, &mut tiles, std::path::Path::new("/tmp"), area, &mut buf,
+            &cs, &km(), Some(&wide), false, &mut cover, &mut tiles, &app::data_roots::DataRoots::single(std::path::Path::new("/tmp")), area, &mut buf,
         );
         let again = tiles.take_requests();
         assert_eq!(again.len(), 1, "the new cell's tile is requested afresh");
@@ -8190,7 +8188,7 @@ mod tests {
         };
 
         let (dir, stories, selected) =
-            super::resolve_picker_position(&source, &root, &root, Some(&restore));
+            super::resolve_picker_position(&source, &root, &app::data_roots::DataRoots::single(&root), Some(&restore));
         let _ = std::fs::remove_dir_all(&root);
 
         assert_eq!(dir, sub, "lands back on the sub-directory, not the root");
@@ -8207,7 +8205,7 @@ mod tests {
         std::fs::create_dir_all(&sub2).unwrap();
         std::fs::write(sub2.join("alpha.z5"), minimal_v3_story()).unwrap();
         let (dir2, _stories2, selected2) =
-            super::resolve_picker_position(&source, &root2, &root2, None);
+            super::resolve_picker_position(&source, &root2, &app::data_roots::DataRoots::single(&root2), None);
         let _ = std::fs::remove_dir_all(&root2);
         assert_eq!(dir2, root2, "no restore: opens on the root");
         assert_eq!(selected2, 0, "no restore: top row selected");
@@ -8230,7 +8228,7 @@ mod tests {
         };
 
         let (dir, stories, selected) =
-            super::resolve_picker_position(&source, &root, &root, Some(&restore));
+            super::resolve_picker_position(&source, &root, &app::data_roots::DataRoots::single(&root), Some(&restore));
         let _ = std::fs::remove_dir_all(&root);
 
         assert_eq!(dir, root, "the zip's own directory, not a folder inside it");
@@ -8262,7 +8260,7 @@ mod tests {
         };
 
         let (_dir, stories, selected) =
-            super::resolve_picker_position(&source, &root, &root, Some(&restore));
+            super::resolve_picker_position(&source, &root, &app::data_roots::DataRoots::single(&root), Some(&restore));
         let _ = std::fs::remove_dir_all(&root);
 
         assert!(
@@ -8291,7 +8289,7 @@ mod tests {
         };
 
         let (dir, stories, _selected) =
-            super::resolve_picker_position(&source, &root, &root, Some(&restore));
+            super::resolve_picker_position(&source, &root, &app::data_roots::DataRoots::single(&root), Some(&restore));
         let _ = std::fs::remove_dir_all(&root);
 
         assert_eq!(dir, root, "a deleted sub-directory falls back to the root");

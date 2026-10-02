@@ -89,7 +89,7 @@ fn seed_sidecar(data_base: &Path, path: &Path, ifid: &str, title: &str) {
 /// → shared metadata resolver → `resolve_title` → `format_pane_title`.
 fn pane_title(path: &Path, data_base: &Path, banner_title: Option<&str>) -> String {
     let (ifid, is_scott, disk_image) = identity(path);
-    let meta = app::picker::metadata_title(path, data_base, &ifid, is_scott, &exec_bytes(path));
+    let meta = app::picker::metadata_title(path, &app::data_roots::DataRoots::single(data_base), &ifid, is_scott, &exec_bytes(path));
     let name = resolve_title(None, meta.as_deref(), banner_title, path);
     let filename = path.file_name().and_then(|n| n.to_str()).unwrap_or("");
     format_pane_title(&name, filename, disk_image)
@@ -141,7 +141,7 @@ fn a_fetched_sidecar_names_the_game_the_browser_lists() {
         // Premise: with nothing seeded, the pane falls to the stem — the bug.
         let stem = path.file_stem().and_then(|s| s.to_str()).unwrap().to_string();
         assert_eq!(
-            app::picker::metadata_title(&path, &base, &ifid, is_scott, &exec_bytes(&path)),
+            app::picker::metadata_title(&path, &app::data_roots::DataRoots::single(&base), &ifid, is_scott, &exec_bytes(&path)),
             None,
             "{file}: premise — no metadata source knows it yet"
         );
@@ -150,7 +150,7 @@ fn a_fetched_sidecar_names_the_game_the_browser_lists() {
         // Seed the sidecar the browser reads, and the pane must now agree with it.
         seed_sidecar(&base, &path, &ifid, title);
         assert_eq!(
-            app::picker::metadata_title(&path, &base, &ifid, is_scott, &exec_bytes(&path)).as_deref(),
+            app::picker::metadata_title(&path, &app::data_roots::DataRoots::single(&base), &ifid, is_scott, &exec_bytes(&path)).as_deref(),
             Some(title),
             "{file}: the shared resolver must read the fetched sidecar"
         );
@@ -169,7 +169,7 @@ fn a_sidecar_for_a_different_ifid_is_ignored() {
     let (ifid, is_scott, _) = identity(&path);
     seed_sidecar(&base, &path, "ZCODE-1-000000-0000", "Not This Game");
     assert_eq!(
-        app::picker::metadata_title(&path, &base, &ifid, is_scott, &exec_bytes(&path)),
+        app::picker::metadata_title(&path, &app::data_roots::DataRoots::single(&base), &ifid, is_scott, &exec_bytes(&path)),
         None
     );
     assert_eq!(pane_title(&path, &base, None), "anchor");
