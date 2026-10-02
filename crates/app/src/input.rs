@@ -13010,7 +13010,7 @@ mod tests {
         let roots = crate::data_roots::DataRoots::resolve(&home, None, None, &Default::default());
         let mut s = AppState::default();
         s.overlays.documents =
-            Some(crate::documents_chooser::DocumentsSession::open(Box::new(Offline), roots, "abc123", "Zork I"));
+            Some(crate::documents_chooser::DocumentsSession::open(crate::ifdb_search::IfdbGate::default(), Box::new(Offline), roots, "abc123", "Zork I"));
         (s, home)
     }
 

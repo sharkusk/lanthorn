@@ -1479,7 +1479,11 @@ pub(crate) fn run_story_picker(
     // `fetch`/`fetch_by_id` — to populate the story's sidecar + cover from the
     // iFiction record already resolved for the download, with zero extra
     // metadata requests. See `ifdb_search.rs`'s module header.
+    // One gate for this picker's two IFDB workers (search + documents), so a
+    // request from a chooser just closed finishes before the next starts.
+    let ifdb_gate = app::ifdb_search::IfdbGate::default();
     let search_worker = app::ifdb_search::SearchWorker::new(
+        ifdb_gate.clone(),
         Box::new(app::ifdb_search::IfdbSearchClient::new()),
         Box::new(app::ifdb::IfdbClient::new()),
         roots.clone(),
@@ -3016,6 +3020,7 @@ pub(crate) fn run_story_picker(
                         None => progress_line = Some(app::documents_chooser::LINK_FIRST.to_string()),
                         Some((tuid, title)) => {
                             docs_session = Some(app::documents_chooser::DocumentsSession::open(
+                                ifdb_gate.clone(),
                                 app::documents_chooser::default_source(),
                                 roots.clone(),
                                 &tuid,

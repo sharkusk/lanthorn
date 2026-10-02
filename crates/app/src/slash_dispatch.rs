@@ -643,6 +643,7 @@ pub(crate) fn dispatch_slash_outcome(
                 state.data_roots.as_ref(),
                 story_path,
                 state.source.disk_entry.as_deref(),
+                state.ifdb_gate.clone(),
                 app::documents_chooser::default_source(),
             ) {
                 Ok(session) => state.overlays.documents = Some(session),

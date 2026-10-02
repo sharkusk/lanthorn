@@ -53,7 +53,7 @@ use std::sync::mpsc;
 use crate::data_roots::DataRoots;
 use crate::ifdb_search::{
     basename_from_url, child_text, one_line, sanitize_basename, subtitle_of, too_large_message,
-    IfdbWorker, RangeProbe, SearchError, SearchSource, MAX_DOWNLOAD,
+    IfdbGate, IfdbWorker, RangeProbe, SearchError, SearchSource, MAX_DOWNLOAD,
 };
 
 /// Bytes fetched for a text preview.
@@ -604,8 +604,8 @@ pub enum DocEvent {
 pub type DocumentWorker = IfdbWorker<DocJob, DocEvent>;
 
 impl DocumentWorker {
-    pub fn new(source: Box<dyn SearchSource>, roots: DataRoots) -> Self {
-        Self::spawn(move |job, out| run_job(source.as_ref(), &roots, job, &out.tx))
+    pub fn new(gate: IfdbGate, source: Box<dyn SearchSource>, roots: DataRoots) -> Self {
+        Self::spawn(gate, move |job, out| run_job(source.as_ref(), &roots, job, &out.tx))
     }
 }
 
@@ -1104,7 +1104,7 @@ pub(crate) mod tests {
         let (home, roots) = roots("docs-worker");
         let mut host = Host::new(true);
         host.docs = parse_document_options(ZORK);
-        let w = DocumentWorker::new(Box::new(host), roots);
+        let w = DocumentWorker::new(IfdbGate::default(), Box::new(host), roots);
         w.request(DocJob::Resolve { tuid: "t".into() });
         let mut got = Vec::new();
         for _ in 0..2000 {

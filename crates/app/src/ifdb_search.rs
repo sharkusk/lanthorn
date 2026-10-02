@@ -960,14 +960,22 @@ pub enum SearchEvent {
     Failed(String),
 }
 
-/// Held for the whole of every job, by every [`IfdbWorker`] in the process, so
-/// IFDB (and the hosts its records name) see ONE request in flight per user
-/// action even when two workers exist at once — the story search modal's, and a
-/// documents chooser's opened while a request from the modal just closed is
-/// still running. Closing a chooser drops its worker but cannot recall a job
-/// already started; the gate makes the next job wait for it instead of
-/// overlapping it.
-static IN_FLIGHT: std::sync::Mutex<()> = std::sync::Mutex::new(());
+/// The one-request-in-flight guard for ONE user's IFDB traffic: every
+/// [`IfdbWorker`] built from clones of one gate holds it for the whole of each
+/// job, so the story search modal's worker and a documents chooser's — a closed
+/// chooser's job already started cannot be recalled — never overlap. It belongs
+/// to a session (the picker, or a game's `AppState`) and is passed into each
+/// worker it builds, never shared process-wide: a host serving several players
+/// from one process gives each its own gate, since IFDB's rule is per user
+/// action and one player's long download must not stall another's.
+#[derive(Clone, Default, Debug)]
+pub struct IfdbGate(Arc<std::sync::Mutex<()>>);
+
+impl IfdbGate {
+    fn hold(&self) -> std::sync::MutexGuard<'_, ()> {
+        self.0.lock().unwrap_or_else(|p| p.into_inner())
+    }
+}
 
 /// What a job handler writes to: the event channel, plus the busy flag so a
 /// handler's closing event can be sent with the flag already clear.
@@ -1005,7 +1013,7 @@ pub struct IfdbWorker<J, E> {
 impl<J: Send + 'static, E: Send + 'static> IfdbWorker<J, E> {
     /// Start the thread. `handle` runs one job, sending its events through
     /// `Out`, and returns `false` when the receiver is gone.
-    pub fn spawn(mut handle: impl FnMut(J, &Out<E>) -> bool + Send + 'static) -> Self {
+    pub fn spawn(gate: IfdbGate, mut handle: impl FnMut(J, &Out<E>) -> bool + Send + 'static) -> Self {
         let (jobs, job_rx) = mpsc::channel::<J>();
         let (tx, events) = mpsc::channel::<E>();
         let busy = Arc::new(AtomicBool::new(false));
@@ -1013,7 +1021,7 @@ impl<J: Send + 'static, E: Send + 'static> IfdbWorker<J, E> {
         let thread = thread::spawn(move || {
             while let Ok(job) = job_rx.recv() {
                 let alive = {
-                    let _one_at_a_time = IN_FLIGHT.lock().unwrap_or_else(|p| p.into_inner());
+                    let _one_at_a_time = gate.hold();
                     handle(job, &out)
                 };
                 out.busy.store(false, Ordering::Relaxed);
@@ -1045,14 +1053,19 @@ impl<J: Send + 'static, E: Send + 'static> IfdbWorker<J, E> {
 pub type SearchWorker = IfdbWorker<SearchJob, SearchEvent>;
 
 impl SearchWorker {
-    /// `covers` and `roots` are SQ-0474's post-download metadata/cover
+    /// `gate` is the session's [`IfdbGate`]. `covers` and `roots` are SQ-0474's post-download metadata/cover
     /// persistence: `covers` is only ever asked for a `fetch_cover` (never
     /// `fetch`/`fetch_by_id`, which would be an extra metadata request —
     /// see [`crate::ifdb::MetadataSource`]); `roots` locates each
     /// story's `info.json` sidecar the same way the picker/fetch worker do
     /// (its catalogue folder).
-    pub fn new(source: Box<dyn SearchSource>, covers: Box<dyn MetadataSource>, roots: crate::data_roots::DataRoots) -> Self {
-        Self::spawn(move |job, out| {
+    pub fn new(
+        gate: IfdbGate,
+        source: Box<dyn SearchSource>,
+        covers: Box<dyn MetadataSource>,
+        roots: crate::data_roots::DataRoots,
+    ) -> Self {
+        Self::spawn(gate, move |job, out| {
             out.send_last(run_job(source.as_ref(), covers.as_ref(), &roots, job))
         })
     }
@@ -1441,6 +1454,51 @@ mod tests {
         let _ = std::fs::remove_dir_all(dest);
     }
 
+    /// A worker whose job announces it has started, then parks until released.
+    fn parked_worker(gate: IfdbGate) -> (IfdbWorker<(), ()>, mpsc::Receiver<()>, mpsc::Sender<()>) {
+        let (entered_tx, entered) = mpsc::channel();
+        let (release, release_rx) = mpsc::channel::<()>();
+        let w = IfdbWorker::spawn(gate, move |_job, out| {
+            entered_tx.send(()).unwrap();
+            release_rx.recv().unwrap();
+            out.send_last(())
+        });
+        (w, entered, release)
+    }
+
+    /// SQ-1682: workers sharing ONE gate (one session) never overlap; workers on
+    /// two gates (two sessions of one process) do not wait for each other.
+    #[test]
+    fn a_gate_serialises_its_own_workers_and_not_another_sessions() {
+        // Shared gate: while A's job is in hand the gate is held, and B's job
+        // starts only after A's finishes.
+        let gate = IfdbGate::default();
+        let (a, a_in, a_release) = parked_worker(gate.clone());
+        let (b, b_in, b_release) = parked_worker(gate.clone());
+        a.request(());
+        a_in.recv().unwrap();
+        b.request(());
+        assert!(gate.0.try_lock().is_err(), "A holds the gate, so B cannot be running");
+        assert!(b_in.try_recv().is_err());
+        a_release.send(()).unwrap();
+        b_in.recv().unwrap(); // B starts once A is done
+        b_release.send(()).unwrap();
+        while a.busy() || b.busy() {
+            std::thread::yield_now();
+        }
+
+        // Two gates: B runs while A is still parked.
+        let (a, a_in, a_release) = parked_worker(IfdbGate::default());
+        let (b, b_in, b_release) = parked_worker(IfdbGate::default());
+        a.request(());
+        a_in.recv().unwrap();
+        b.request(());
+        b_in.recv().unwrap(); // would deadlock if the gate were shared
+        assert!(a.busy());
+        a_release.send(()).unwrap();
+        b_release.send(()).unwrap();
+    }
+
     /// The one cap is 100 MiB and the story cap is that same constant.
     #[test]
     fn the_cap_is_one_hundred_mebibytes() {
@@ -1592,7 +1650,7 @@ mod tests {
         };
         let source = Fake { hits: vec![hit.clone()], options: vec![opt], record: None, fail: false };
         let data_base = std::env::temp_dir().join(format!("bm_ifdb_worker_data_{}", std::process::id()));
-        let w = SearchWorker::new(Box::new(source), Box::new(FakeCovers::new()), crate::data_roots::DataRoots::single(data_base.clone()));
+        let w = SearchWorker::new(IfdbGate::default(), Box::new(source), Box::new(FakeCovers::new()), crate::data_roots::DataRoots::single(data_base.clone()));
 
         w.request(SearchJob::Search("test".into()));
         match drain_one(&w) {
@@ -1653,7 +1711,7 @@ mod tests {
     fn worker_maps_a_transport_error_to_a_friendly_failed_event() {
         let source = Fake { hits: vec![], options: vec![], record: None, fail: true };
         let data_base = std::env::temp_dir().join(format!("bm_ifdb_worker_fail_{}", std::process::id()));
-        let w = SearchWorker::new(Box::new(source), Box::new(FakeCovers::new()), crate::data_roots::DataRoots::single(data_base));
+        let w = SearchWorker::new(IfdbGate::default(), Box::new(source), Box::new(FakeCovers::new()), crate::data_roots::DataRoots::single(data_base));
         w.request(SearchJob::Search("x".into()));
         match drain_one(&w) {
             SearchEvent::Failed(msg) => assert_eq!(msg, "IFDB unreachable"),
@@ -1752,7 +1810,7 @@ mod tests {
         let dest = data_base.join("stories");
         let source =
             FakeStoryDownload { name: "CoS.gblorb".into(), bytes: glulx_blorb(&glulx_image()) };
-        let w = SearchWorker::new(Box::new(source), Box::new(FakeCovers::new()), crate::data_roots::DataRoots::single(data_base.clone()));
+        let w = SearchWorker::new(IfdbGate::default(), Box::new(source), Box::new(FakeCovers::new()), crate::data_roots::DataRoots::single(data_base.clone()));
 
         let record = IFiction {
             title: Some("City of Secrets".into()),
@@ -1804,7 +1862,7 @@ mod tests {
         let covers = FakeCovers::new();
         let cover_calls = Arc::clone(&covers.calls);
         let source = Fake { hits: vec![], options: vec![], record: None, fail: false };
-        let w = SearchWorker::new(Box::new(source), Box::new(covers), crate::data_roots::DataRoots::single(data_base.clone()));
+        let w = SearchWorker::new(IfdbGate::default(), Box::new(source), Box::new(covers), crate::data_roots::DataRoots::single(data_base.clone()));
 
         let record = IFiction {
             title: Some("Deep Space Drifter".into()),
@@ -1854,7 +1912,7 @@ mod tests {
         let covers = FakeCovers::new();
         let cover_calls = Arc::clone(&covers.calls);
         let source = Fake { hits: vec![], options: vec![], record: None, fail: false };
-        let w = SearchWorker::new(Box::new(source), Box::new(covers), crate::data_roots::DataRoots::single(data_base.clone()));
+        let w = SearchWorker::new(IfdbGate::default(), Box::new(source), Box::new(covers), crate::data_roots::DataRoots::single(data_base.clone()));
 
         let record = IFiction { title: Some("No Cover Game".into()), ..Default::default() };
         w.request(SearchJob::Download {
@@ -1889,7 +1947,7 @@ mod tests {
         let data_base = std::env::temp_dir().join(format!("bm_ifdb_ifid_fallback_{}", std::process::id()));
         let dest = data_base.join("stories");
         let source = Fake { hits: vec![], options: vec![], record: None, fail: false };
-        let w = SearchWorker::new(Box::new(source), Box::new(FakeCovers::new()), crate::data_roots::DataRoots::single(data_base.clone()));
+        let w = SearchWorker::new(IfdbGate::default(), Box::new(source), Box::new(FakeCovers::new()), crate::data_roots::DataRoots::single(data_base.clone()));
 
         let record = IFiction {
             title: Some("Grouped Editions".into()),
@@ -1933,7 +1991,7 @@ mod tests {
         let data_base = std::env::temp_dir().join(format!("bm_ifdb_ifid_single_{}", std::process::id()));
         let dest = data_base.join("stories");
         let source = Fake { hits: vec![], options: vec![], record: None, fail: false };
-        let w = SearchWorker::new(Box::new(source), Box::new(FakeCovers::new()), crate::data_roots::DataRoots::single(data_base.clone()));
+        let w = SearchWorker::new(IfdbGate::default(), Box::new(source), Box::new(FakeCovers::new()), crate::data_roots::DataRoots::single(data_base.clone()));
 
         let record = IFiction {
             title: Some("Single Edition".into()),
@@ -1974,7 +2032,7 @@ mod tests {
         let covers = FakeCovers::new();
         let cover_calls = Arc::clone(&covers.calls);
         let source = Fake { hits: vec![], options: vec![], record: None, fail: false };
-        let w = SearchWorker::new(Box::new(source), Box::new(covers), crate::data_roots::DataRoots::single(data_base.clone()));
+        let w = SearchWorker::new(IfdbGate::default(), Box::new(source), Box::new(covers), crate::data_roots::DataRoots::single(data_base.clone()));
 
         w.request(SearchJob::Download { url: "https://x/game.z5".into(), dest: dest.clone(), record: None });
         let path = match drain_one(&w) {

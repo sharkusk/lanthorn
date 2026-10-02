@@ -2897,6 +2897,10 @@ pub struct AppState {
     /// modal, dialog, or full-screen overlay is open, plus the shared
     /// modal button-focus index. Grouped off `AppState` in SQ-0307.
     pub overlays: OverlayState,
+    /// This session's IFDB one-request-in-flight guard, handed to the documents
+    /// chooser's worker (SQ-1682). Per state, never process-wide: a host serving
+    /// several players gives each its own.
+    pub ifdb_gate: crate::ifdb_search::IfdbGate,
     /// When true, draw each chained room's alignment code (`R{id}` / `C{id}`) in
     /// its box interior (Boxes zoom only). Palette-only since SQ-0446 (reached
     /// through the `/` command palette) — `Ctrl+A` is a readline caret shortcut
@@ -3926,6 +3930,7 @@ impl Default for AppState {
             input: crate::text_field::TextField::default(),
             notifications: crate::notify::Notifications::default(),
             overlays: OverlayState::default(),
+            ifdb_gate: Default::default(),
             show_alignment: false,
             show_portal_labels: false,
             tidy_anim: None,

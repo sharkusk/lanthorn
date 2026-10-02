@@ -30,7 +30,7 @@ use crate::ifdb_documents::{
     format_size, is_previewable, matches_title, DocEvent, DocJob, DocumentOption, DocumentWorker, DownloadItem,
     LinkKind, RowKey, ZipEntry, ZipListing,
 };
-use crate::ifdb_search::SearchSource;
+use crate::ifdb_search::{IfdbGate, SearchSource};
 use crate::ifdb_search_modal::{clip_with_ellipsis, put_str, row_glyph, window_start, ROW_MARGIN};
 use crate::list_scroll::ListScroll;
 use crate::render::dialog::{draw_dialog, ButtonId, DialogButton, DialogRects, DialogSpec, DialogStyle, Placement};
@@ -687,6 +687,7 @@ pub fn session_for_story(
     roots: Option<&DataRoots>,
     story_path: &std::path::Path,
     disk_entry: Option<&str>,
+    gate: IfdbGate,
     source: Box<dyn SearchSource>,
 ) -> Result<DocumentsSession, String> {
     let roots = roots.ok_or("No library to save documents into")?;
@@ -694,7 +695,7 @@ pub fn session_for_story(
         .ok_or("Could not read this game's IFDB record")?;
     match (crate::documents::locate(roots, entry.meta.ifdb_tuid.as_deref(), &entry.title), &entry.meta.ifdb_tuid) {
         (crate::documents::Location::Unlinked, _) | (_, None) => Err(LINK_FIRST.to_string()),
-        (_, Some(tuid)) => Ok(DocumentsSession::open(source, roots.clone(), tuid, &entry.title)),
+        (_, Some(tuid)) => Ok(DocumentsSession::open(gate, source, roots.clone(), tuid, &entry.title)),
     }
 }
 
@@ -717,8 +718,8 @@ pub struct DocumentsSession {
 }
 
 impl DocumentsSession {
-    pub fn open(source: Box<dyn SearchSource>, roots: DataRoots, tuid: &str, title: &str) -> Self {
-        let mut s = Self { chooser: DocumentsChooser::new(tuid, title), worker: DocumentWorker::new(source, roots) };
+    pub fn open(gate: IfdbGate, source: Box<dyn SearchSource>, roots: DataRoots, tuid: &str, title: &str) -> Self {
+        let mut s = Self { chooser: DocumentsChooser::new(tuid, title), worker: DocumentWorker::new(gate, source, roots) };
         s.flush();
         s
     }
@@ -810,7 +811,7 @@ mod tests {
 
     fn open(h: &Arc<Host>, tag: &str) -> (DocumentsSession, PathBuf, DataRoots) {
         let (home, roots) = roots(tag);
-        let s = DocumentsSession::open(Box::new(Shared(Arc::clone(h))), roots.clone(), "abc123", "Zork I");
+        let s = DocumentsSession::open(IfdbGate::default(), Box::new(Shared(Arc::clone(h))), roots.clone(), "abc123", "Zork I");
         (s, home, roots)
     }
 
@@ -1051,9 +1052,9 @@ mod tests {
         let source = || -> Box<dyn SearchSource> { Box::new(Shared(host(true))) };
 
         let err = |r: Result<DocumentsSession, String>| r.expect_err("an error line");
-        assert_eq!(err(session_for_story(None, &story, None, source())), "No library to save documents into");
-        assert_eq!(err(session_for_story(Some(&roots), &home.join("nope.z5"), None, source())), "Could not read this game's IFDB record");
-        assert_eq!(err(session_for_story(Some(&roots), &story, None, source())), LINK_FIRST, "no sidecar: unlinked");
+        assert_eq!(err(session_for_story(None, &story, None, IfdbGate::default(), source())), "No library to save documents into");
+        assert_eq!(err(session_for_story(Some(&roots), &home.join("nope.z5"), None, IfdbGate::default(), source())), "Could not read this game's IFDB record");
+        assert_eq!(err(session_for_story(Some(&roots), &story, None, IfdbGate::default(), source())), LINK_FIRST, "no sidecar: unlinked");
 
         // Link it, the way a fetch does.
         let game_dir = roots.catalogue_dir(&crate::storage::story_key_at(&story));
@@ -1080,7 +1081,7 @@ mod tests {
             probe: None,
         };
         crate::story_info::save(&game_dir, &info).unwrap();
-        let mut s = session_for_story(Some(&roots), &story, None, source()).expect("linked: a session");
+        let mut s = session_for_story(Some(&roots), &story, None, IfdbGate::default(), source()).expect("linked: a session");
         settle(&mut s);
         assert_eq!(s.chooser.tuid, "tuid123");
         assert_eq!(s.chooser.links.len(), 12);
