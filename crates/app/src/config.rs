@@ -2782,6 +2782,24 @@ pub fn resolve_at(user_dir: &std::path::Path) -> Config {
     resolve_config_file(user_dir.join("config.toml"), Some(user_dir.to_path_buf()))
 }
 
+/// [`resolve_at`] for one named player (SQ-1678), with no environment read: the
+/// entry point for a host serving several players from one process, where the
+/// process-global `LANTHORN_PLAYER` cannot say who a session is.
+///
+/// Returns exactly the merged `Config` the TUI builds for that player through
+/// `resolve` — both go through [`resolve_config_layers`], the one layering
+/// implementation: `config_file` is the player's file, `player`/`player_dir` are
+/// set, and `inherited` is the shared config, so [`write_config_at`] stores only
+/// the player's overrides. `None` is the default player, identical to
+/// [`resolve_at`]. An invalid name is an `Err`.
+pub fn resolve_at_for(user_dir: &std::path::Path, player: Option<&str>) -> Result<Config, String> {
+    if let Some(name) = player {
+        crate::data_roots::validate_player_name(name)
+            .map_err(|e| format!("invalid player name {name:?}: {e}"))?;
+    }
+    Ok(resolve_config_layers(user_dir.join("config.toml"), Some(user_dir.to_path_buf()), player))
+}
+
 // ── Write helpers ─────────────────────────────────────────────────────────────
 
 /// The `config.toml` document being written, plus the one-run pins that must not
@@ -3142,6 +3160,121 @@ pub fn write_config_at(config_path: &std::path::Path, cfg: &Config) -> std::io::
 #[cfg(all(test, feature = "t-persist"))]
 mod tests {
     use super::*;
+
+    // ── resolve_at_for (SQ-1678) ──────────────────────────────────────────────
+
+    fn host_cli(home: &std::path::Path, player: Option<&str>) -> Cli {
+        use clap::Parser;
+        let mut args = vec!["lanthorn".to_string(), "--user-dir".into(), home.display().to_string()];
+        if let Some(p) = player {
+            args.push("--player".into());
+            args.push(p.into());
+        }
+        Cli::parse_from(args)
+    }
+
+    fn keys_in(file: &std::path::Path) -> Vec<String> {
+        let text = std::fs::read_to_string(file).unwrap_or_default();
+        text.parse::<toml::Table>().unwrap().keys().cloned().collect()
+    }
+
+    fn seeded_home(tag: &str) -> std::path::PathBuf {
+        let home = crate::scratch_dir(tag);
+        std::fs::write(home.join("config.toml"), "volume = 40\nhistory_turns = 7\n").unwrap();
+        std::fs::create_dir_all(home.join("users/bob")).unwrap();
+        std::fs::write(home.join("users/bob/config.toml"), "history_turns = 9\n").unwrap();
+        home
+    }
+
+    #[test]
+    fn resolve_at_for_matches_the_env_driven_path() {
+        let home = seeded_home("cfg-raf-eq");
+        let host = resolve_at_for(&home, Some("bob")).unwrap();
+        let tui = resolve(&host_cli(&home, Some("bob")));
+        assert_eq!(host.volume, 40);
+        assert_eq!(host.history_turns, 9);
+        assert_eq!(host.config_file, home.join("users/bob/config.toml"));
+        assert_eq!(host.player.as_deref(), Some("bob"));
+        assert_eq!(host.player_dir, Some(crate::data_roots::player_root(&host.user_dir, "bob")));
+        assert_eq!(host.inherited.as_ref().map(|b| b.history_turns), Some(7));
+        assert_eq!(format!("{host:?}"), format!("{tui:?}"), "one layering, same Config");
+        let _ = std::fs::remove_dir_all(&home);
+    }
+
+    #[test]
+    fn resolve_at_for_none_is_resolve_at_and_bad_names_err() {
+        let home = seeded_home("cfg-raf-none");
+        let a = resolve_at_for(&home, None).unwrap();
+        assert_eq!(format!("{a:?}"), format!("{:?}", resolve_at(&home)));
+        assert_eq!(a.config_file, home.join("config.toml"));
+        assert!(a.player.is_none());
+        for bad in ["", "..", "a/b", "bo b"] {
+            assert!(resolve_at_for(&home, Some(bad)).is_err(), "{bad:?}");
+        }
+        let _ = std::fs::remove_dir_all(&home);
+    }
+
+    #[test]
+    fn a_host_built_player_config_writes_only_its_override() {
+        let home = seeded_home("cfg-raf-write");
+        let mut bob = resolve_at_for(&home, Some("bob")).unwrap();
+        bob.volume = 55;
+        write_config_at(&bob.config_file, &bob).unwrap();
+        let mut keys = keys_in(&home.join("users/bob/config.toml"));
+        keys.sort();
+        assert_eq!(keys, ["history_turns", "volume"], "bob's prior override plus the one change");
+        assert_eq!(
+            std::fs::read_to_string(home.join("config.toml")).unwrap(),
+            "volume = 40\nhistory_turns = 7\n"
+        );
+        // A player with no file yet gets exactly one key.
+        let mut amy = resolve_at_for(&home, Some("amy")).unwrap();
+        amy.volume = 12;
+        write_config_at(&amy.config_file, &amy).unwrap();
+        assert_eq!(keys_in(&home.join("users/amy/config.toml")), ["volume"]);
+        let _ = std::fs::remove_dir_all(&home);
+    }
+
+    #[test]
+    fn a_host_built_player_config_layers_and_writes_style() {
+        let home = seeded_home("cfg-raf-style");
+        std::fs::write(home.join("style.toml"), "[map]\nbox_style = \"rounded\"\narrow_set = \"plain\"\n").unwrap();
+        std::fs::write(home.join("users/bob/style.toml"), "[map]\narrow_set = \"bold\"\n").unwrap();
+        let bob = resolve_at_for(&home, Some("bob")).unwrap();
+        let (doc, warnings) = crate::style::load_style_for(&bob);
+        assert!(warnings.is_empty(), "{warnings:?}");
+        assert_eq!(doc.symbols.arrow_set.as_deref(), Some("bold"));
+        assert_eq!(doc.symbols.box_style.as_deref(), Some("rounded"));
+        assert_eq!(
+            crate::style::style_write_path_for(&bob),
+            Some(home.join("users/bob/style.toml"))
+        );
+        let _ = std::fs::remove_dir_all(&home);
+    }
+
+    #[test]
+    fn players_resolved_in_one_process_do_not_affect_each_other() {
+        let home = seeded_home("cfg-raf-iso");
+        std::fs::create_dir_all(home.join("users/amy")).unwrap();
+        std::fs::write(home.join("users/amy/config.toml"), "history_turns = 3\n").unwrap();
+        let check = |name: &str, want: usize| {
+            let c = resolve_at_for(&home, Some(name)).unwrap();
+            assert_eq!(c.history_turns, want, "{name}");
+            assert_eq!(c.player.as_deref(), Some(name));
+            assert_eq!(c.config_file, home.join(format!("users/{name}/config.toml")));
+        };
+        for _ in 0..3 {
+            check("bob", 9);
+            check("amy", 3);
+        }
+        std::thread::scope(|s| {
+            for _ in 0..4 {
+                s.spawn(|| (0..50).for_each(|_| check("bob", 9)));
+                s.spawn(|| (0..50).for_each(|_| check("amy", 3)));
+            }
+        });
+        let _ = std::fs::remove_dir_all(&home);
+    }
 
     #[test]
     fn undo_levels_defaults_to_16() {
