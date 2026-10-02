@@ -1325,6 +1325,86 @@ fn a_shape_only_match_is_vetted_and_surfaced_on_a_real_story() {
     eprintln!("(vetted picks surfaced here: {assists:?})");
 }
 
+// ── SQ-1673: the shape scan after vetting, and the `use A on B` idiom ───────
+
+/// Zork I from West of House to the Troll Room, sword and lit lamp in hand.
+const TO_THE_TROLL_ROOM: &[&str] = &[
+    "north", "east", "open window", "enter window", "west", "take sword", "take lamp",
+    "move rug", "open trap door", "down", "turn on lamp", "north",
+];
+
+/// **SQ-1673.** `use sword on troll` in Zork I's Troll Room: `use` is unknown,
+/// the meaning table's one known neighbour (`apply`) is rejected by vetting, and
+/// the shape scan used to be skipped because an earlier source had spoken. The
+/// vetted fall-through now runs it, and the `use A on B` idiom reaches the
+/// swapped `V B with A` form, so the light shows a command that works.
+///
+/// Falsify: drop the fall-through (a), the `use` swap (b) or the ranking (c) in
+/// `vocab.rs` and this loses its `try instead` line.
+#[test]
+fn use_a_on_b_reaches_a_vetted_attack_with_the_swapped_operands() {
+    let Some(mut p) = Play::zork1() else { return };
+    p.walk(TO_THE_TROLL_ROOM);
+    assert!(
+        p.state.transcript.iter().any(|l| l.contains("Troll Room")),
+        "the fixture is the walk: the player must be in the Troll Room:\n{}",
+        p.screen()
+    );
+    p.turn("use sword on troll");
+    eprintln!("--- Zork I r88, Troll Room, `use sword on troll` ---\n{}\n", p.screen());
+    let offer = p.state.assist_offer.clone().expect("an offer was pushed for `use`");
+    assert_eq!(offer.kind, app::assist::OfferKind::VettedOffer);
+    assert_eq!(
+        offer.picks.first().map(|k| k.command.as_str()),
+        Some("attack troll with sword"),
+        "a vetted attack troll with sword leads: {:?}",
+        offer.picks
+    );
+    assert!(
+        offer.picks.iter().any(|k| k.command == "kill troll with sword"),
+        "kill troll with sword is reachable too: {:?}",
+        offer.picks
+    );
+    assert!(p.assists().iter().any(|l| l.starts_with("try instead — attack troll with sword")), "{:?}", p.assists());
+}
+
+/// SQ-1673: every verb on the generic-tool list gets the swapped idiom, and a
+/// verb that is not on it gets no swapped candidate at all.
+#[test]
+fn the_swap_applies_to_the_generic_tool_verbs_and_no_others() {
+    for verb in ["employ", "utilize"] {
+        let Some(mut p) = Play::zork1() else { return };
+        p.walk(TO_THE_TROLL_ROOM);
+        p.turn(&format!("{verb} sword on troll"));
+        eprintln!("--- Zork I r88, `{verb} sword on troll` ---\n{}\n", p.screen());
+        let offer = p.state.assist_offer.clone().unwrap_or_else(|| panic!("{verb}: an offer"));
+        assert_eq!(
+            offer.picks.first().map(|k| k.command.as_str()),
+            Some("attack troll with sword"),
+            "{verb}: {:?}",
+            offer.picks
+        );
+    }
+    let Some(mut p) = Play::zork1() else { return };
+    p.walk(TO_THE_TROLL_ROOM);
+    p.turn("zorble sword on troll");
+    eprintln!("--- Zork I r88, `zorble sword on troll` ---\n{}\n", p.screen());
+    let swapped = p.assists().iter().any(|l| l.contains("troll with sword"));
+    assert!(!swapped, "a verb off the list never reverses its operands: {:?}", p.assists());
+}
+
+/// SQ-1673, the other direction: when an earlier source's candidate DOES survive
+/// vetting, only it is shown — the shape fall-through is for the case where
+/// every one of them failed, not an addition to the ones that worked.
+#[test]
+fn a_surviving_first_round_pick_is_not_joined_by_the_shape_scan() {
+    let Some(mut p) = Play::zork1() else { return };
+    p.walk(TO_THE_LAMP);
+    p.turn("illuminate lamp with sword");
+    eprintln!("--- Zork I r88, Living Room, `illuminate lamp with sword` ---\n{}\n", p.screen());
+    assert_eq!(p.assists(), vec!["try instead — light"]);
+}
+
 // ── SQ-1644: the bare-noun grammar-shape source, tier 4 ─────────────────────
 
 /// **SQ-1644, the case the source exists for.** A real report: `pickup

@@ -814,6 +814,30 @@ const MIN_SPLIT_LEN: usize = 2;
 /// [`MAX_OFFERED`].
 const MAX_SPLIT_CANDIDATES: usize = 8;
 
+/// Verbs that name no action of their own — the player means "do the obvious
+/// thing with A and B" — and so mean nothing to a shape match. A fixed list
+/// and not every verb because vetting only proves the game PARSES a sentence,
+/// not that it is sensible: swapping the operands of an arbitrary verb would
+/// surface nonsense like `unlock troll with sword` (SQ-1673).
+const GENERIC_VERBS: &[&str] = &["use", "utilise", "utilize", "employ", "wield", "operate"];
+
+/// The prepositions a generic `use A <prep> B` may join its two things with.
+const SWAP_PREPS: &[&str] = &["on", "with", "at"];
+
+/// How many swapped `V B with A` commands, and how many literal-shape commands,
+/// the vetted fall-through may send: a vetting plan costs three probes a
+/// candidate (the command and its two controls) inside
+/// [`crate::probe::MAX_PROBES`], so five fit.
+const MAX_SWAPPED: usize = 3;
+
+/// What a player means by `use A with B` when A is a tool and B its target,
+/// most likely first: the story's verbs among these outrank the rest of its
+/// `V noun with noun` shape, which in Zork I alone is twenty-nine verbs.
+const USE_WITH_VERBS: &[&str] = &[
+    "attack", "kill", "cut", "unlock", "open", "dig", "burn", "light", "fill", "tie", "lock",
+];
+const MAX_LITERAL: usize = 2;
+
 /// Words the parser ignores and a shape count must ignore with it.
 const ARTICLES: &[&str] = &["the", "a", "an", "some", "my", "his", "her", "its", "their"];
 
@@ -859,7 +883,7 @@ impl StoryVocabulary {
             out.retain(|c| c.tier != 1 || c.exact_meaning);
         }
         self.by_story_synonym(position, &mut out);
-        self.by_grammar_shape(position, nouns, preps, &mut out);
+        self.by_grammar_shape(typed, position, nouns, preps, &mut out);
         self.by_bare_grammar_shape(position, nouns, preps, &mut out);
         self.by_word_split(typed, position, &mut out);
         out
@@ -1077,24 +1101,117 @@ impl StoryVocabulary {
     /// [`offer_picks`](Self::offer_picks) ever ranks or trims to
     /// [`MAX_OFFERED`] — see that constant's own doc for why a second, tighter
     /// cap sits in front of the shared one.
-    fn by_grammar_shape(&self, position: Position, nouns: usize, preps: &[&str], out: &mut Vec<Candidate>) {
+    fn by_grammar_shape(
+        &self,
+        typed: &str,
+        position: Position,
+        nouns: usize,
+        preps: &[&str],
+        out: &mut Vec<Candidate>,
+    ) {
         if position != Position::Opening || !out.is_empty() || preps.is_empty() {
             return;
         }
-        for (order, verb) in self.verbs().iter().enumerate() {
+        for (order, word) in self.ranked_shape_verbs(typed, nouns, preps, &[]).into_iter().map(|r| r.0).enumerate() {
             if out.len() >= MAX_SHAPE_CANDIDATES {
                 break;
             }
-            let Some(word) = verb.word() else { continue };
+            out.push(Candidate { word, tier: 3, distance: 0, order, whole: true, exact_meaning: false });
+        }
+    }
+
+    /// Every verb whose grammar accepts `nouns` noun phrases and exactly the
+    /// literal words `preps`, best first (SQ-1673), each with whether `prefer`
+    /// named it. Ranked, because a cap applied in verb-table order cut `attack`
+    /// from Zork I's `V noun with noun` just for sitting late in the table:
+    /// verbs `prefer` names first (in its order, spelled as it spells them),
+    /// then verbs that spell no OTHER literal word (the preposition is their
+    /// shape, not one of many), then verbs the synonym table relates to
+    /// `typed`, then table order.
+    fn ranked_shape_verbs(
+        &self,
+        typed: &str,
+        nouns: usize,
+        preps: &[&str],
+        prefer: &[&str],
+    ) -> Vec<(String, bool)> {
+        let lemmas: Vec<String> = std::iter::once(typed.to_string()).chain(stems(typed)).collect();
+        let mut ranked: Vec<(usize, usize, bool, usize, String)> = Vec::new();
+        for (order, verb) in self.verbs().iter().enumerate() {
+            let Some(first) = verb.word() else { continue };
             if !verb.accepts(nouns, preps) {
                 continue;
             }
-            let word = word.to_string();
-            if out.iter().any(|c| c.word == word) {
+            let preferred = prefer
+                .iter()
+                .position(|p| verb.words.iter().any(|w| *w == self.truncated(p)));
+            let word = preferred.map_or(first, |i| prefer[i]).to_string();
+            if ranked.iter().any(|r| r.4 == word) {
                 continue;
             }
-            out.push(Candidate { word, tier: 3, distance: 0, order, whole: true, exact_meaning: false });
+            let related = lemmas.iter().any(|l| {
+                !verb_synonyms::suggest(l, |w| verb.words.iter().any(|x| x == w), 1).is_empty()
+            });
+            let extra = verb.prepositions().len().saturating_sub(preps.len());
+            ranked.push((preferred.unwrap_or(usize::MAX), extra, !related, order, word));
         }
+        ranked.sort();
+        ranked.into_iter().map(|r| (r.4, r.0 != usize::MAX)).collect()
+    }
+
+    /// What to vet when every pick the earlier sources made was rejected by
+    /// vetting (SQ-1673): whole commands, as words, best first.
+    ///
+    /// The grammar-shape scan again, now that the earlier sources have had
+    /// their turn and failed; plus, for the one idiom of the player's own
+    /// that reverses a sentence — `use A on B`, generic `use` with the tool
+    /// first — the swapped `V B with A` forms, which a literal shape match can
+    /// never reach. Narrow on purpose: an idiom rule for `use`, not a reorder
+    /// of every command. `tried` are the verbs already vetted and rejected.
+    fn shape_fallback(&self, words: &[String], tried: &[String], prose: &[String]) -> Vec<Vec<String>> {
+        let Some(typed) = words.first() else { return Vec::new() };
+        let rest: Vec<&str> = words[1..].iter().map(String::as_str).collect();
+        let mut out: Vec<Vec<String>> = Vec::new();
+        // A verb's whole spelling, or nothing for a truncated key the story
+        // never printed whole (see `spell_out`).
+        let mut add = |verb: &str, whole: bool, tail: Vec<String>| {
+            // A verb the idiom list named is already spelled whole.
+            let Some(verb) = (if whole { Some(verb.to_string()) } else { self.spell_out(verb, prose) })
+            else {
+                return;
+            };
+            if verb != *typed && !tried.contains(&verb) {
+                let mut cmd = vec![verb];
+                cmd.extend(tail);
+                if !out.contains(&cmd) {
+                    out.push(cmd);
+                }
+            }
+        };
+        if GENERIC_VERBS.contains(&typed.as_str()) {
+            let cut = rest.iter().position(|w| SWAP_PREPS.contains(w));
+            if let Some(i) = cut.filter(|&i| i > 0 && i + 1 < rest.len()) {
+                let (a, b) = (&rest[..i], &rest[i + 1..]);
+                if !b.iter().any(|w| SWAP_PREPS.contains(w)) && self.is_preposition("with") {
+                    let ranked = self.ranked_shape_verbs(typed, 2, &["with"], USE_WITH_VERBS);
+                    // The idiom's own verbs when the story has any; else the best-ranked few.
+                    let named = ranked.iter().filter(|r| r.1).count();
+                    let take = if named > 0 { named.min(MAX_SWAPPED) } else { MAX_SWAPPED };
+                    for (verb, named) in ranked.into_iter().take(take) {
+                        let tail = b.iter().chain(&["with"]).chain(a).map(|w| w.to_string());
+                        add(&verb, named, tail.collect());
+                    }
+                }
+            }
+        }
+        let (nouns, preps) = self.shape(&rest);
+        if !preps.is_empty() {
+            let preps: Vec<&str> = preps.iter().map(String::as_str).collect();
+            for (verb, _) in self.ranked_shape_verbs(typed, nouns, &preps, &[]).into_iter().take(MAX_LITERAL) {
+                add(&verb, false, rest.iter().map(|w| w.to_string()).collect());
+            }
+        }
+        out
     }
 
     /// [`by_grammar_shape`](Self::by_grammar_shape)'s own question, asked again
@@ -1783,13 +1900,17 @@ fn build_offer(
     words: &[String],
     at: usize,
     picks: &[String],
+    whole: bool,
 ) -> crate::assist::Offer {
     crate::assist::Offer {
         kind,
         word: Some(word.to_string()),
         picks: picks
             .iter()
-            .map(|p| crate::assist::OfferPick { word: p.clone(), command: substitute_word(words, at, p) })
+            .map(|p| crate::assist::OfferPick {
+                word: p.clone(),
+                command: if whole { p.clone() } else { substitute_word(words, at, p) },
+            })
             .collect(),
     }
 }
@@ -2014,6 +2135,23 @@ pub struct PendingOffer {
     words: Vec<String>,
     /// Which of `words` was the unknown one.
     at: usize,
+    /// True when each pick is a whole command rather than a verb to put in
+    /// `words[at]` (SQ-1673) — shown as typed, and filled as typed.
+    whole: bool,
+    /// The second round, asked from the same snapshot only if vetting rejects
+    /// every pick above (SQ-1673).
+    fallback: Option<Box<Fallback>>,
+}
+
+/// A second vetting round, planned up front while the live engine was at hand
+/// and held until the first round's answer says whether it is wanted
+/// (SQ-1673). Its commands are [`StoryVocabulary::shape_fallback`]'s.
+#[derive(Debug)]
+struct Fallback {
+    snapshot: crate::probe::ProbeSnapshot,
+    commands: Vec<String>,
+    plan: Vec<Slot>,
+    picks: Vec<String>,
 }
 
 /// Lay out the commands that would vet `picks`, and the plan for reading the
@@ -2041,6 +2179,28 @@ fn vetting_plan(
     words: &[String],
     at: usize,
     picks: &[String],
+) -> Option<(Vec<String>, Vec<Slot>)> {
+    let candidates: Vec<Vec<String>> = picks
+        .iter()
+        .map(|pick| {
+            let mut w = words.to_vec();
+            w[at] = pick.clone();
+            w
+        })
+        .collect();
+    vetting_plan_for(engine, v, prose, words, at, &candidates)
+}
+
+/// [`vetting_plan`] for candidates that are already whole commands, as words
+/// (SQ-1673): the shape fall-through's swapped `use A on B` forms are not the
+/// typed sentence with one word replaced, so they cannot be spelled as a pick.
+fn vetting_plan_for(
+    engine: &dyn Engine,
+    v: &StoryVocabulary,
+    prose: &[String],
+    words: &[String],
+    at: usize,
+    candidates: &[Vec<String>],
 ) -> Option<(Vec<String>, Vec<Slot>)> {
     let knows = |w: &str| engine.knows_word(w).unwrap_or_else(|| v.knows(w));
     let nonsense = NONSENSE.iter().find(|w| !knows(w))?.to_string();
@@ -2075,9 +2235,7 @@ fn vetting_plan(
     let mut cmds: Vec<String> = vec![nonsense];
     let mut plan: Vec<Slot> = Vec::new();
     let mut controls: BTreeMap<String, usize> = BTreeMap::new();
-    for pick in picks {
-        let mut w = words.to_vec();
-        w[at] = pick.clone();
+    for w in candidates {
         let candidate = w.join(" ");
         let mut swap_pair = |base: &[String], a: &str, b: &str, slot: usize| {
             let mut idx = [0usize; 2];
@@ -2092,12 +2250,27 @@ fn vetting_plan(
             }
             (idx[0], idx[1])
         };
-        let pair = noun_slot.map(|slot| swap_pair(&w, absent_a, absent_b, slot));
-        let dir_pair = noun_slot.zip(dir_words.as_ref()).map(|(slot, (d1, d2))| swap_pair(&w, d1, d2, slot));
+        let pair = noun_slot.map(|slot| swap_pair(w, absent_a, absent_b, slot));
+        let dir_pair = noun_slot.zip(dir_words.as_ref()).map(|(slot, (d1, d2))| swap_pair(w, d1, d2, slot));
         cmds.push(candidate);
         plan.push((cmds.len() - 1, pair, dir_pair));
     }
     (cmds.len() <= crate::probe::MAX_PROBES).then_some((cmds, plan))
+}
+
+/// [`vetting_plan_for`] on as many of `candidates`, taken from the front, as
+/// fit inside [`crate::probe::MAX_PROBES`]; the count that fit comes back too.
+fn fitted_plan(
+    engine: &dyn Engine,
+    v: &StoryVocabulary,
+    prose: &[String],
+    words: &[String],
+    at: usize,
+    candidates: &[Vec<String>],
+) -> Option<(Vec<String>, Vec<Slot>, usize)> {
+    (1..=candidates.len()).rev().find_map(|n| {
+        vetting_plan_for(engine, v, prose, words, at, &candidates[..n]).map(|(c, p)| (c, p, n))
+    })
 }
 
 /// Read a finished run against the plan that produced it, and keep only the
@@ -2235,7 +2408,23 @@ pub fn offer_vocabulary(state: &mut AppState, engine: &dyn Engine, cmd: &str, pr
         // so that is what is checked rather than relying on the mix never
         // happening.
         let must_vet = !raw_picks.is_empty() && raw_picks.iter().all(|p| p.requires_vetting);
-        let picks = config.spoken_offer(raw_picks);
+        let mut picks = config.spoken_offer(raw_picks);
+        // The shape scan's second round (SQ-1673): whole commands, vetted only
+        // if the first round's picks all fail vetting — or on their own when
+        // the first round proposed nothing at all.
+        let mut fallback_cmds = if position == Position::Opening && may_probe {
+            v.shape_fallback(&words, &picks, prose)
+        } else {
+            Vec::new()
+        };
+        let mut promoted: Option<Vec<Vec<String>>> = None;
+        let mut must_vet = must_vet;
+        if picks.is_empty() && !fallback_cmds.is_empty() {
+            picks = fallback_cmds.iter().map(|c| c.join(" ")).collect();
+            promoted = Some(std::mem::take(&mut fallback_cmds));
+            must_vet = true;
+        }
+        let whole = promoted.is_some();
         // Empty because nothing was confident enough, or because everything that
         // was got filtered — one answer either way, and it is silence. The word
         // is NOT recorded as answered: nothing was said, so nothing was spent.
@@ -2248,22 +2437,40 @@ pub fn offer_vocabulary(state: &mut AppState, engine: &dyn Engine, cmd: &str, pr
         if answered.contains(word) {
             return None;
         }
-        let asked = may_probe
-            .then(|| vetting_plan(engine, v, prose, &words, at, &picks))
-            .flatten()
-            .and_then(|(cmds, plan)| {
-                let token = probe.ask(engine, &cmds)?;
-                Some(PendingOffer {
-                    token,
-                    epoch,
-                    word: word.clone(),
-                    picks: picks.clone(),
-                    plan,
-                    commands: cmds.len(),
-                    words: words.clone(),
-                    at,
-                })
-            });
+        // The second round's plan is made now, from the live engine, and sent
+        // later from the same snapshot (see `deliver`).
+        let snapshot = (!fallback_cmds.is_empty() && !probe.is_busy())
+            .then(|| probe.snapshot(engine))
+            .flatten();
+        let fallback = snapshot.and_then(|snapshot| {
+            let (commands, plan, kept) = fitted_plan(engine, v, prose, &words, at, &fallback_cmds)?;
+            let picks = fallback_cmds[..kept].iter().map(|c| c.join(" ")).collect();
+            Some(Box::new(Fallback { snapshot, commands, plan, picks }))
+        });
+        let first = may_probe
+            .then(|| match &promoted {
+                Some(cmds) => fitted_plan(engine, v, prose, &words, at, cmds).map(|(c, plan, kept)| {
+                    picks.truncate(kept);
+                    (c, plan)
+                }),
+                None => vetting_plan(engine, v, prose, &words, at, &picks),
+            })
+            .flatten();
+        let asked = first.and_then(|(cmds, plan)| {
+            let token = probe.ask(engine, &cmds)?;
+            Some(PendingOffer {
+                token,
+                epoch,
+                word: word.clone(),
+                picks: picks.clone(),
+                plan,
+                commands: cmds.len(),
+                words: words.clone(),
+                at,
+                whole,
+                fallback,
+            })
+        });
         match asked {
             Some(pending) => Some(Outcome::Asked(pending)),
             // Every surviving pick came from a source that must never be shown
@@ -2276,7 +2483,7 @@ pub fn offer_vocabulary(state: &mut AppState, engine: &dyn Engine, cmd: &str, pr
             None => {
                 vocab.mark_offered(word);
                 let offer =
-                    build_offer(crate::assist::OfferKind::VocabularyOffer, word, &words, at, &picks);
+                    build_offer(crate::assist::OfferKind::VocabularyOffer, word, &words, at, &picks, false);
                 Some(Outcome::Now(format!("{LEAD_DICTIONARY}{}", picks.join(" · ")), offer))
             }
         }
@@ -2372,8 +2579,12 @@ pub fn deliver_answer(state: &mut AppState, answer: crate::probe::Answer) -> boo
 /// harness need: a turn plus the beat afterwards, in one call, so a case can
 /// assert on what the player would eventually have seen without racing it.
 pub fn settle_vocabulary_offer(state: &mut AppState) -> bool {
-    let Some(answer) = state.probe.settle() else { return false };
-    deliver(state, answer)
+    // A loop because a rejected first round may ask a second (SQ-1673).
+    let mut shown = false;
+    while let Some(answer) = state.probe.settle() {
+        shown |= deliver(state, answer);
+    }
+    shown
 }
 
 /// Turn one collected answer into a line, or into silence. See
@@ -2389,7 +2600,32 @@ fn deliver(state: &mut AppState, answer: crate::probe::Answer) -> bool {
     if pending.epoch != state.turn_epoch {
         return false; // stale — the player typed again
     }
-    let vetted = answer.run.as_ref().and_then(|run| judge(run, &pending));
+    let vetted = answer.run.as_ref().and_then(|run| judge(run, &pending)).map(|mut kept| {
+        kept.truncate(MAX_OFFERED); // the second round may have planned more than an offer names
+        kept
+    });
+    // Vetting ran and rejected every pick: ask the second round, if one was
+    // planned, from the snapshot the first was (SQ-1673). Its answer arrives
+    // as a new token and is delivered like any other.
+    if vetted.as_ref().is_some_and(Vec::is_empty) {
+        if let Some(fb) = pending.fallback {
+            if let Some(token) = state.probe.ask_from(&fb.snapshot, &fb.commands) {
+                state.vocab_pending = Some(PendingOffer {
+                    token,
+                    epoch: pending.epoch,
+                    word: pending.word,
+                    picks: fb.picks,
+                    plan: fb.plan,
+                    commands: fb.commands.len(),
+                    words: pending.words,
+                    at: pending.at,
+                    whole: true,
+                    fallback: None,
+                });
+            }
+        }
+        return false;
+    }
     let (picks, lead, kind) = match vetted {
         Some(kept) => (kept, LEAD_VETTED, crate::assist::OfferKind::VettedOffer),
         None => (pending.picks, LEAD_DICTIONARY, crate::assist::OfferKind::VocabularyOffer),
@@ -2400,7 +2636,7 @@ fn deliver(state: &mut AppState, answer: crate::probe::Answer) -> bool {
     }
     state.vocab.mark_offered(&pending.word);
     let before = state.transcript.len();
-    let offer = build_offer(kind, &pending.word, &pending.words, pending.at, &picks);
+    let offer = build_offer(kind, &pending.word, &pending.words, pending.at, &picks, pending.whole);
     state.push_assist(
         &crate::assist::Assist::help(format!("{lead}{}", picks.join(" · "))).with_offer(offer),
     );
@@ -3057,6 +3293,8 @@ mod tests {
             commands: 10,
             words: vec!["inspect".to_string(), "hinged".to_string()],
             at: 0,
+            whole: false,
+            fallback: None,
         };
         assert_eq!(
             judge(&run, &offer),

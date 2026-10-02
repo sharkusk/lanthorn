@@ -29,6 +29,11 @@ while any such tag, or this Unreleased section, still exists.*
 
 ### Fixed
 
+- Typing "use sword on troll" (or "employ", "utilize", "wield", "operate") in a
+  game that has never heard the word now gets a real suggestion, such as "attack
+  troll with sword" in Zork I, instead of silence. The Guiding Light tries the
+  sentence the other way round and tests it in a hidden copy of the game before
+  offering it, and it now keeps looking when its first guess fails that test.
 - The map's tidy now honours one-way compass hints it used to leave bent: a room
   a passage leads west to now ends up west of it, even when that takes a long
   slide or moving a whole stairwell or corridor together, and a room draws its
