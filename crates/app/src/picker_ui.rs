@@ -7404,6 +7404,23 @@ mod tests {
         app::scratch_dir(&format!("picker-ui-{tag}"))
     }
 
+    /// SQ-1677: the hint index is install-wide, so the browser must load it from
+    /// the user dir. It was once loaded from the saves base in one place and the
+    /// user dir in another, and with `--data-dir` or a named player the two see
+    /// different files. A guard on the source, in the repo's style for facts a
+    /// caller has no reason to know: every `load_hint_index(` call outside the
+    /// tests names `cfg.user_dir`.
+    #[test]
+    fn the_hint_index_is_always_loaded_from_the_user_dir() {
+        let src = include_str!("picker_ui.rs");
+        let production = &src[..src.find("#[cfg(all(test, feature = \"t-picker\"))]\nmod tests {").unwrap()];
+        let calls: Vec<&str> = production.match_indices("load_hint_index(").map(|(i, _)| &production[i..]).collect();
+        assert!(!calls.is_empty(), "the browser loads a hint index");
+        for call in calls {
+            assert!(call.starts_with("load_hint_index(&cfg.user_dir)"), "not the user dir: {}", &call[..call.len().min(60)]);
+        }
+    }
+
     #[test]
     fn resort_list_keeps_row_badges_and_aux_cache_aligned_with_the_new_order() {
         let stories_dir = temp_dir("resort-align");
@@ -7412,7 +7429,10 @@ mod tests {
         b_bytes[0x12] = b'9'; // distinct serial → distinct IFID from a.z5
         std::fs::write(stories_dir.join("b.z5"), b_bytes).unwrap();
         let data_base = temp_dir("resort-align-data");
-        let hint_index = app::hints::load_hint_index(&data_base);
+        // The hint index is install-wide (SQ-1677): it lives under the user dir,
+        // never under the saves base the player's files sit in.
+        let user_dir = temp_dir("resort-align-user");
+        let hint_index = app::hints::load_hint_index(&user_dir);
 
         let mut stories = app::picker::scan_stories(&stories_dir, &app::data_roots::DataRoots::single(&data_base));
         assert_eq!(stories.len(), 2);
