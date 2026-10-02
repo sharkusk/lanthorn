@@ -220,13 +220,31 @@ pub fn story_words(tokens: &[String], knows: impl Fn(&str) -> bool) -> Vec<Strin
     let mut seen: std::collections::HashSet<String> = std::collections::HashSet::new();
     let mut words: Vec<String> = tokens
         .iter()
-        .map(|w| w.to_lowercase())
-        .filter(|w| w.chars().any(char::is_alphanumeric))
+        .filter_map(|w| story_word(w, &knows))
         .filter(|w| seen.insert(w.clone()))
-        .filter(|w| knows(w))
         .collect();
     words.sort_unstable();
     words
+}
+
+/// The one word a printed token offers, or `None` (SQ-1674). Leading and trailing
+/// punctuation is trimmed first (`sword:` is `sword`; a Version 3 key cuts both
+/// to the same six Z-characters, so `knows` alone cannot tell them apart), and
+/// interior punctuation stays (`x-ray`). The token as printed is the fallback,
+/// for a real entry like `mr.`. Lowercased; shared with `refresh_seen_words`.
+pub fn story_word(token: &str, knows: &impl Fn(&str) -> bool) -> Option<String> {
+    let w = token.to_lowercase();
+    if !w.chars().any(char::is_alphanumeric) {
+        return None;
+    }
+    let trimmed = w.trim_matches(|c: char| !c.is_alphanumeric());
+    if !trimmed.is_empty() && knows(trimmed) {
+        Some(trimmed.to_string())
+    } else if knows(&w) {
+        Some(w)
+    } else {
+        None
+    }
 }
 
 // ── Fuzzy matching (command palette) ───────────────────────────────────────────
@@ -488,6 +506,29 @@ mod tests {
         // A dictionary holds its own separators; a comma is still not a candidate.
         let words = story_words(&["box".into(), ",".into(), ".".into()], dict(&["box", ",", "."], 0));
         assert_eq!(words, vec!["box"]);
+    }
+
+    /// SQ-1674: Zork I prints `sword: Taken.`; a V3 key cuts `sword:` and `sword`
+    /// to the same Z-characters, so `knows` accepts the colon form.
+    #[test]
+    fn stray_punctuation_is_trimmed_off_the_offered_word() {
+        let words = story_words(&split_prose("sword: Taken. (lamp) sword"), dict(&["sword", "lamp"], 0));
+        assert_eq!(words, vec!["lamp", "sword"]);
+        // A collision-prone dictionary, like V3's, knows the colon form too.
+        let words = story_words(&["sword:".into()], |w: &str| w.trim_end_matches(':') == "sword");
+        assert_eq!(words, vec!["sword"]);
+    }
+
+    #[test]
+    fn interior_punctuation_stays() {
+        let words = story_words(&["x-ray".into(), "o'brien".into()], dict(&["x-ray", "o'brien"], 0));
+        assert_eq!(words, vec!["o'brien", "x-ray"]);
+    }
+
+    #[test]
+    fn a_word_known_only_with_its_punctuation_is_kept() {
+        let words = story_words(&["mr.".into()], dict(&["mr."], 0));
+        assert_eq!(words, vec!["mr."]);
     }
 
     #[test]

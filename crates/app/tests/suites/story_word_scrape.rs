@@ -357,6 +357,20 @@ fn completion_still_ranks_the_recent_words_first() {
     assert!(hits.contains(&"mailbo".to_string()), "the dictionary's own spelling still follows");
 }
 
+/// SQ-1674: a multi-object reply prints `sword: Taken.`; the splitter keeps the
+/// colon and a V3 key cuts `sword:` to the same Z-characters as `sword`, so the
+/// colon form used to be offered. Only the trimmed word may be.
+#[test]
+fn a_colon_after_a_printed_noun_is_not_offered() {
+    let session = boot_minizork();
+    let mut state = state_with(&["sword: Taken.", "lantern: Taken."]);
+    app::input::refresh_seen_words(&mut state, &session);
+    for w in &state.seen_words {
+        assert!(!w.ends_with(':'), "{w:?} carries stray punctuation: {:?}", state.seen_words);
+    }
+    assert!(state.seen_words.contains(&"lantern".to_string()), "{:?}", state.seen_words);
+}
+
 /// The band's *here* fallback reads the same list, so the two consumers cannot
 /// drift apart — which is what the duplicated twenty-line scrape invited — and
 /// then cuts it to the words the story marks a NOUN (SQ-1042).

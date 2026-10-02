@@ -29,6 +29,8 @@ while any such tag, or this Unreleased section, still exists.*
 
 ### Fixed
 
+- Autocomplete no longer offers words with stray punctuation picked up from the
+  story's output, like "sword:" after a multi-object "take all".
 - Typing "use sword on troll" (or "employ", "utilize", "wield", "operate") in a
   game that has never heard the word now gets a real suggestion, such as "attack
   troll with sword" in Zork I, instead of silence. The Guiding Light tries the

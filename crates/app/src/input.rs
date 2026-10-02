@@ -3763,19 +3763,15 @@ pub fn refresh_seen_words(state: &mut AppState, engine: &dyn crate::engine::Engi
         let mut out: Vec<String> = Vec::new();
         let mut things: Vec<String> = Vec::new();
         for w in tokens.iter().rev() {
-            let w = w.to_lowercase();
-            if !w.chars().any(char::is_alphanumeric) {
-                continue;
-            }
+            let knows = |x: &str| engine.knows_word(x).unwrap_or_else(|| vocab.is_some_and(|v| v.knows(x)));
+            let Some(w) = crate::complete::story_word(w, &knows) else { continue };
             if out.contains(&w) {
                 continue;
             }
-            if engine.knows_word(&w).unwrap_or_else(|| vocab.is_some_and(|v| v.knows(&w))) {
-                if is_thing(&w) {
-                    things.push(w.clone());
-                }
-                out.push(w);
+            if is_thing(&w) {
+                things.push(w.clone());
             }
+            out.push(w);
         }
         (out, things)
     };
