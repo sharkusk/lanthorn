@@ -49,6 +49,12 @@ while any such tag, or this Unreleased section, still exists.*
   `config.toml` only. Embedders get the library's `documents` module to list, import and
   remove the files in a game's folder.
 
+- Downloading or importing a document you already have no longer makes a copy.
+  If the game's documents folder holds a file with exactly the same contents (under
+  any name), nothing is written and the document chooser says
+  `Already in your documents: manual.pdf`. A different file with the same name still
+  gets a `(2)` suffix.
+
 - Several players can now share one lanthorn install. `--player <name>` (or the
   `LANTHORN_PLAYER` environment variable) gives each player their own saves, map,
   history, settings and look, while story titles, blurbs and covers are fetched

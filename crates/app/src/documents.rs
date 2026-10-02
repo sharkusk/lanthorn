@@ -253,24 +253,95 @@ pub fn list(dir: &Path) -> io::Result<Vec<DocEntry>> {
     Ok(out)
 }
 
+/// What [`import`] did.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum Imported {
+    /// A new file was written.
+    Added(DocEntry),
+    /// The folder already held a file with exactly these bytes (under this name or
+    /// another); nothing was written and this is that file.
+    AlreadyPresent(DocEntry),
+}
+
+impl Imported {
+    /// The file in the folder that now holds these bytes, new or pre-existing.
+    pub fn entry(&self) -> &DocEntry {
+        match self {
+            Imported::Added(e) | Imported::AlreadyPresent(e) => e,
+        }
+    }
+}
+
+/// Whether two files have the same bytes. Sizes are compared first, then the
+/// content is streamed side by side. A straight comparison rather than a hash:
+/// it is exact (no collisions), needs no dependency (the app depends on no hash
+/// crate directly), and reads exactly what a hash would read.
+fn same_bytes(a: &Path, b: &Path) -> io::Result<bool> {
+    use std::io::Read;
+    let (mut fa, mut fb) = (std::fs::File::open(a)?, std::fs::File::open(b)?);
+    if fa.metadata()?.len() != fb.metadata()?.len() {
+        return Ok(false);
+    }
+    let (mut ba, mut bb) = (vec![0u8; 64 * 1024], vec![0u8; 64 * 1024]);
+    loop {
+        let n = fa.read(&mut ba)?;
+        if n == 0 {
+            return Ok(true);
+        }
+        fb.read_exact(&mut bb[..n])?;
+        if ba[..n] != bb[..n] {
+            return Ok(false);
+        }
+    }
+}
+
+/// A file already in `dir` with the bytes of `src`, if any. Only files whose size
+/// matches are read, and nothing is cached: a documents folder holds a handful of
+/// files, so a rescan per import is cheaper than keeping an index honest.
+fn find_identical(dir: &Path, src: &Path, size: u64) -> io::Result<Option<DocEntry>> {
+    for e in list(dir)? {
+        if e.size == size && same_bytes(&e.path, src).unwrap_or(false) {
+            return Ok(Some(e));
+        }
+    }
+    Ok(None)
+}
+
 /// Copy `src` into `dir` (creating `dir` on demand: an import is an explicit
-/// action). Written to a temp file and renamed into place; a name clash is
-/// resolved by suffixing (`manual (2).pdf`), never by overwriting.
-pub fn import(dir: &Path, src: &Path) -> io::Result<DocEntry> {
+/// action). A file whose bytes are already in the folder is not copied again
+/// ([`Imported::AlreadyPresent`]). Otherwise it is written to a temp file and
+/// renamed into place; a name clash with DIFFERENT bytes is resolved by suffixing
+/// (`manual (2).pdf`), never by overwriting.
+///
+/// Race safety: the look-for-a-duplicate and the claim-a-name steps run under an
+/// exclusive advisory lock on `<dir>/.import.lock`, so two players (separate
+/// processes) or threads importing the same bytes at once serialise: the second
+/// finds the first's file and writes nothing. The OS drops the lock if the holder
+/// dies, so there is no stale-lock cleanup. (A re-check after the rename would
+/// not do: each importer can see the other, or neither, depending on timing,
+/// leaving zero or two copies.)
+pub fn import(dir: &Path, src: &Path) -> io::Result<Imported> {
     use std::sync::atomic::{AtomicUsize, Ordering};
     static NTH: AtomicUsize = AtomicUsize::new(0);
     let name = src.file_name().and_then(|n| n.to_str()).ok_or_else(|| invalid("no file name"))?;
     if name.starts_with('.') {
         return Err(invalid("a dotfile is not a document"));
     }
-    if !std::fs::metadata(src)?.is_file() {
+    let meta = std::fs::metadata(src)?;
+    if !meta.is_file() {
         return Err(invalid("not a file"));
     }
+    let size = meta.len();
     std::fs::create_dir_all(dir)?;
+    let lock = std::fs::OpenOptions::new().write(true).create(true).truncate(false).open(dir.join(".import.lock"))?;
+    lock.lock()?; // released when `lock` drops, however this function ends
+    if let Some(existing) = find_identical(dir, src, size)? {
+        return Ok(Imported::AlreadyPresent(existing));
+    }
     let stem = Path::new(name).file_stem().and_then(|s| s.to_str()).unwrap_or(name);
     let ext = Path::new(name).extension().and_then(|s| s.to_str());
-    // Claim a free name atomically (`create_new`), so two imports of the same
-    // name get two names; then rename the finished copy over the claim.
+    // Claim a free name atomically (`create_new`), then rename the finished copy
+    // over the claim.
     let mut n = 1;
     let dest = loop {
         let candidate = match (n, ext) {
@@ -293,7 +364,7 @@ pub fn import(dir: &Path, src: &Path) -> io::Result<DocEntry> {
         return Err(e);
     }
     let size = std::fs::metadata(&dest)?.len();
-    entry_for(dest, size).ok_or_else(|| invalid("unusable file name"))
+    entry_for(dest, size).map(Imported::Added).ok_or_else(|| invalid("unusable file name"))
 }
 
 /// Delete the file `id` (a name from [`list`]) inside `dir`. An id with a path
@@ -426,6 +497,44 @@ mod tests {
     }
 
     #[test]
+    fn identical_bytes_under_another_name_are_skipped() {
+        let home = crate::scratch_dir("docs-dedup-name");
+        let (dir, src) = (home.join("g [t]"), home.join("src"));
+        std::fs::create_dir_all(&src).unwrap();
+        std::fs::write(src.join("zork1.txt"), b"west of house").unwrap();
+        std::fs::write(src.join("copy of zork1.txt"), b"west of house").unwrap();
+        let first = import(&dir, &src.join("zork1.txt")).unwrap();
+        let again = import(&dir, &src.join("copy of zork1.txt")).unwrap();
+        assert!(matches!(first, Imported::Added(_)));
+        assert!(matches!(&again, Imported::AlreadyPresent(e) if e.id == "zork1.txt"), "{again:?}");
+        assert_eq!(list(&dir).unwrap().len(), 1);
+        // Same size, different bytes: not a duplicate.
+        std::fs::write(src.join("other.txt"), b"west of hOuse").unwrap();
+        assert!(matches!(import(&dir, &src.join("other.txt")).unwrap(), Imported::Added(_)));
+        let _ = std::fs::remove_dir_all(home);
+    }
+
+    #[test]
+    fn concurrent_identical_imports_leave_one_file() {
+        let home = crate::scratch_dir("docs-dedup-race");
+        let (dir, src) = (home.join("g [t]"), home.join("src"));
+        std::fs::create_dir_all(&src).unwrap();
+        for i in 0..12 {
+            std::fs::write(src.join(format!("m{i}.pdf")), vec![9u8; 300_000]).unwrap();
+        }
+        let handles: Vec<_> = (0..12)
+            .map(|i| {
+                let (dir, p) = (dir.clone(), src.join(format!("m{i}.pdf")));
+                std::thread::spawn(move || import(&dir, &p).unwrap())
+            })
+            .collect();
+        let got: Vec<Imported> = handles.into_iter().map(|h| h.join().unwrap()).collect();
+        assert_eq!(got.iter().filter(|g| matches!(g, Imported::Added(_))).count(), 1, "{got:?}");
+        assert_eq!(list(&dir).unwrap().len(), 1);
+        let _ = std::fs::remove_dir_all(home);
+    }
+
+    #[test]
     fn list_import_remove_behave() {
         let home = crate::scratch_dir("docs-api");
         let dir = home.join("game [t]");
@@ -433,16 +542,23 @@ mod tests {
         let src_dir = crate::scratch_dir("docs-api-src");
         let manual = src_dir.join("Manual.pdf");
         std::fs::write(&manual, b"%PDF-1").unwrap();
-        let a = import(&dir, &manual).unwrap();
+        let a = import(&dir, &manual).unwrap().entry().clone();
         assert_eq!((a.id.as_str(), a.kind, a.size, a.display_name.as_str()), ("Manual.pdf", DocKind::Pdf, 6, "Manual"));
         assert_eq!(a.path, dir.join("Manual.pdf"));
-        let b = import(&dir, &manual).unwrap();
-        assert_eq!(b.id, "Manual (2).pdf", "a clash is suffixed");
-        let c = import(&dir, &manual).unwrap();
-        assert_eq!(c.id, "Manual (3).pdf");
+        // The same bytes again are not copied.
+        assert_eq!(import(&dir, &manual).unwrap(), Imported::AlreadyPresent(a.clone()));
+        // Different bytes under the same name are suffixed.
+        let other_dir = crate::scratch_dir("docs-api-other");
+        std::fs::write(other_dir.join("Manual.pdf"), b"%PDF-2").unwrap();
+        let b = import(&dir, &other_dir.join("Manual.pdf")).unwrap();
+        assert!(matches!(&b, Imported::Added(e) if e.id == "Manual (2).pdf"), "a clash is suffixed");
+        std::fs::write(other_dir.join("Manual.pdf"), b"%PDF-3").unwrap();
+        let c = import(&dir, &other_dir.join("Manual.pdf")).unwrap();
+        assert!(matches!(&c, Imported::Added(e) if e.id == "Manual (3).pdf"));
+        let _ = std::fs::remove_dir_all(other_dir);
         assert_eq!(std::fs::read(&manual).unwrap(), b"%PDF-1", "the source is untouched");
-        std::fs::write(src_dir.join("map.PNG"), b"x").unwrap();
-        std::fs::write(src_dir.join("notes"), b"x").unwrap();
+        std::fs::write(src_dir.join("map.PNG"), b"png").unwrap();
+        std::fs::write(src_dir.join("notes"), b"notes!").unwrap();
         import(&dir, &src_dir.join("map.PNG")).unwrap();
         import(&dir, &src_dir.join("notes")).unwrap();
         // Dotfiles and subdirectories are not listed.

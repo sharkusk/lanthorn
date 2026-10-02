@@ -51,6 +51,7 @@ use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::mpsc;
 
 use crate::data_roots::DataRoots;
+use crate::documents::Imported;
 use crate::ifdb_search::{
     basename_from_url, child_text, one_line, sanitize_basename, subtitle_of, too_large_message,
     IfdbGate, IfdbWorker, RangeProbe, SearchError, SearchSource, MAX_DOWNLOAD,
@@ -540,9 +541,10 @@ pub fn fetch_preview(source: &dyn SearchSource, url: &str, entry: Option<usize>)
 // ── Saving ───────────────────────────────────────────────────────────────────
 
 /// Write `bytes` as `name` into `dir` through [`crate::documents::import`]: the
-/// folder is made if missing and a clash is suffixed. The bytes go to a scratch
+/// folder is made if missing, a clash is suffixed, and bytes the folder already
+/// holds are not written again. The bytes go to a scratch
 /// file first, so nothing partial is ever in the folder.
-pub fn save_document(dir: &Path, name: &str, bytes: &[u8]) -> io::Result<crate::documents::DocEntry> {
+pub fn save_document(dir: &Path, name: &str, bytes: &[u8]) -> io::Result<Imported> {
     static NTH: AtomicUsize = AtomicUsize::new(0);
     let scratch = std::env::temp_dir().join(format!(
         "lanthorn-doc-{}-{}",
@@ -596,7 +598,14 @@ pub enum DocEvent {
     Listed { link: usize, result: Result<ZipListing, String> },
     Previewed { key: RowKey, result: Result<String, String> },
     Progress { done: usize, total: usize, name: String },
-    Finished { dir: Option<std::path::PathBuf>, saved: Vec<String>, failed: Vec<(String, String)> },
+    Finished {
+        dir: Option<std::path::PathBuf>,
+        saved: Vec<String>,
+        /// Files skipped because the folder already held these exact bytes: the
+        /// existing file's name.
+        already: Vec<String>,
+        failed: Vec<(String, String)>,
+    },
 }
 
 /// The documents chooser's worker: the same [`IfdbWorker`] the search modal
@@ -648,12 +657,13 @@ fn run_job_capped(
                     return send(DocEvent::Finished {
                         dir: None,
                         saved: Vec::new(),
+                        already: Vec::new(),
                         failed: vec![("documents folder".into(), format!("could not be made: {e}"))],
                     })
                 }
             };
             let total = items.len();
-            let (mut saved, mut failed) = (Vec::new(), Vec::new());
+            let (mut saved, mut already, mut failed) = (Vec::new(), Vec::new(), Vec::new());
             // The zip last opened, so several entries of one archive share one
             // directory read.
             let mut open: Option<(String, Option<RemoteZip>)> = None;
@@ -674,17 +684,18 @@ fn run_job_capped(
                     }
                 };
                 match got.and_then(|(name, bytes)| {
-                    save_document(&dir, &name, &bytes).map_err(|e| SearchError::Io(e.to_string())).map(|d| d.id)
+                    save_document(&dir, &name, &bytes).map_err(|e| SearchError::Io(e.to_string()))
                 }) {
-                    Ok(id) => saved.push(id),
+                    Ok(Imported::Added(d)) => saved.push(d.id),
+                    Ok(Imported::AlreadyPresent(d)) => already.push(d.id),
                     Err(SearchError::TooLarge) => failed.push((label, too_large_message(cap))),
                     Err(e) => failed.push((label, e.to_string())),
                 }
-                if !send(DocEvent::Progress { done: n + 1, total, name: saved.last().cloned().unwrap_or_default() }) {
+                if !send(DocEvent::Progress { done: n + 1, total, name: saved.last().or(already.last()).cloned().unwrap_or_default() }) {
                     return false;
                 }
             }
-            send(DocEvent::Finished { dir: Some(dir), saved, failed })
+            send(DocEvent::Finished { dir: Some(dir), saved, already, failed })
         }
     }
 }
@@ -885,7 +896,7 @@ pub(crate) mod tests {
 
     pub(crate) fn files_in(dir: &Path) -> Vec<String> {
         let mut v: Vec<String> = std::fs::read_dir(dir)
-            .map(|rd| rd.flatten().map(|e| e.file_name().to_string_lossy().into_owned()).collect())
+            .map(|rd| rd.flatten().map(|e| e.file_name().to_string_lossy().into_owned()).filter(|n| !n.starts_with('.')).collect())
             .unwrap_or_default();
         v.sort();
         v
@@ -988,13 +999,13 @@ pub(crate) mod tests {
 
     fn finished(evs: Vec<DocEvent>) -> (Option<PathBuf>, Vec<String>, Vec<(String, String)>) {
         match evs.into_iter().last() {
-            Some(DocEvent::Finished { dir, saved, failed }) => (dir, saved, failed),
+            Some(DocEvent::Finished { dir, saved, failed, .. }) => (dir, saved, failed),
             other => panic!("no Finished: {other:?}"),
         }
     }
 
     #[test]
-    fn downloads_land_in_the_documents_folder_through_import_and_clashes_are_suffixed() {
+    fn downloads_land_in_the_documents_folder_skip_duplicates_and_suffix_clashes() {
         let (home, roots) = roots("docs-dl-land");
         let zip = big_zip(3, 2000, &[("Sols/ZorkI.txt", b"walkthrough")]);
         let host = Host::new(true).with("https://x/manual.pdf", b"%PDF-1.4 hello".to_vec()).with(URL, zip);
@@ -1013,8 +1024,19 @@ pub(crate) mod tests {
         assert_eq!(saved, ["manual.pdf", "ZorkI.txt"]);
         assert_eq!(std::fs::read(dir.join("ZorkI.txt")).unwrap(), b"walkthrough");
 
-        let (_, saved2, _) = finished(run(&host, &roots, job(), MAX_DOWNLOAD));
-        assert_eq!(saved2, ["manual (2).pdf", "ZorkI (2).txt"], "a clash is suffixed, never overwritten");
+        // A re-download of the same files adds nothing and says so.
+        let evs = run(&host, &roots, job(), MAX_DOWNLOAD);
+        let Some(DocEvent::Finished { saved: saved2, already, failed, .. }) = evs.into_iter().last() else { panic!() };
+        assert!(saved2.is_empty() && failed.is_empty(), "{saved2:?} {failed:?}");
+        assert_eq!(already, ["manual.pdf", "ZorkI.txt"]);
+        assert_eq!(files_in(&dir), ["ZorkI.txt", "manual.pdf"]);
+
+        // Same names, different bytes: suffixed, never overwritten.
+        let host2 = Host::new(true)
+            .with("https://x/manual.pdf", b"%PDF-1.4 hello v2".to_vec())
+            .with(URL, big_zip(3, 2000, &[("Sols/ZorkI.txt", b"walkthrough, revised")]));
+        let (_, saved3, _) = finished(run(&host2, &roots, job(), MAX_DOWNLOAD));
+        assert_eq!(saved3, ["manual (2).pdf", "ZorkI (2).txt"]);
         assert_eq!(files_in(&dir), ["ZorkI (2).txt", "ZorkI.txt", "manual (2).pdf", "manual.pdf"]);
         let _ = std::fs::remove_dir_all(home);
     }

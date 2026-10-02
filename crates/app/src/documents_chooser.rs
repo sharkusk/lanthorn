@@ -437,7 +437,7 @@ impl DocumentsChooser {
                 );
             }
             DocEvent::Progress { done, total, .. } => self.phase = Phase::Downloading { done: *done, total: *total },
-            DocEvent::Finished { dir, saved, failed } => {
+            DocEvent::Finished { dir, saved, already, failed } => {
                 self.phase = Phase::Ready;
                 if !saved.is_empty() {
                     self.saved = true;
@@ -450,6 +450,12 @@ impl DocumentsChooser {
                     (n, Some(f)) => format!("Saved {n} files to {f}"),
                     (n, None) => format!("Saved {n} files"),
                 };
+                if !already.is_empty() {
+                    if !line.is_empty() {
+                        line.push_str(" · ");
+                    }
+                    line.push_str(&format!("Already in your documents: {}", already.join(", ")));
+                }
                 if let Some((what, why)) = failed.first() {
                     if !line.is_empty() {
                         line.push_str(" · ");
@@ -904,6 +910,10 @@ mod tests {
         assert_eq!(names(&s.chooser)[9], "zork1.txt");
         press(&mut s, &[Enter]);
         assert_eq!(files_in(&roots.documents().join("Zork I [abc123]")), ["zork1.txt"]);
+        press(&mut s, &[Enter]);
+        let (status, failure) = s.chooser.status.clone().expect("a result line");
+        assert!(!failure && status == "Already in your documents: zork1.txt", "{status}");
+        assert_eq!(files_in(&roots.documents().join("Zork I [abc123]")), ["zork1.txt"], "no copy");
         let _ = std::fs::remove_dir_all(home);
     }
 
