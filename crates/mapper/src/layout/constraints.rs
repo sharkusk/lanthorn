@@ -195,6 +195,13 @@ pub fn build_axis_constraints(graph: &MapGraph, ids: &[RoomId], gap: f64) -> Axi
     // alone (the diagonals happened to be minted first) sacrificed all three cardinal doors
     // instead of stretching one diagonal corner.
     let conns = graph.connections();
+    // SQ-1670: the final tie-break is the connection's own `(origin, dest, dir)`, NOT its index
+    // in the graph's connection list — that index is the order the player happened to walk, and
+    // letting it decide which of two same-tier constraints `creates_cycle` drops made tidy a
+    // function of discovery order rather than of the graph. `ci` still rides along as the
+    // identity `dropped` reports, but a duplicate triple cannot exist, so it never decides.
+    let canon: Vec<(RoomId, RoomId, String)> =
+        conns.iter().map(|c| (c.origin, c.dest, format!("{:?}", c.dir))).collect();
     let mut order: Vec<usize> = (0..conns.len()).collect();
     order.sort_by_key(|&ci| {
         let c = &conns[ci];
@@ -216,7 +223,7 @@ pub fn build_axis_constraints(graph: &MapGraph, ids: &[RoomId], gap: f64) -> Axi
                 | crate::direction::Direction::SE
                 | crate::direction::Direction::SW
         );
-        (c.weight, tier, is_diagonal, ci)
+        (c.weight, tier, is_diagonal, canon[ci].clone(), ci)
     });
     for ci in order {
         let conn = &conns[ci];
@@ -341,6 +348,28 @@ mod tests {
         // First N kept, second N dropped (would close a cycle).
         assert_eq!(ac.y.len(), 1, "exactly one y constraint survives");
         assert_eq!(ac.dropped.len(), 1, "the cycle-closing connection is dropped");
+    }
+
+    /// SQ-1670: which of two contradicting same-tier edges is dropped must not depend on the
+    /// order the connections were recorded in.
+    #[test]
+    fn dropped_constraint_is_independent_of_connection_order() {
+        let dropped_triples = |flip: bool| {
+            let mut g = two_rooms();
+            let mut edges = [(1u32, Direction::N, 2u32), (2, Direction::N, 1)];
+            if flip {
+                edges.reverse();
+            }
+            for (o, d, t) in edges {
+                g.add_edge(o, d, t);
+            }
+            let ac = build_axis_constraints(&g, &[1, 2], 1.0);
+            ac.dropped
+                .iter()
+                .map(|&i| (g.connections()[i].origin, g.connections()[i].dest))
+                .collect::<Vec<_>>()
+        };
+        assert_eq!(dropped_triples(false), dropped_triples(true));
     }
 
     #[test]

@@ -3407,4 +3407,31 @@ mod tests {
             "a diagonal pins its endpoint to a quadrant, not to a cell",
         );
     }
+
+    /// SQ-1670: tidy is a pure function of the graph — the same connections recorded in a
+    /// different order lay out identically.
+    #[test]
+    fn relayout_is_independent_of_connection_order() {
+        let edges = [
+            (1u32, Direction::N, 2u32),
+            (2, Direction::N, 1),
+            (1, Direction::E, 3),
+            (3, Direction::E, 2),
+            (2, Direction::S, 3),
+        ];
+        let laid_out = |order: Vec<usize>| {
+            let mut g = MapGraph::new();
+            for id in 1..=3 {
+                g.upsert_room(id, "r".into());
+            }
+            for i in order {
+                let (o, d, t) = edges[i];
+                g.add_edge(o, d, t);
+            }
+            relayout_auto(&mut g);
+            g.rooms().map(|r| (r.id, r.pos)).collect::<Vec<_>>()
+        };
+        assert_eq!(laid_out(vec![0, 1, 2, 3, 4]), laid_out(vec![4, 3, 2, 1, 0]));
+        assert_eq!(laid_out(vec![0, 1, 2, 3, 4]), laid_out(vec![1, 0, 3, 4, 2]));
+    }
 }
