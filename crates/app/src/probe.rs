@@ -197,6 +197,10 @@ pub struct ShadowRecipe {
     /// Empty for a session with no per-story directory, which is every
     /// test-built recipe and costs only the old behaviour.
     pub store: std::path::PathBuf,
+    /// The shared catalogue folder holding the learned-address files
+    /// (`room-global`/`player-global`) when it is not `store` itself, i.e. for a
+    /// named player (SQ-1676). `None` keeps them beside the store.
+    pub catalogue: Option<std::path::PathBuf>,
     /// The Glk file VFS the live session booted with, for the same reason: a
     /// game may read a cache out of it during initialisation (SQ-0290). Never
     /// written back — a shadow's VFS dies with it.
@@ -1172,8 +1176,12 @@ fn boot_shadow(recipe: &ShadowRecipe) -> Result<Box<dyn Engine>, String> {
             Ok(Box::new(s))
         }
         crate::hints::LoadedStory::Glulx(bytes) => {
-            let s = crate::glulx_session::GlulxSession::new_shadow(
-                recipe.store.clone(),
+            let mut store = crate::glulx_session::GameStore::read_only(recipe.store.clone());
+            if let Some(c) = &recipe.catalogue {
+                store = store.with_catalogue(c.clone());
+            }
+            let s = crate::glulx_session::GlulxSession::new_shadow_in(
+                store,
                 bytes,
                 recipe.screen.0,
                 recipe.screen.1,

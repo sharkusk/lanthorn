@@ -73,6 +73,7 @@ fn story() -> Option<Vec<u8>> {
 
 fn recipe_in(bytes: &[u8], store: PathBuf) -> ShadowRecipe {
     ShadowRecipe {
+        catalogue: None,
         story_bytes: Arc::new(bytes.to_vec()),
         store,
         vfs_bytes: Arc::new(Vec::new()),

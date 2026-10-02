@@ -1973,6 +1973,7 @@ pub fn boot_story(req: BootRequest<'_>, hooks: &mut dyn BootHooks) -> Result<Boo
         // shadow of Counterfeit Monkey re-runs the initialisation this launch
         // skipped, which is the whole of SQ-1121's "too slow to probe".
         store: game_dir.clone(),
+        catalogue: Some(catalogue_dir.clone()),
         // Taken from the LIVE SESSION rather than from the sidecar on disk: on a
         // first launch the sidecar is empty and the session's is not, and it is
         // the session's that makes the shadow cheap.

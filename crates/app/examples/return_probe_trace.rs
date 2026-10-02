@@ -57,6 +57,7 @@ fn main() {
     let mut state = AppState::default();
     state.config.return_probe = true;
     state.probe.arm(ShadowRecipe {
+        catalogue: None,
         story_bytes: Arc::new(inner),
         store: PathBuf::new(),
         vfs_bytes: Arc::new(Vec::new()),

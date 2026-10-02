@@ -658,8 +658,23 @@ impl GlulxSession {
         vfs_bytes: &[u8],
         random_seed: Option<u32>,
     ) -> Result<GlulxSession, GError> {
+        Self::new_shadow_in(GameStore::read_only(game_dir), image, cols, rows, acceleration, vfs_bytes, random_seed)
+    }
+
+    /// [`GlulxSession::new_shadow`] over an explicit store, so a named player's
+    /// shadow can read the shared learned-address files from the catalogue
+    /// ([`GameStore::with_catalogue`]) exactly as the live session does (SQ-1676).
+    pub fn new_shadow_in(
+        store: GameStore,
+        image: Vec<u8>,
+        cols: u32,
+        rows: u32,
+        acceleration: bool,
+        vfs_bytes: &[u8],
+        random_seed: Option<u32>,
+    ) -> Result<GlulxSession, GError> {
         let mut s = Self::new_with_store(
-            GameStore::read_only(game_dir),
+            store,
             image,
             cols,
             rows,
@@ -2452,6 +2467,8 @@ impl GlulxSession {
     /// the story caught out straight back at the next launch, before a single
     /// turn has been played and with the rejection list — which is a fact about
     /// this SESSION's learning, not about the story file — starting empty again.
+    // Deleting the catalogue's file is right even for a named player: the learned
+    // address is shared knowledge, and it just proved wrong for everyone.
     fn forget_room_global(&self) {
         if !self.store.may_write() {
             return;
@@ -2508,6 +2525,7 @@ impl GlulxSession {
     /// contradicted the lock, mirroring [`Self::forget_room_global`]'s own
     /// reasoning: without this a stale sidecar would hand the very word the
     /// story caught out straight back at the next launch.
+    // As above: shared knowledge that turned out wrong is dropped for every player.
     fn forget_player_global(&self) {
         if !self.store.may_write() {
             return;
@@ -5409,6 +5427,38 @@ mod tests {
             Some(1024),
             "a sidecar whose token matches the running image is trusted at boot"
         );
+    }
+
+    /// SQ-1676: a named player's live session AND probe shadow read the learned
+    /// address from the shared catalogue folder, where the default player wrote it.
+    #[test]
+    fn a_named_players_session_and_shadow_read_learned_addresses_from_the_catalogue() {
+        let catalogue = crate::scratch_dir("sq1676-catalogue");
+        let player = crate::scratch_dir("sq1676-player");
+        let (checksum, extstart) = sidecar_test_token();
+        std::fs::write(catalogue.join("room-global"), format!("1024 {checksum:x}:{extstart:x}"))
+            .expect("write sidecar");
+        let store = |ro: bool| {
+            let s = if ro {
+                GameStore::read_only(player.clone())
+            } else {
+                GameStore::writable(player.clone())
+            };
+            s.with_catalogue(catalogue.clone())
+        };
+        let image = || image_for(enc(0x120, &[]), 1);
+        let live = GlulxSession::new_with_store(
+            store(false), image(), 80, 24, true, false, false, false,
+            (1.0, 1.0), None, &[], [[(None, None); 11]; 2], false, None,
+        )
+        .expect("boots");
+        assert_eq!(live.locked_room_global(), Some(1024), "the live session sees the shared address");
+        let shadow =
+            GlulxSession::new_shadow_in(store(true), image(), 80, 24, true, &[], None).expect("boots");
+        assert_eq!(shadow.locked_room_global(), Some(1024), "so does the shadow");
+        // Without the catalogue the player's own folder has nothing to offer.
+        let bare = GlulxSession::new_shadow(player.clone(), image(), 80, 24, true, &[], None).expect("boots");
+        assert_eq!(bare.locked_room_global(), None);
     }
 
     #[test]

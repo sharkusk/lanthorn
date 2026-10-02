@@ -452,6 +452,7 @@ use app::state::AppState;
 
 fn recipe(bytes: &[u8]) -> ShadowRecipe {
     ShadowRecipe {
+        catalogue: None,
         story_bytes: Arc::new(bytes.to_vec()),
         store: PathBuf::new(),
         vfs_bytes: Arc::new(Vec::new()),

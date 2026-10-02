@@ -187,6 +187,7 @@ fn scan(path: &Path, name: &str) -> Option<Row> {
     let mut state = AppState::default();
     state.assist_preamble_shown = true;
     state.probe.arm(ShadowRecipe {
+        catalogue: None,
         story_bytes: Arc::new(bytes),
         store: PathBuf::new(),
         vfs_bytes: Arc::new(Vec::new()),

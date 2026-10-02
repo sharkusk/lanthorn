@@ -65,6 +65,7 @@ fn recipe(bytes: &[u8]) -> ShadowRecipe {
 /// this and the Z-machine ones do not.
 fn recipe_in(bytes: &[u8], store: PathBuf) -> ShadowRecipe {
     ShadowRecipe {
+        catalogue: None,
         story_bytes: Arc::new(bytes.to_vec()),
         store,
         vfs_bytes: Arc::new(Vec::new()),

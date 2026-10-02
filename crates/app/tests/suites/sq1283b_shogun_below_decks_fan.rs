@@ -138,6 +138,7 @@ fn advance_to_line(session: &mut GameSession, budget: usize) -> bool {
 
 fn recipe(bytes: &[u8]) -> ShadowRecipe {
     ShadowRecipe {
+        catalogue: None,
         story_bytes: Arc::new(bytes.to_vec()),
         store: std::path::PathBuf::new(),
         vfs_bytes: Arc::new(Vec::new()),

@@ -47,6 +47,7 @@ fn boot(path: &Path, bytes: Vec<u8>) -> Option<(Box<dyn Engine>, ShadowRecipe)> 
     // VFS is the same cold boot as neither (SQ-1124).
     let vfs = std::fs::read(store.join("default.glkvfs")).unwrap_or_default();
     let recipe = ShadowRecipe {
+        catalogue: None,
         story_bytes: Arc::new(bytes.clone()),
         // The live game's own persistent data, which the shadow READS and never
         // writes — the SQ-1124 boot fix, and the whole of why Counterfeit Monkey
