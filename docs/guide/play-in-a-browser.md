@@ -145,10 +145,13 @@ before exposing it any further than that.
 ## One account per person, behind a login proxy
 
 If you already run a login-aware reverse proxy (Authelia,
-Authentik, Caddy with `forward_auth`, Tailscale Serve), the container can give
+Authentik, Caddy with `forward_auth`), the container can give
 every signed-in user their own saves, map and settings. Set
 `LANTHORN_WEB_AUTH_HEADER` to the name of the header your proxy fills in with
-the user's name after it has checked their login:
+the user's name after it has checked their login. The header must carry a
+plain username that is a valid player name (see below). One that holds an
+email address or a display name with spaces, as Tailscale Serve's identity
+headers do, is refused:
 
 ```yaml
 environment:
