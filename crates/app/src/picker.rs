@@ -241,6 +241,10 @@ pub struct StoryMeta {
     /// A fetch ran but IFDB had no record for this IFID — so the panel offers a
     /// manual IFDB search link instead of a dead end (SQ-0371).
     pub fetch_not_found: bool,
+    /// The story's IFDB id (TUID), read from the fetched block itself rather than
+    /// recovered from `ifdb_link`; present once fetched/linked. Names the
+    /// documents folder (SQ-1679).
+    pub ifdb_tuid: Option<String>,
 }
 
 impl StoryMeta {
@@ -271,7 +275,7 @@ impl StoryMeta {
             ifdb_link: None,
             ifdb_rating: None,
             ifdb_rating_count: None,
-            fetch_not_found: false,
+            fetch_not_found: false, ifdb_tuid: None,
         }
     }
 
@@ -616,6 +620,11 @@ pub struct StoryAux {
     /// reads `disk_fonts`. Display-only, and unlike `disk_fonts` there is no
     /// "in use": see [`crate::system_fonts`].
     pub system_fonts: Vec<crate::system_fonts::SystemFace>,
+    /// Where this game's documents folder stands (SQ-1679): found, would-be, or
+    /// not linked to IFDB. Looked up, never created, here; the panel's button and
+    /// the `create-documents-folder` command do the creating and then drop this
+    /// aux so it is read again.
+    pub documents: crate::documents::Location,
 }
 
 /// Resolve the lazy aux for one story. `roots` is the storage bases
@@ -726,6 +735,7 @@ pub fn resolve_aux(
         disk_sounds,
         disk_fonts,
         system_fonts,
+        documents: crate::documents::locate(roots, entry.meta.ifdb_tuid.as_deref(), &entry.title),
     }
 }
 
@@ -1003,6 +1013,7 @@ struct Resolved {
     ifdb_rating: Option<f32>,
     ifdb_rating_count: Option<u32>,
     fetch_not_found: bool,
+    ifdb_tuid: Option<String>,
 }
 
 /// The publication year from a Treaty of Babel `<firstpublished>`, which is
@@ -1407,9 +1418,10 @@ fn resolve(
     let ifdb_rating = fetched.and_then(|f| f.ifdb_rating);
     let ifdb_rating_count = fetched.and_then(|f| f.ifdb_rating_count);
     let fetch_not_found = fetched.map(|f| f.not_found).unwrap_or(false);
+    let ifdb_tuid = fetched.and_then(|f| f.ifdb_tuid.clone()).filter(|t| !t.is_empty());
     Resolved {
         title, author, year, genre, language, description, ifdb_link, ifdb_rating,
-        ifdb_rating_count, fetch_not_found,
+        ifdb_rating_count, fetch_not_found, ifdb_tuid,
     }
 }
 
@@ -1448,6 +1460,13 @@ pub fn scan_stories(dir: &Path, roots: &DataRoots) -> Vec<StoryEntry> {
     dedupe_within_sets(&mut out, &sets);
     associate_hint_sidecars(&mut out);
     sort_stories(&mut out, Sort { key: SortKey::Title, desc: false });
+    // Every detected game that already carries an IFDB id gets its documents
+    // folder (SQ-1679); the other half of "as soon as a TUID is known" is
+    // `fetch_worker::write_fetched`. Unlinked games get none.
+    crate::documents::ensure_linked(
+        roots,
+        out.iter().filter_map(|e| Some((e.meta.ifdb_tuid.as_deref()?, e.title.as_str()))),
+    );
     out
 }
 
@@ -2246,6 +2265,7 @@ fn entry_from_loaded(
         ifdb_rating: resolved.ifdb_rating,
         ifdb_rating_count: resolved.ifdb_rating_count,
         fetch_not_found: resolved.fetch_not_found,
+        ifdb_tuid: resolved.ifdb_tuid,
     };
     Some(StoryEntry { path: path.to_path_buf(), title, filename, meta, hint_sidecar: None, kind: RowKind::Story })
 }
@@ -2828,7 +2848,7 @@ mod tests {
                 genre: None,
                 language: None,
                 description: None, ifdb_link: None, ifdb_rating: None,
-                ifdb_rating_count: None, fetch_not_found: false,
+                ifdb_rating_count: None, fetch_not_found: false, ifdb_tuid: None,
             },
             hint_sidecar: None,
             kind: RowKind::Story,
@@ -3747,6 +3767,52 @@ mod tests {
         assert_eq!(stories[0].title, "Fetched Title");
     }
 
+    /// SQ-1679: library detection creates documents folders for games that already
+    /// carry an IFDB id, and only for those, and only when the user opted in.
+    #[test]
+    fn scan_creates_documents_folders_for_linked_games_only_when_opted_in() {
+        let dir = temp_dir("scan-docs");
+        let bytes = minimal_v3_story();
+        std::fs::write(dir.join("game.z5"), &bytes).unwrap();
+        std::fs::write(dir.join("unlinked.z5"), &bytes).unwrap();
+        let ifid = crate::ifid::compute_ifid(&bytes);
+        let home = dir.join("home");
+        let roots = |auto_create| {
+            DataRoots::resolve(&home, None, None, &crate::data_roots::DocumentsSettings { dir: None, auto_create })
+        };
+        let on = roots(true);
+        let game_dir = on.catalogue_dir(&crate::storage::story_key_at(&dir.join("game.z5")));
+        let info = crate::story_info::StoryInfo {
+            format_version: crate::story_info::FORMAT_VERSION,
+            ifid,
+            fetched: Some(FetchedMeta {
+                title: Some("Linked Game".into()),
+                ifdb_tuid: Some("tuid123".into()),
+                ..fetched_stub()
+            }),
+            probe: None,
+        };
+        crate::story_info::save(&game_dir, &info).unwrap();
+
+        // Default (off): the scan makes nothing.
+        let stories = scan_stories(&dir, &roots(false));
+        assert_eq!(stories.iter().find(|e| e.filename == "game.z5").unwrap().meta.ifdb_tuid.as_deref(), Some("tuid123"));
+        assert!(!roots(false).documents().exists());
+
+        // Opted in: one folder, for the linked game.
+        scan_stories(&dir, &on);
+        let made: Vec<String> = std::fs::read_dir(on.documents())
+            .unwrap()
+            .flatten()
+            .map(|e| e.file_name().to_string_lossy().into_owned())
+            .collect();
+        assert_eq!(made, ["Linked Game [tuid123]"], "the unlinked game gets none");
+        // A rescan is a no-op.
+        scan_stories(&dir, &on);
+        assert_eq!(std::fs::read_dir(on.documents()).unwrap().count(), 1);
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
     #[test]
     fn scan_falls_back_past_a_wrong_ifid_sidecar() {
         let dir = temp_dir("sidecar-wrong-ifid");
@@ -3783,7 +3849,7 @@ mod tests {
                 features: Features::default(), self_blorb, frontispiece: None, scott_pictures: None, disk_image: None, disk_entry: None,
                 author: None, year: None, genre: None, language: None, description: None,
                 ifdb_link: None, ifdb_rating: None, ifdb_rating_count: None,
-                fetch_not_found: false,
+                fetch_not_found: false, ifdb_tuid: None,
             },
             hint_sidecar: None,
             kind: RowKind::Story,
@@ -4330,7 +4396,7 @@ mod tests {
             ifdb_link: None,
             ifdb_rating: None,
             ifdb_rating_count: None,
-            fetch_not_found: false,
+            fetch_not_found: false, ifdb_tuid: None,
         };
         assert_eq!(
             type_container(&meta(Some(ScottPictures::NativeZx { pictures: 31 })), false),

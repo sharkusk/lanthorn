@@ -83,7 +83,7 @@ impl MetadataSource for Ifdb {
 /// worker is handed the CATALOGUE base. Waits for the result.
 fn fetch_via_worker(story: &Path, roots: &DataRoots) {
     let entry = app::picker::resolve_entry(story, roots).expect("the story is listable");
-    let fetcher = Fetcher::new(Box::new(Ifdb), roots.catalogue().to_path_buf(), Duration::ZERO);
+    let fetcher = Fetcher::new(Box::new(Ifdb), roots.clone(), Duration::ZERO);
     fetcher.request(FetchOrder { stories: vec![FetchTarget::row(&entry)], forced: true, id_override: None });
     for _ in 0..4000 {
         if !fetcher.drain().is_empty() {
@@ -145,7 +145,7 @@ const KEY: &str = "Tangle.z5.save";
 fn the_default_player_keeps_todays_layout() {
     let Some(story) = story() else { return };
     let home = app::scratch_dir("mp-default");
-    let roots = DataRoots::resolve(&home, None, None);
+    let roots = DataRoots::resolve(&home, None, None, &Default::default());
     let mut b = boot(&story, &home, roots.clone());
 
     // Saves, and metadata fetched through either door, all in the one folder.
@@ -174,7 +174,7 @@ fn the_default_player_keeps_todays_layout() {
 fn a_named_players_saves_go_to_their_own_tree_and_metadata_to_the_catalogue() {
     let Some(story) = story() else { return };
     let home = app::scratch_dir("mp-bob");
-    let bob = DataRoots::resolve(&home, None, Some("bob"));
+    let bob = DataRoots::resolve(&home, None, Some("bob"), &Default::default());
     let mut b = boot(&story, &home, bob.clone());
 
     let bobs = home.join("users/bob/saves").join(KEY);
@@ -193,10 +193,10 @@ fn a_named_players_saves_go_to_their_own_tree_and_metadata_to_the_catalogue() {
     assert!(!bobs.join("cover.png").exists());
 
     // The default player (and anyone else) sees what bob fetched.
-    let default = DataRoots::resolve(&home, None, None);
+    let default = DataRoots::resolve(&home, None, None, &Default::default());
     let seen = app::picker::resolve_entry(&story, &default).unwrap();
     assert_eq!(seen.title, "Shared Title");
-    let amy = DataRoots::resolve(&home, None, Some("amy"));
+    let amy = DataRoots::resolve(&home, None, Some("amy"), &Default::default());
     assert_eq!(app::picker::resolve_entry(&story, &amy).unwrap().title, "Shared Title");
     let _ = std::fs::remove_dir_all(&home);
 }
@@ -205,8 +205,8 @@ fn a_named_players_saves_go_to_their_own_tree_and_metadata_to_the_catalogue() {
 fn players_cannot_see_each_others_saves() {
     let Some(story) = story() else { return };
     let home = app::scratch_dir("mp-isolated");
-    let default = DataRoots::resolve(&home, None, None);
-    let bob = DataRoots::resolve(&home, None, Some("bob"));
+    let default = DataRoots::resolve(&home, None, None, &Default::default());
+    let bob = DataRoots::resolve(&home, None, Some("bob"), &Default::default());
 
     let mut b = boot(&story, &home, bob.clone());
     save(&mut b);
@@ -216,7 +216,7 @@ fn players_cannot_see_each_others_saves() {
     assert!(app::persist_files::list_saves(&entry.game_dir(&default)).is_empty());
 
     // And the other way round.
-    let amy = DataRoots::resolve(&home, None, Some("amy"));
+    let amy = DataRoots::resolve(&home, None, Some("amy"), &Default::default());
     let mut d = boot(&story, &home, default.clone());
     save(&mut d);
     assert!(badges(&story, &default, &home).save);
@@ -229,8 +229,8 @@ fn players_cannot_see_each_others_saves() {
 fn a_catalogue_only_folder_reads_as_unplayed() {
     let Some(story) = story() else { return };
     let home = app::scratch_dir("mp-unplayed");
-    let default = DataRoots::resolve(&home, None, None);
-    let bob = DataRoots::resolve(&home, None, Some("bob"));
+    let default = DataRoots::resolve(&home, None, None, &Default::default());
+    let bob = DataRoots::resolve(&home, None, Some("bob"), &Default::default());
     // Bob browses and fetches; the catalogue folder now holds metadata and no save.
     fetch_via_worker(&story, &bob);
     assert!(home.join("saves").join(KEY).join("info.json").is_file());
@@ -243,7 +243,7 @@ fn a_catalogue_only_folder_reads_as_unplayed() {
 fn nothing_a_player_does_removes_catalogue_files() {
     let Some(story) = story() else { return };
     let home = app::scratch_dir("mp-delete");
-    let default = DataRoots::resolve(&home, None, None);
+    let default = DataRoots::resolve(&home, None, None, &Default::default());
     let mut b = boot(&story, &home, default.clone());
     fetch_via_worker(&story, &default);
     save(&mut b);
@@ -498,4 +498,36 @@ fn story_info_writes_are_atomic() {
         .collect();
     assert!(leftovers.is_empty(), "no temp files left behind");
     let _ = std::fs::remove_dir_all(&dir);
+}
+
+// ── the documents folder (SQ-1679) ───────────────────────────────────────────
+
+#[test]
+fn a_named_players_link_creates_the_one_shared_documents_folder() {
+    let Some(story) = story() else { return };
+    let home = app::scratch_dir("mp-docs");
+    let on = app::data_roots::DocumentsSettings { dir: None, auto_create: true };
+    let bob = DataRoots::resolve(&home, None, Some("bob"), &on);
+
+    // Both doors a TUID arrives through (the picker's worker, `--import-metadata`).
+    fetch_via_worker(&story, &bob);
+    fetch_via_import(&story, &bob);
+    let shared = home.join("documents").join("Shared Title [abc123]");
+    assert!(shared.is_dir());
+    assert_eq!(std::fs::read_dir(home.join("documents")).unwrap().count(), 1);
+    assert!(!home.join("users/bob/documents").exists(), "never under a player's tree");
+
+    // Everyone else finds the same folder.
+    for who in [None, Some("amy")] {
+        let r = DataRoots::resolve(&home, None, who, &on);
+        assert_eq!(app::documents::documents_dir(&r, "abc123", "Whatever"), Some(shared.clone()));
+    }
+    let _ = std::fs::remove_dir_all(&home);
+
+    // Default settings: a link creates nothing.
+    let home = app::scratch_dir("mp-docs-off");
+    let off = DataRoots::resolve(&home, None, Some("bob"), &Default::default());
+    fetch_via_worker(&story, &off);
+    assert!(!home.join("documents").exists());
+    let _ = std::fs::remove_dir_all(&home);
 }

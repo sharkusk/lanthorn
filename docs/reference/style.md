@@ -140,6 +140,8 @@ Every themeable `style.toml` selector: which role or selector it derives from, a
 | `story_info_continuation` | Elements | Style | `muted` |  | |
 | `story_info_artwork` | Elements | Style | `story_info_value` |  | |
 | `story_info_artwork:active` | Elements | Style | `accent` | `bold` | |
+| `story_info_documents` | Elements | Style | `story_info_value` |  | |
+| `story_info_documents_button` | Elements | Style | `accent` | `bold reversed` | |
 | `graphics` | Elements | Style | `chrome` |  | |
 | `inline_image` | Elements | Style | `chrome` |  | |
 | `story_header` | Elements | Style | `muted` |  | |

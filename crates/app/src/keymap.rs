@@ -414,6 +414,7 @@ impl Default for KeyMap {
         bind!(plain(Char('r')), "refresh-library", Context::Browser);
         bind!(plain(Char('u')), "set-ifdb-url", Context::Browser);
         bind!(plain(Char('/')), "search-ifdb", Context::Browser);
+        bind!(plain(Char('m')), "create-documents-folder", Context::Browser);
         bind!(g(Char('U'), false, true), "open-url", Context::Browser);
         bind!(g(Char('H'), false, true), "download-hints", Context::Browser);
         bind!(plain(Char('s')), "sort-library", Context::Browser);

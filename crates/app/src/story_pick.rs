@@ -173,7 +173,7 @@ mod tests {
                 ifdb_link: None,
                 ifdb_rating: None,
                 ifdb_rating_count: None,
-                fetch_not_found: false,
+                fetch_not_found: false, ifdb_tuid: None,
             },
             hint_sidecar: None,
             kind: RowKind::Story,

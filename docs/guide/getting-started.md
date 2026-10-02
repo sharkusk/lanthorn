@@ -69,6 +69,21 @@ using the menu and then stop needing it. The line along the bottom of the
 screen names only the keys that act on the *library*, and `?` shows the
 full list whenever you want it.
 
+**A folder for each game's manual and maps.** Once a story is linked to its
+IFDB page, the info panel shows its *documents folder*: a place to keep the
+manual, the feelies, a map scan, whatever came in the box. It is named
+`<Title> [<IFDB id>]` and lives under `~/.lanthorn/documents/`, shared by every
+release of the game and by every player. Lanthorn finds it by the id in the
+brackets, so a title that IFDB later corrects never loses your files, and a folder
+you make or rename yourself works as long as it ends in ` [<id>]`. Lanthorn does
+not create these on its own unless you ask it to: until the folder exists the
+panel shows where it would go and a **Create documents folder** button (also `m`,
+or the story menu). Set `create_documents_folders = true` in `config.toml` to have
+lanthorn make each linked game's folder as it finds it, and `documents_dir = "..."`
+to keep them somewhere other than `~/.lanthorn/documents`. Both are read from the
+shared `config.toml` only, so a named player's file cannot move or switch them.
+A story that is not linked to IFDB has no documents folder; the panel says so.
+
 **A multi-disk release shows up as one shelf, not a pile of disks.** Point
 lanthorn at any volume from a set — the seven Apple II floppies of *The Lost
 Treasures of Infocom*, `floppy1.ima` through `floppy5.ima` — and it opens a

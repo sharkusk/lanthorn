@@ -262,6 +262,8 @@ pub struct Cli {
     ///
     /// `--data-dir` stands in for `<user-dir>/saves`, the shared catalogue
     /// base; a named player's own files always sit under `<user-dir>/users/`.
+    /// Neither moves the per-game documents folders, which are shared by every
+    /// player under `<user-dir>/documents` (or the shared config's `documents_dir`).
     #[arg(long, value_name = "NAME")]
     pub player: Option<String>,
 
@@ -1580,6 +1582,16 @@ pub struct Config {
     /// argument. `None` (default) means a path is required on the command line.
     #[serde(default)]
     pub default_story_dir: Option<PathBuf>,
+    /// Where the per-game documents folders (manuals, feelies, maps) live.
+    /// `None` (default) means `<user_dir>/documents`. Shared by every player, so
+    /// it is read from the shared config only — see [`Config::shared_documents_settings`].
+    #[serde(default)]
+    pub documents_dir: Option<PathBuf>,
+    /// When true, lanthorn creates a linked game's documents folder on
+    /// its own (at library detection and when IFDB delivers an id). Shared config
+    /// only, like `documents_dir`.
+    #[serde(default)]
+    pub create_documents_folders: bool,
     /// When true (default), restore the game state from the archive on startup so
     /// play resumes where it left off. Set false to start a fresh playthrough while
     /// retaining the accumulated map.
@@ -2105,6 +2117,18 @@ pub struct Config {
 }
 
 impl Config {
+    /// The configured documents root (SQ-1679), read from the SHARED config only.
+    /// The folder is shared by every player, so a named player's own file cannot
+    /// move it: that player's `Config` holds the shared one in `inherited`, and
+    /// this answers from there.
+    pub fn shared_documents_settings(&self) -> crate::data_roots::DocumentsSettings {
+        let shared = self.inherited.as_deref().unwrap_or(self);
+        crate::data_roots::DocumentsSettings {
+            dir: shared.documents_dir.clone(),
+            auto_create: shared.create_documents_folders,
+        }
+    }
+
     /// The words no unprompted enumeration may show — the adult list when the
     /// switch is on, and nothing at all when it is off or the list is empty
     /// (SQ-1122).
@@ -2368,6 +2392,8 @@ impl Default for Config {
             version: CONFIG_SCHEMA_VERSION,
             user_dir: default_user_dir(),
             default_story_dir: None,
+            documents_dir: None,
+            create_documents_folders: false,
             auto_load: true,
             auto_save: true,
             mouse_wheel_invert: false,
@@ -2702,6 +2728,8 @@ fn resolve_config_layers(
             cfg.version = from_file.version;
             cfg.user_dir = from_file.user_dir;
             cfg.default_story_dir = from_file.default_story_dir;
+            cfg.documents_dir = from_file.documents_dir;
+            cfg.create_documents_folders = from_file.create_documents_folders;
             cfg.auto_load = from_file.auto_load;
             cfg.auto_save = from_file.auto_save;
             cfg.mouse_wheel_invert = from_file.mouse_wheel_invert;
@@ -2973,6 +3001,16 @@ pub fn write_config_at(config_path: &std::path::Path, cfg: &Config) -> std::io::
         cfg.default_story_dir.as_ref().map(|p| p.to_string_lossy().as_ref().into()),
         def.default_story_dir.as_ref().map(|p| p.to_string_lossy().as_ref().into()),
     );
+    doc.put_or_remove(
+        "documents_dir",
+        cfg.documents_dir.as_ref().map(|p| p.to_string_lossy().as_ref().into()),
+        def.documents_dir.as_ref().map(|p| p.to_string_lossy().as_ref().into()),
+    );
+    doc.put(
+        "create_documents_folders",
+        cfg.create_documents_folders.into(),
+        cfg.create_documents_folders == def.create_documents_folders,
+    );
     doc.put("auto_load", cfg.auto_load.into(), cfg.auto_load == def.auto_load);
     doc.put("auto_save", cfg.auto_save.into(), cfg.auto_save == def.auto_save);
     doc.put("mouse_wheel_invert", cfg.mouse_wheel_invert.into(), cfg.mouse_wheel_invert == def.mouse_wheel_invert);
@@ -3184,6 +3222,32 @@ mod tests {
         std::fs::create_dir_all(home.join("users/bob")).unwrap();
         std::fs::write(home.join("users/bob/config.toml"), "history_turns = 9\n").unwrap();
         home
+    }
+
+    #[test]
+    fn documents_dir_comes_from_the_shared_file_and_a_player_override_is_ignored() {
+        let home = crate::scratch_dir("cfg-docs-dir");
+        std::fs::write(home.join("config.toml"), "documents_dir = \"/shared/manuals\"\n").unwrap();
+        std::fs::create_dir_all(home.join("users/bob")).unwrap();
+        std::fs::write(home.join("users/bob/config.toml"), "documents_dir = \"/bobs/own\"\n").unwrap();
+        let default = resolve_at_for(&home, None).unwrap();
+        assert_eq!(default.shared_documents_settings().dir.as_deref(), Some(std::path::Path::new("/shared/manuals")));
+        let bob = resolve_at_for(&home, Some("bob")).unwrap();
+        assert_eq!(bob.documents_dir, Some(PathBuf::from("/bobs/own")), "the layered value is bob's");
+        assert_eq!(bob.shared_documents_settings().dir.as_deref(), Some(std::path::Path::new("/shared/manuals")));
+        let roots = crate::data_roots::DataRoots::resolve(&bob.user_dir, None, bob.player.as_deref(), &bob.shared_documents_settings());
+        assert_eq!(roots.documents(), std::path::Path::new("/shared/manuals"));
+        // Absent means <user_dir>/documents.
+        std::fs::write(home.join("config.toml"), "volume = 40\n").unwrap();
+        let none = resolve_at_for(&home, None).unwrap();
+        assert!(none.shared_documents_settings().dir.is_none());
+        // `create_documents_folders` follows the same rule: the shared value, never bob's.
+        std::fs::write(home.join("config.toml"), "create_documents_folders = true\n").unwrap();
+        std::fs::write(home.join("users/bob/config.toml"), "create_documents_folders = false\n").unwrap();
+        let bob = resolve_at_for(&home, Some("bob")).unwrap();
+        assert!(!bob.create_documents_folders, "the layered value is bob's");
+        assert!(bob.shared_documents_settings().auto_create);
+        let _ = std::fs::remove_dir_all(&home);
     }
 
     #[test]
@@ -4213,6 +4277,8 @@ use_defaults = false
             version: CONFIG_SCHEMA_VERSION,
             user_dir: dir.clone(),
             default_story_dir: None,
+            documents_dir: None,
+            create_documents_folders: false,
             auto_load: false,
             auto_save: false,
             mouse_wheel_invert: false,

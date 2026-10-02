@@ -731,6 +731,9 @@ pub static COMMANDS: &[CommandSpec] = &[
     CommandSpec { name: "set-ifdb-url", category: Category::Library, context: Context::Browser,
         usage: "set-ifdb-url", description: "point the selected story at an IFDB page by hand",
         dispatch: |_| SlashOutcome::Browser(crate::browser::BrowserAction::SetIfdbUrl) },
+    CommandSpec { name: "create-documents-folder", category: Category::Library, context: Context::Browser,
+        usage: "create-documents-folder", description: "create the selected story's documents folder (manuals, maps) beside its IFDB id",
+        dispatch: |_| SlashOutcome::Browser(crate::browser::BrowserAction::CreateDocumentsFolder) },
     CommandSpec { name: "open-url", category: Category::Library, context: Context::Browser,
         usage: "open-url", description: "download a story from a URL into this library and open it",
         dispatch: |_| SlashOutcome::Browser(crate::browser::BrowserAction::OpenUrl) },
@@ -1177,7 +1180,9 @@ mod tests {
         // verb to turn it on with.
         // SQ-1630 added `filter-items`: search the inventory panel's two
         // sections (Carrying/Elsewhere) by name substring.
-        assert_eq!(COMMANDS.len(), 93, "registry must match the spec's Full command table");
+        // SQ-1679 added `create-documents-folder`: the info panel's button, a key and
+        // a story-menu row for the selected game's documents folder.
+        assert_eq!(COMMANDS.len(), 94, "registry must match the spec's Full command table");
     }
 
     /// SQ-1237 unified the panel vocabulary — `command band` became `command

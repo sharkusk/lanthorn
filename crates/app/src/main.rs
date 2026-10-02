@@ -1700,7 +1700,7 @@ fn run_headless_fetch(
     eprintln!("lanthorn: fetching IFDB metadata for {total} stories under {}", source.dir().display());
     let fetcher = Fetcher::new(
         Box::new(app::ifdb::IfdbClient::new()),
-        roots.catalogue().to_path_buf(),
+        roots.clone(),
         std::time::Duration::from_millis(500),
     );
     fetcher.request(FetchOrder { stories: targets, forced: mode.forced(), id_override: None });

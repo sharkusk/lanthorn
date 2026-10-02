@@ -267,7 +267,12 @@ pub(crate) fn resolve_launch() -> LaunchCtx {
     // `<user_dir>/saves` (the shared catalogue, and the default player's saves);
     // a named player's own saves sit under `<user_dir>/users/<name>/saves`. Each
     // story gets `<base>/<story-key>.save/` in both.
-    let roots = app::data_roots::DataRoots::resolve(&cfg.user_dir, cli.data_dir.as_deref(), cfg.player.as_deref());
+    let roots = app::data_roots::DataRoots::resolve(
+        &cfg.user_dir,
+        cli.data_dir.as_deref(),
+        cfg.player.as_deref(),
+        &cfg.shared_documents_settings(),
+    );
 
     // A directory launches the pre-game picker (a library); a file plays directly.
     let (library_dir, single_file) = if story_path.is_dir() {

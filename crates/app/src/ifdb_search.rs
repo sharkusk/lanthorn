@@ -915,6 +915,7 @@ fn persist_metadata_and_cover(
     let game_dir = entry.catalogue_dir(roots);
     let cover = crate::fetch_worker::maybe_fetch_cover(covers, &game_dir, story_path, iff);
     crate::fetch_worker::write_fetched(
+        roots,
         &game_dir,
         &entry.meta.ifid,
         crate::fetch_worker::found_meta(iff, cover),

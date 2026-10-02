@@ -538,6 +538,10 @@ pub static REGISTRY: std::sync::LazyLock<Vec<RegRow>> = std::sync::LazyLock::new
     // that is a statement of fact rather than an option.
     row("story_info_artwork", Section::Elements, Kind::Style, Some("story_info_value"), Delta::EMPTY),
     row("story_info_artwork:active", Section::Elements, Kind::Style, Some("accent"), mods(true, false, false, false)),
+    // SQ-1679: the info panel's documents-folder line (the path, "(not created)",
+    // or the hint to link to IFDB), and the button that creates the folder.
+    row("story_info_documents", Section::Elements, Kind::Style, Some("story_info_value"), Delta::EMPTY),
+    row("story_info_documents_button", Section::Elements, Kind::Style, Some("accent"), mods(true, false, false, true)),
     row("graphics", Section::Elements, Kind::Style, Some("chrome"), Delta::EMPTY),
     row("inline_image", Section::Elements, Kind::Style, Some("chrome"), Delta::EMPTY),
     row("story_header", Section::Elements, Kind::Style, Some("muted"), Delta::EMPTY),
@@ -840,6 +844,9 @@ mod tests {
         // SQ-0789: the info panel's detected-artwork block
         "story_info_artwork",
         "story_info_artwork:active",
+        // SQ-1679: the documents-folder line and its button
+        "story_info_documents",
+        "story_info_documents_button",
         "graphics",
         "inline_image",
         "story_header",

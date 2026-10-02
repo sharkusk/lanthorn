@@ -35,6 +35,13 @@ enum PickerView {
     Gallery,
 }
 
+/// The info panel's "Create documents folder" button label (SQ-1679).
+const DOCS_BUTTON_LABEL: &str = "Create documents folder";
+
+/// What a click on the documents button reports in the panel's link rects, where
+/// a URL would sit: not a URL, so the click handler runs the command instead.
+const PANEL_ACTION_CREATE_DOCS: &str = "lanthorn-action:create-documents-folder";
+
 /// A previewable bundled resource the info panel links to (SQ-0347): an image
 /// (`Pict`) or a sound (`Snd `). Carries where to re-read the bytes from (the
 /// story's own blorb, or its sidecar) since the panel's `ChunkInfo` list holds
@@ -514,6 +521,40 @@ fn ensure_aux(
             // A folder has no aux to resolve (and nothing to open).
             if let Some(entry) = stories.get(idx).filter(|e| !e.is_folder()) {
                 *slot = Some(app::picker::resolve_aux(entry, roots, hint_index));
+            }
+        }
+    }
+}
+
+/// The `create-documents-folder` action (SQ-1679): make the folder for the story
+/// at `idx` if it is linked and has none, and answer the status line to show.
+/// On success every cached aux is dropped (other rows of the same game read the
+/// same folder) and the selected one is re-read, so the panel shows the real path
+/// without its "(not created)" mark and the button goes away.
+fn create_documents_folder(
+    roots: &app::data_roots::DataRoots,
+    stories: &[app::picker::StoryEntry],
+    idx: usize,
+    aux_cache: &mut Vec<Option<app::picker::StoryAux>>,
+    hint_index: &app::hints::HintIndex,
+) -> String {
+    let Some(entry) = stories.get(idx).filter(|e| !e.is_folder()) else { return String::new() };
+    match app::documents::locate(roots, entry.meta.ifdb_tuid.as_deref(), &entry.title) {
+        app::documents::Location::Unlinked => {
+            "Link this game to IFDB first: a documents folder is named for its IFDB id".to_string()
+        }
+        app::documents::Location::Exists(p) => {
+            format!("Documents folder already exists: {}", abbreviate_home(&p))
+        }
+        app::documents::Location::Missing(_) => {
+            let tuid = entry.meta.ifdb_tuid.as_deref().unwrap_or_default();
+            match app::documents::ensure_documents_dir(roots, tuid, &entry.title) {
+                Ok(p) => {
+                    *aux_cache = (0..stories.len()).map(|_| None).collect();
+                    ensure_aux(aux_cache, stories, idx, roots, hint_index);
+                    format!("Created documents folder: {}", abbreviate_home(&p))
+                }
+                Err(e) => format!("Could not create the documents folder: {e}"),
             }
         }
     }
@@ -1354,7 +1395,7 @@ pub(crate) fn run_story_picker(
     // sender, which ends the worker thread's `recv()` loop.
     let fetcher = app::fetch_worker::Fetcher::new(
         Box::new(app::ifdb::IfdbClient::new()),
-        roots.catalogue().to_path_buf(),
+        roots.clone(),
         Duration::from_millis(500),
     );
     // On-demand InvisiClues downloader (SQ-0445): `H` fetches a matching hint
@@ -2528,8 +2569,13 @@ pub(crate) fn run_story_picker(
                         preview = Some(open_resource_preview(rref, &mut audio, cfg.volume));
                     } else if let Some((_, url)) = panel_link_rects.iter().find(|(r, _)| r.contains(pt)) {
                         // Click on an info-panel OSC 8 link (SQ-0367): the terminal
-                        // can't act on it while we hold mouse capture, so open it.
-                        open_url(url);
+                        // can't act on it while we hold mouse capture, so open it —
+                        // except the documents button, which runs its command.
+                        if url == PANEL_ACTION_CREATE_DOCS {
+                            pending_command = Some("create-documents-folder");
+                        } else {
+                            open_url(url);
+                        }
                     } else if let Some((idx, _)) = row_rects.iter().find(|(_, r)| r.contains(pt)) {
                         let idx = *idx;
                         let now = Instant::now();
@@ -2814,6 +2860,15 @@ pub(crate) fn run_story_picker(
                             list.select(idx, viewport, anim);
                         }
                     }
+                }
+            }
+            // Create the selected story's documents folder (SQ-1679): the info
+            // panel's button, the `m` key and the story menu all land here.
+            Some(app::browser::BrowserAction::CreateDocumentsFolder) => {
+                if stories.get(list.selected).is_some_and(|e| !e.is_folder()) {
+                    progress_line = Some(create_documents_folder(
+                        roots, &stories, list.selected, &mut aux_cache, &hint_index,
+                    ));
                 }
             }
             // Refetch only the selected story, ignoring its cache.
@@ -3615,6 +3670,8 @@ fn draw_info_panel(
     let story_info_cover = cs.theme.get("story_info_cover").style;
     let story_info_artwork = cs.theme.get("story_info_artwork").style;
     let story_info_artwork_active = cs.theme.get("story_info_artwork:active").style;
+    let story_info_documents = cs.theme.get("story_info_documents").style;
+    let story_info_documents_button = cs.theme.get("story_info_documents_button").style;
     let scrollbar = app::render::scroll::ScrollbarLook::from_theme(&cs.theme);
     // Background fill.
     for y in area.top()..area.bottom() {
@@ -3698,6 +3755,9 @@ fn draw_info_panel(
     let mut link_urls: Vec<(usize, String)> = Vec::new();
     // Line index → previewable resource (SQ-0347), for the Pict/Snd rows below.
     let mut resource_refs: Vec<(usize, ResourceRef)> = Vec::new();
+    // Line indices that are the documents button (SQ-1679): clickable, reported
+    // through `link_rects` under [`PANEL_ACTION_CREATE_DOCS`].
+    let mut button_rows: Vec<usize> = Vec::new();
 
     // Title.
     lines.push((title.to_string(), story_info_title));
@@ -3810,6 +3870,26 @@ fn draw_info_panel(
         let url = app::ifdb::search_url(title);
         link_urls.push((lines.len(), url.clone()));
         lines.push((format!("IFDB search: {url}"), story_info_link));
+    }
+    // Documents folder (SQ-1679): where the manuals and maps for this game go. A
+    // folder that exists is a `file://` link; one that does not shows the path it
+    // would be created at, with a button; a game not linked to IFDB has no folder
+    // and says how to get one.
+    if let Some(a) = aux {
+        match &a.documents {
+            app::documents::Location::Exists(p) => {
+                link_urls.push((lines.len(), app::documents::file_url(p)));
+                lines.push((format!("Documents: {}", abbreviate_home(p)), story_info_documents));
+            }
+            app::documents::Location::Missing(p) => {
+                lines.push((format!("Documents: {} (not created)", abbreviate_home(p)), story_info_documents));
+                button_rows.push(lines.len());
+                lines.push((format!(" [ {DOCS_BUTTON_LABEL} ] "), story_info_documents_button));
+            }
+            app::documents::Location::Unlinked => {
+                lines.push(("Documents: Link to IFDB for a documents folder".to_string(), story_info_documents));
+            }
+        }
     }
     // features line (present badges only).
     let feats = feature_words(&meta.features, aux, meta.scott_pictures);
@@ -4148,6 +4228,12 @@ fn draw_info_panel(
                 ));
             }
             link_rects.push((rect, url.clone()));
+            continue;
+        }
+        if button_rows.contains(&li) {
+            draw_str_clipped(buf, row_area.x, y, text, *style, row_area);
+            let w = (text.chars().count() as u16).min(row_area.width);
+            link_rects.push((Rect::new(row_area.x, y, w, 1), PANEL_ACTION_CREATE_DOCS.to_string()));
             continue;
         }
         if let Some((_, rref)) = resource_refs.iter().find(|(idx, _)| *idx == li) {
@@ -4687,7 +4773,7 @@ mod tests {
             ifdb_link: None,
             ifdb_rating: None,
             ifdb_rating_count: None,
-            fetch_not_found: false,
+            fetch_not_found: false, ifdb_tuid: None,
         };
         assert_eq!(super::interp_label(&meta, false), "Scott (z80)");
         // And it fits the fixed-width TYPE column, which is what SQ-1458
@@ -4703,7 +4789,7 @@ mod tests {
             version: version.map(String::from), serial: None, release: None, ifid: String::new(),
             features: Features::default(), self_blorb: None, frontispiece: None, scott_pictures: None, disk_image: None, disk_entry: None,
             author: None, year: None,
-            genre: None, language: None, description: None, ifdb_link: None, ifdb_rating: None, ifdb_rating_count: None, fetch_not_found: false,
+            genre: None, language: None, description: None, ifdb_link: None, ifdb_rating: None, ifdb_rating_count: None, fetch_not_found: false, ifdb_tuid: None,
         };
         // Z-code: "Z<v>", plus " (blorb)" only when blorb'd.
         assert_eq!(super::interp_label(&meta(Engine::ZCode, Some("5")), false), "Z5");
@@ -4733,7 +4819,7 @@ mod tests {
             version: Some("6".into()), serial: None, release: None, ifid: String::new(),
             features: Features::default(), self_blorb: None, frontispiece: None, scott_pictures: None, disk_image, disk_entry: None,
             author: None, year: None,
-            genre: None, language: None, description: None, ifdb_link: None, ifdb_rating: None, ifdb_rating_count: None, fetch_not_found: false,
+            genre: None, language: None, description: None, ifdb_link: None, ifdb_rating: None, ifdb_rating_count: None, fetch_not_found: false, ifdb_tuid: None,
         };
         assert_eq!(super::interp_label(&meta(Some(DiskImage::Adf)), false), "Z6 (ADF)");
         assert_eq!(super::interp_label(&meta(Some(DiskImage::Hfs)), false), "Z6 (HFS)");
@@ -4774,7 +4860,7 @@ mod tests {
             version: None, serial: None, release: None, ifid: String::new(),
             features: Features::default(), self_blorb: None, frontispiece: None, scott_pictures: None, disk_image, disk_entry: None,
             author: None, year: None,
-            genre: None, language: None, description: None, ifdb_link: None, ifdb_rating: None, ifdb_rating_count: None, fetch_not_found: false,
+            genre: None, language: None, description: None, ifdb_link: None, ifdb_rating: None, ifdb_rating_count: None, fetch_not_found: false, ifdb_tuid: None,
         };
         assert_eq!(super::interp_label(&meta(Some(DiskImage::CommodoreD64)), false), "Scott (CBM)");
         assert_eq!(super::interp_label(&meta(Some(DiskImage::AtariDos2)), false), "Scott (Atari DOS)");
@@ -4802,7 +4888,7 @@ mod tests {
             version: version.map(String::from), serial: None, release: None, ifid: String::new(),
             features: Features::default(), self_blorb: None, frontispiece: None, scott_pictures: None, disk_image: None, disk_entry: None,
             author: None, year: None,
-            genre: None, language: None, description: None, ifdb_link: None, ifdb_rating: None, ifdb_rating_count: None, fetch_not_found: false,
+            genre: None, language: None, description: None, ifdb_link: None, ifdb_rating: None, ifdb_rating_count: None, fetch_not_found: false, ifdb_tuid: None,
         };
         let check = |meta: &StoryMeta, blorb: bool| {
             let label = super::interp_label(meta, blorb);
@@ -4945,7 +5031,7 @@ mod tests {
                 size_bytes: 1, story_bytes: 1, modified: None, engine, format: "Z-code".into(),
                 version: None, serial: None, release: None, ifid: title.into(),
                 features: Features::default(), self_blorb: None, frontispiece: None, scott_pictures: None, disk_image: None, disk_entry: None,
-                author: None, year: None, genre: None, language: None, description: None, ifdb_link: None, ifdb_rating: None, ifdb_rating_count: None, fetch_not_found: false,
+                author: None, year: None, genre: None, language: None, description: None, ifdb_link: None, ifdb_rating: None, ifdb_rating_count: None, fetch_not_found: false, ifdb_tuid: None,
             },
             hint_sidecar: None,
             kind: app::picker::RowKind::Story,
@@ -4966,7 +5052,7 @@ mod tests {
                 version: None, serial: None, release: None, ifid: title.into(),
                 features: Features::default(), self_blorb: None, frontispiece: None, scott_pictures: None, disk_image: None, disk_entry: None,
                 author: author.map(String::from), year: year.map(String::from),
-                genre: None, language: None, description: None, ifdb_link: None, ifdb_rating: None, ifdb_rating_count: None, fetch_not_found: false,
+                genre: None, language: None, description: None, ifdb_link: None, ifdb_rating: None, ifdb_rating_count: None, fetch_not_found: false, ifdb_tuid: None,
             },
             hint_sidecar: None,
             kind: app::picker::RowKind::Story,
@@ -5783,7 +5869,7 @@ mod tests {
             format: "Z-code".into(), version: Some("3".into()), serial: None, release: None,
             ifid: "ZCODE-88-840726".into(), features: app::picker::Features::default(),
             self_blorb: None, frontispiece: None, scott_pictures: None, disk_image: None, disk_entry: None, author: None, year: None, genre: None, language: None,
-            description: None, ifdb_link: None, ifdb_rating: None, ifdb_rating_count: None, fetch_not_found: false,
+            description: None, ifdb_link: None, ifdb_rating: None, ifdb_rating_count: None, fetch_not_found: false, ifdb_tuid: None,
         };
         let area = Rect::new(0, 0, 40, 12);
         let mut buf = Buffer::empty(area);
@@ -5827,7 +5913,7 @@ mod tests {
             ]),
             frontispiece: None,
             scott_pictures: None,
-            author: None, year: None, genre: None, language: None, description: None, ifdb_link: None, ifdb_rating: None, ifdb_rating_count: None, fetch_not_found: false,
+            author: None, year: None, genre: None, language: None, description: None, ifdb_link: None, ifdb_rating: None, ifdb_rating_count: None, fetch_not_found: false, ifdb_tuid: None,
         };
         let game_dir = std::path::PathBuf::from("/tmp/lanthorn-info-panel-saves/zork1.z3");
         let aux = app::picker::StoryAux {
@@ -5867,6 +5953,7 @@ mod tests {
             disk_sounds: Vec::new(),
             disk_fonts: Vec::new(),
             system_fonts: Vec::new(),
+            documents: Default::default(),
         };
         // Wide enough that the resource detail suffix and the save-summary row aren't clipped.
         let area = Rect::new(0, 0, 100, 25);
@@ -5975,7 +6062,7 @@ mod tests {
             frontispiece: None,
             scott_pictures: None,
             author: None, year: None, genre: None, language: None, description: None,
-            ifdb_link: None, ifdb_rating: None, ifdb_rating_count: None, fetch_not_found: false,
+            ifdb_link: None, ifdb_rating: None, ifdb_rating_count: None, fetch_not_found: false, ifdb_tuid: None,
         }
     }
 
@@ -6084,7 +6171,7 @@ mod tests {
             features: app::picker::Features::default(),
             disk_image: None, disk_entry: None, self_blorb: None, frontispiece: None, scott_pictures: None,
             author: None, year: None, genre: None, language: None, description: None,
-            ifdb_link: None, ifdb_rating: None, ifdb_rating_count: None, fetch_not_found: false,
+            ifdb_link: None, ifdb_rating: None, ifdb_rating_count: None, fetch_not_found: false, ifdb_tuid: None,
         };
         let area = Rect::new(0, 0, 60, 20);
         let mut buf = Buffer::empty(area);
@@ -6294,7 +6381,7 @@ mod tests {
             scott_pictures: None,
             disk_image: None,
             disk_entry: None,
-            author: None, year: None, genre: None, language: None, description: None, ifdb_link: None, ifdb_rating: None, ifdb_rating_count: None, fetch_not_found: false,
+            author: None, year: None, genre: None, language: None, description: None, ifdb_link: None, ifdb_rating: None, ifdb_rating_count: None, fetch_not_found: false, ifdb_tuid: None,
         };
         let area = Rect::new(0, 0, 34, 10);
         let mut buf = Buffer::empty(area);
@@ -6331,7 +6418,7 @@ mod tests {
             format: "Blorb (Glulx)".into(), version: Some("3.1.2".into()),
             serial: None, release: None, ifid: "IFID-X".into(),
             features: app::picker::Features::default(), self_blorb: None, frontispiece: None, scott_pictures: None, disk_image: None, disk_entry: None,
-            author: None, year: None, genre: None, language: None, description: None, ifdb_link: None, ifdb_rating: None, ifdb_rating_count: None, fetch_not_found: false,
+            author: None, year: None, genre: None, language: None, description: None, ifdb_link: None, ifdb_rating: None, ifdb_rating_count: None, fetch_not_found: false, ifdb_tuid: None,
         }
     }
 
@@ -6351,7 +6438,7 @@ mod tests {
                 ifid: "IFID-SCOTT".into(), features: app::picker::Features::default(),
                 self_blorb: None, frontispiece: None, scott_pictures, disk_image: None, disk_entry: None,
                 author: None, year: None, genre: None, language: None, description: None,
-                ifdb_link: None, ifdb_rating: None, ifdb_rating_count: None, fetch_not_found: false,
+                ifdb_link: None, ifdb_rating: None, ifdb_rating_count: None, fetch_not_found: false, ifdb_tuid: None,
             },
             hint_sidecar: None,
             kind: app::picker::RowKind::Story,
@@ -6570,7 +6657,7 @@ mod tests {
             version: None, serial: None, release: None, ifid: String::new(),
             features: Features::default(), self_blorb: None, frontispiece: None, scott_pictures, disk_image: None, disk_entry: None,
             author: None, year: None,
-            genre: None, language: None, description: None, ifdb_link: None, ifdb_rating: None, ifdb_rating_count: None, fetch_not_found: false,
+            genre: None, language: None, description: None, ifdb_link: None, ifdb_rating: None, ifdb_rating_count: None, fetch_not_found: false, ifdb_tuid: None,
         };
         let dos = meta(Some(ScottPictures::SagaDosCga { pictures: 68 }));
         assert_eq!(super::interp_label(&dos, false), "Scott (zip)");
@@ -6720,6 +6807,7 @@ mod tests {
             disk_sounds: Vec::new(),
             disk_fonts: Vec::new(),
             system_fonts: Vec::new(),
+            documents: Default::default(),
         };
         let area = Rect::new(0, 0, 60, 16);
         let mut buf = Buffer::empty(area);
@@ -6767,6 +6855,7 @@ mod tests {
             disk_sounds: Vec::new(),
             disk_fonts: Vec::new(),
             system_fonts: Vec::new(),
+            documents: Default::default(),
         };
         // Tall enough that the block is on screen without scrolling.
         let area = Rect::new(0, 0, 62, 40);
@@ -6837,6 +6926,7 @@ mod tests {
                 },
             ],
             system_fonts: Vec::new(),
+            documents: Default::default(),
         };
         let area = Rect::new(0, 0, 62, 40);
         let mut buf = Buffer::empty(area);
@@ -6892,6 +6982,7 @@ mod tests {
             art_in_use: None,
             disk_sounds: Vec::new(),
             disk_fonts: Vec::new(),
+            documents: Default::default(),
             system_fonts: vec![
                 app::system_fonts::SystemFace {
                     disk: "MacOS_6.0.8_System_Startup.img".into(),
@@ -7004,6 +7095,7 @@ mod tests {
             disk_sounds: Vec::new(),
             disk_fonts: Vec::new(),
             system_fonts: Vec::new(),
+            documents: Default::default(),
         };
         let area = Rect::new(0, 0, 62, 40);
         let mut buf = Buffer::empty(area);
@@ -7043,6 +7135,7 @@ mod tests {
             disk_sounds: Vec::new(),
             disk_fonts: Vec::new(),
             system_fonts: Vec::new(),
+            documents: Default::default(),
         };
         let area = Rect::new(0, 0, 62, 30);
         let mut buf = Buffer::empty(area);
@@ -7082,6 +7175,120 @@ mod tests {
             matches!(first.diff_option, CellDiffOption::ForcedWidth(w) if w.get() == 1),
             "link first cell must be pinned to width 1, was {:?}", first.diff_option
         );
+    }
+
+    /// An aux with only the documents location set (SQ-1679).
+    fn docs_aux(documents: app::documents::Location) -> app::picker::StoryAux {
+        app::picker::StoryAux {
+            assoc_blorb: None, saves: vec![], hints_available: false,
+            game_dir: std::path::PathBuf::from("/tmp/docs-aux"),
+            qzl_saves: vec![], auto_saves: vec![], sidecars: vec![],
+            art_candidates: vec![], art_in_use: None, disk_sounds: vec![],
+            disk_fonts: vec![], system_fonts: vec![], documents,
+        }
+    }
+
+    /// SQ-1679: the info box names the documents folder for a linked game, shows
+    /// the would-be path with a button while it does not exist, and a hint for a
+    /// game with no IFDB link.
+    #[test]
+    fn info_panel_shows_the_documents_folder_its_button_and_the_unlinked_hint() {
+        use app::documents::Location;
+        use ratatui::{buffer::Buffer, layout::Rect};
+        let cs = app::colors::ColorScheme::terminal_default();
+        let area = Rect::new(0, 0, 70, 14);
+        let render = |loc: Location| {
+            let mut buf = Buffer::empty(area);
+            let mut cover = app::cover::CoverState::default();
+            let mut links = Vec::new();
+            let aux = docs_aux(loc);
+            super::draw_info_panel(
+                "Game", "game.z5", &minimal_story_meta(), Some(&aux), 0, area, None, &mut cover,
+                std::path::Path::new("game.z5"), std::path::Path::new("game.z5"), false, None, &cs, &mut buf, &mut links, &mut Vec::new(),
+            );
+            (buffer_to_string(&buf, area), links)
+        };
+        let dir = std::path::PathBuf::from("/nowhere/documents/Game [t1]");
+        let (text, links) = render(Location::Exists(dir.clone()));
+        assert!(text.contains("Documents: /nowhere/documents/Game [t1]"), "{text}");
+        assert!(!text.contains("not created") && !text.contains("Create documents folder"), "{text}");
+        assert!(links.iter().any(|(_, u)| u.starts_with("file:///nowhere/documents/Game%20%5Bt1%5D")), "{links:?}");
+
+        let (text, links) = render(Location::Missing(dir));
+        assert!(text.contains("Documents: /nowhere/documents/Game [t1] (not created)"), "{text}");
+        assert!(text.contains("[ Create documents folder ]"), "{text}");
+        assert!(links.iter().any(|(_, u)| u == super::PANEL_ACTION_CREATE_DOCS), "the button is clickable: {links:?}");
+
+        let (text, links) = render(Location::Unlinked);
+        assert!(text.contains("Link to IFDB for a documents folder"), "{text}");
+        assert!(!text.contains("Create documents folder"), "an unlinked game has no button: {text}");
+        assert!(links.iter().all(|(_, u)| u != super::PANEL_ACTION_CREATE_DOCS));
+    }
+
+    /// SQ-1679: activating the button creates exactly `<Title> [<TUID>]` under the
+    /// (possibly overridden) root, refreshes the panel's aux, and then there is
+    /// nothing left to create.
+    #[test]
+    fn creating_the_documents_folder_makes_it_refreshes_the_panel_and_hides_the_button() {
+        use app::documents::Location;
+        let home = app::scratch_dir("docs-button");
+        let manuals = home.join("my manuals");
+        let settings = app::data_roots::DocumentsSettings { dir: Some(manuals.clone()), auto_create: false };
+        let roots = app::data_roots::DataRoots::resolve(&home, None, None, &settings);
+        let hint_index = app::hints::load_hint_index(&home);
+        let mut linked = scott_entry_with_pictures(std::path::Path::new("/tmp/lib/linked.prg"), None);
+        linked.title = "Zork: I".into();
+        linked.meta.ifdb_tuid = Some("tuid9".into());
+        let mut unlinked = scott_entry_with_pictures(std::path::Path::new("/tmp/lib/unlinked.prg"), None);
+        unlinked.title = "Unlinked".into();
+        let stories = vec![linked, unlinked];
+        let mut cache: Vec<Option<app::picker::StoryAux>> = vec![None, None];
+
+        super::ensure_aux(&mut cache, &stories, 0, &roots, &hint_index);
+        let want = manuals.join("Zork_ I [tuid9]");
+        assert_eq!(cache[0].as_ref().unwrap().documents, Location::Missing(want.clone()), "the overridden root, nothing created yet");
+        assert!(!manuals.exists());
+
+        let status = super::create_documents_folder(&roots, &stories, 0, &mut cache, &hint_index);
+        assert!(status.starts_with("Created documents folder"), "{status}");
+        assert!(want.is_dir());
+        assert_eq!(std::fs::read_dir(&manuals).unwrap().count(), 1, "exactly the one folder");
+        assert_eq!(cache[0].as_ref().unwrap().documents, Location::Exists(want), "the panel re-reads it");
+
+        let again = super::create_documents_folder(&roots, &stories, 0, &mut cache, &hint_index);
+        assert!(again.contains("already exists"), "{again}");
+
+        let none = super::create_documents_folder(&roots, &stories, 1, &mut cache, &hint_index);
+        assert!(none.contains("Link this game to IFDB"), "{none}");
+        assert_eq!(std::fs::read_dir(&manuals).unwrap().count(), 1, "an unlinked game makes nothing");
+        let _ = std::fs::remove_dir_all(&home);
+    }
+
+    /// A folder made by hand is found even with auto-creation off, and a failure
+    /// to create one surfaces as the error text.
+    #[test]
+    fn a_hand_made_folder_is_found_and_a_create_failure_is_reported() {
+        use app::documents::Location;
+        let home = app::scratch_dir("docs-button-err");
+        let roots = app::data_roots::DataRoots::resolve(&home, None, None, &Default::default());
+        let hint_index = app::hints::load_hint_index(&home);
+        let mut e = scott_entry_with_pictures(std::path::Path::new("/tmp/lib/g.prg"), None);
+        e.meta.ifdb_tuid = Some("tuidx".into());
+        let stories = vec![e];
+        let mut cache: Vec<Option<app::picker::StoryAux>> = vec![None];
+        let mine = roots.documents().join("My Own Name [tuidx]");
+        std::fs::create_dir_all(&mine).unwrap();
+        super::ensure_aux(&mut cache, &stories, 0, &roots, &hint_index);
+        assert_eq!(cache[0].as_ref().unwrap().documents, Location::Exists(mine));
+        // A root that cannot be created (a file is in the way).
+        let blocked = app::scratch_dir("docs-button-blocked").join("file");
+        std::fs::write(&blocked, b"x").unwrap();
+        let settings = app::data_roots::DocumentsSettings { dir: Some(blocked.join("sub")), auto_create: false };
+        let roots = app::data_roots::DataRoots::resolve(&home, None, None, &settings);
+        let mut cache: Vec<Option<app::picker::StoryAux>> = vec![None];
+        let msg = super::create_documents_folder(&roots, &stories, 0, &mut cache, &hint_index);
+        assert!(msg.starts_with("Could not create the documents folder"), "{msg}");
+        let _ = std::fs::remove_dir_all(&home);
     }
 
     #[test]
@@ -7545,7 +7752,7 @@ mod tests {
         title_by_ifid.insert(ifid_b, "AAA Brand New Title".to_string());
         let fetcher = app::fetch_worker::Fetcher::new(
             Box::new(FakeSource { title_by_ifid }),
-            data_base.clone(),
+            app::data_roots::DataRoots::single(&data_base),
             std::time::Duration::ZERO,
         );
         let order: Vec<app::fetch_worker::FetchTarget> =
@@ -7698,7 +7905,7 @@ mod tests {
             disk_image: None,
             disk_entry: None,
             author: None, year: None, genre: None, language: None, description: None,
-            ifdb_link: None, ifdb_rating: None, ifdb_rating_count: None, fetch_not_found: false,
+            ifdb_link: None, ifdb_rating: None, ifdb_rating_count: None, fetch_not_found: false, ifdb_tuid: None,
         };
         let area = Rect::new(0, 0, 40, 30);
         let mut buf = Buffer::empty(area);

@@ -89,6 +89,7 @@ Every slash command, grouped the way `/help` groups them. Type any of these afte
 | Library | `fetch-story` | re-fetch the selected story's IFDB metadata, ignoring the cache |
 | Library | `refresh-library` | fetch IFDB metadata for every story that is missing or stale |
 | Library | `set-ifdb-url` | point the selected story at an IFDB page by hand |
+| Library | `create-documents-folder` | create the selected story's documents folder (manuals, maps) beside its IFDB id |
 | Library | `open-url` | download a story from a URL into this library and open it |
 | Library | `search-ifdb` | search IFDB by title or author and download a story into this directory |
 | Library | `download-hints` | download a matching InvisiClues hint file for the selected story |

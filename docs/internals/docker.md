@@ -92,6 +92,15 @@ speaks plain HTTP/WebSocket here.
 `docker-compose.yml` at the repo root is a ready-made example of this mode:
 `mkdir -p stories && docker compose up -d`.
 
+### Where game documents land
+
+A game's documents folder (`<Title> [<IFDB id>]`, SQ-1679) is created under
+`<user dir>/documents`, which in this image is `/data/.lanthorn/documents`, on
+the same `lanthorn-data` volume as the saves, so it survives a container
+replacement and is shared by every player, proxy mode included. Nothing in the
+image creates or serves it; `create_documents_folders` and `documents_dir` in the
+shared `config.toml` behave exactly as they do outside Docker.
+
 ### Proxy mode: one player per authenticated user
 
 `LANTHORN_WEB_AUTH_HEADER=<header>` (SQ-1318) starts ttyd with

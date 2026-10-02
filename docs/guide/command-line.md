@@ -132,7 +132,10 @@ unless a player has set their own.
 `--user-dir` moves the whole `.lanthorn`, player trees included. `--data-dir`
 stands in for `~/.lanthorn/saves`, the shared catalogue (and the default
 player's saves); a named player's files always sit under `users/` in the user
-directory.
+directory. The per-game documents folders (manuals and maps, see
+[the story picker](getting-started.md#the-story-picker)) are shared by every
+player too: they live in `~/.lanthorn/documents` whatever `--data-dir` and
+`--player` say, unless the shared `config.toml` sets `documents_dir`.
 
 **Lanthorn does not check who you are.** `--player amy` means "act as amy", and
 anyone who can run lanthorn can say it. If players must not be able to read each

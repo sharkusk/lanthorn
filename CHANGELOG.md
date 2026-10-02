@@ -29,6 +29,16 @@ while any such tag, or this Unreleased section, still exists.*
 
 ### Added
 
+- Every game linked to IFDB can have a documents folder for its manual, feelies
+  and maps, named `<Title> [<IFDB id>]` under `~/.lanthorn/documents/` and shared
+  by every release of the game and every player. The story info panel shows its
+  path (a clickable link), or where it would go with a **Create documents folder**
+  button (also `m`, or the story menu); an unlinked game says to link it to IFDB.
+  `create_documents_folders = true` makes them automatically as games are found
+  or linked, and `documents_dir` moves them; both are read from the shared
+  `config.toml` only. Embedders get the library's `documents` module to list, import and
+  remove the files in a game's folder.
+
 - Several players can now share one lanthorn install. `--player <name>` (or the
   `LANTHORN_PLAYER` environment variable) gives each player their own saves, map,
   history, settings and look, while story titles, blurbs and covers are fetched

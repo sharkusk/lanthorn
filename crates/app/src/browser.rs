@@ -73,6 +73,9 @@ pub enum BrowserAction {
     RefreshLibrary,
     /// Point the selected story at an IFDB page by hand.
     SetIfdbUrl,
+    /// Create the selected story's documents folder (SQ-1679); only meaningful for
+    /// a story linked to IFDB whose folder does not exist yet.
+    CreateDocumentsFolder,
     /// Open a story straight from a URL, downloading it into this library
     /// (SQ-1086) — the UI half of "a URL is accepted wherever a path is".
     OpenUrl,

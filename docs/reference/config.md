@@ -9,6 +9,8 @@ Every setting `~/.lanthorn/config.toml` accepts, grouped the way the seeded temp
 |---|---|---|---|
 | `user_dir` | `"~/.lanthorn"` | example | Root directory for lanthorn data (maps/, saves/, style.toml). Default: ~/.lanthorn. |
 | `default_story_dir` | `"~/games/if"` | example | Directory (or single story file) opened when lanthorn is launched with no path argument. Unset by default, so a path is required. |
+| `documents_dir` | `"/data/manuals"` | example | Where each game's documents folder (manuals, feelies, maps) lives, as `<Title> [<IFDB id>]/`. Shared by every player, so it is read from this file only. Default: <user_dir>/documents. |
+| `create_documents_folders` | `true` | example | Create each linked game's documents folder automatically (default false: the story info panel offers a button, or make the folder by hand; an existing folder is always found). Shared by every player: read from this file only. |
 | `style` | `"style.toml"` | example | Style-file pointer: a built-in name or a file path. Unset uses <user_dir>/style.toml when present, else the built-in theme. |
 | `watch_style` | `false` |  | Watch the resolved style file and live-reload it on change. |
 

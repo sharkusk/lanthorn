@@ -40,6 +40,7 @@ pub const STORY_MENU: &[MenuItem] = &[
     MenuItem { command: "fetch-story", label: "Fetch metadata" },
     MenuItem { command: "download-hints", label: "Get hints" },
     MenuItem { command: "set-ifdb-url", label: "Set IFDB URL…" },
+    MenuItem { command: "create-documents-folder", label: "Create documents folder" },
 ];
 
 // ── State ─────────────────────────────────────────────────────────────────────
@@ -159,7 +160,7 @@ mod tests {
     fn the_key_column_reads_the_keymap() {
         assert_eq!(
             menu_widget::key_labels(STORY_MENU, &km(), &first_key),
-            vec!["Enter", "o", "f", "Shift+H", "u"]
+            vec!["Enter", "o", "f", "Shift+H", "u", "m"]
         );
     }
 
@@ -202,13 +203,14 @@ mod tests {
         // notched into its top edge, labels left and keys in their own column.
         assert_eq!(
             text,
-            "┌──────────────────────────┐\n\
-             │ Open             Enter   │\n\
-             │ Launch options…  o       │\n\
-             │ Fetch metadata   f       │\n\
-             │ Get hints        Shift+H │\n\
-             │ Set IFDB URL…    u       │\n\
-             └──────────────────────────┘",
+            "┌──────────────────────────────────┐\n\
+             │ Open                     Enter   │\n\
+             │ Launch options…          o       │\n\
+             │ Fetch metadata           f       │\n\
+             │ Get hints                Shift+H │\n\
+             │ Set IFDB URL…            u       │\n\
+             │ Create documents folder  m       │\n\
+             └──────────────────────────────────┘",
             "{text}"
         );
     }

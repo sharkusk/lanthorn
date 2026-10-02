@@ -123,7 +123,7 @@ pub fn import_row(row: &ImportRow, roots: &crate::data_roots::DataRoots, source:
             Ok(FetchOutcome::Found(iff)) => {
                 let cover = crate::fetch_worker::maybe_fetch_cover(source, &game_dir, &row.path, &iff);
                 let title = iff.title.clone().unwrap_or_else(|| entry.title.clone());
-                crate::fetch_worker::write_fetched(&game_dir, &ifid, crate::fetch_worker::found_meta(&iff, cover.clone()));
+                crate::fetch_worker::write_fetched(roots, &game_dir, &ifid, crate::fetch_worker::found_meta(&iff, cover.clone()));
                 // IFDB had no cover but the row names one: take it.
                 let cover = if cover.is_none() {
                     fetch_cover_from(row.cover_url.as_deref(), source, &game_dir, &row.path)
@@ -174,7 +174,7 @@ pub fn import_row(row: &ImportRow, roots: &crate::data_roots::DataRoots, source:
             cover: cover.clone(),
             not_found: false,
         };
-        crate::fetch_worker::write_fetched(&game_dir, &ifid, meta);
+        crate::fetch_worker::write_fetched(roots, &game_dir, &ifid, meta);
         return RowOutcome::Curated { title: title.clone(), cover: cover.is_some() };
     }
 

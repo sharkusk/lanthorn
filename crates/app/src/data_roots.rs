@@ -26,6 +26,8 @@ pub const PLAYER_ENV: &str = "LANTHORN_PLAYER";
 ///
 /// * `catalogue` holds what every player shares — see the module docs.
 /// * `player` holds this player's own per-story state.
+/// * `documents` holds the per-game documents folders (SQ-1679), shared by every
+///   player and every release of a game.
 ///
 /// For the default player (and for every single-player install, which is every
 /// install that never names a player) the two are the same directory, which is
@@ -34,13 +36,27 @@ pub const PLAYER_ENV: &str = "LANTHORN_PLAYER";
 pub struct DataRoots {
     catalogue: PathBuf,
     player: PathBuf,
+    documents: PathBuf,
+    create_documents: bool,
 }
+
+/// The documents settings from the SHARED config (`documents_dir`,
+/// `create_documents_folders`); see [`crate::config::Config::shared_documents_settings`].
+#[derive(Debug, Clone, PartialEq, Eq, Default)]
+pub struct DocumentsSettings {
+    /// Where the per-game folders live; `None` is `<user_dir>/documents`.
+    pub dir: Option<PathBuf>,
+    /// Whether lanthorn creates a linked game's folder on its own (opt-in).
+    pub auto_create: bool,
+}
+
 
 impl DataRoots {
     /// One directory serving both halves: the default player's layout.
     pub fn single(base: impl Into<PathBuf>) -> Self {
         let base = base.into();
-        DataRoots { catalogue: base.clone(), player: base }
+        // No user dir to hang `documents/` off, so it sits inside the base.
+        DataRoots { documents: base.join("documents"), create_documents: false, catalogue: base.clone(), player: base }
     }
 
     /// The roots for a launch.
@@ -48,14 +64,23 @@ impl DataRoots {
     /// The rule for the three flags: `--data-dir` stands in for
     /// `<user-dir>/saves`, the shared catalogue base (and the default player's
     /// saves, as it always has been); `--player` always roots under
-    /// `<user-dir>/users/<name>/`, wherever the catalogue was moved to.
-    pub fn resolve(user_dir: &Path, data_dir: Option<&Path>, player: Option<&str>) -> Self {
+    /// `<user-dir>/users/<name>/`, wherever the catalogue was moved to. The
+    /// documents root is `documents.dir` (the SHARED config's `documents_dir`
+    /// key; never a player's own) or `<user-dir>/documents`; `--data-dir` and
+    /// `--player` never move it.
+    pub fn resolve(
+        user_dir: &Path,
+        data_dir: Option<&Path>,
+        player: Option<&str>,
+        documents: &DocumentsSettings,
+    ) -> Self {
         let catalogue = data_dir.map(Path::to_path_buf).unwrap_or_else(|| user_dir.join("saves"));
         let player = match player {
             Some(name) => player_root(user_dir, name).join("saves"),
             None => catalogue.clone(),
         };
-        DataRoots { catalogue, player }
+        let docs = documents.dir.clone().unwrap_or_else(|| user_dir.join("documents"));
+        DataRoots { catalogue, player, documents: docs, create_documents: documents.auto_create }
     }
 
     /// The shared catalogue base.
@@ -66,6 +91,17 @@ impl DataRoots {
     /// This player's base.
     pub fn player(&self) -> &Path {
         &self.player
+    }
+
+    /// The root of the per-game documents folders (see [`crate::documents`]).
+    pub fn documents(&self) -> &Path {
+        &self.documents
+    }
+
+    /// Whether lanthorn creates a linked game's documents folder on its own
+    /// (`create_documents_folders`). An explicit import creates it regardless.
+    pub fn creates_documents(&self) -> bool {
+        self.create_documents
     }
 
     /// Where this story's shared metadata lives.
@@ -144,7 +180,7 @@ mod tests {
     #[test]
     fn default_player_layout_is_unchanged() {
         let u = Path::new("/u");
-        let r = DataRoots::resolve(u, None, None);
+        let r = DataRoots::resolve(u, None, None, &DocumentsSettings::default());
         assert_eq!(r.catalogue(), Path::new("/u/saves"));
         assert_eq!(r.player(), Path::new("/u/saves"));
         assert_eq!(r.player_dir("z.z5"), Path::new("/u/saves/z.z5.save"));
@@ -153,13 +189,27 @@ mod tests {
     #[test]
     fn named_player_roots_under_users_and_data_dir_moves_only_the_catalogue() {
         let u = Path::new("/u");
-        let r = DataRoots::resolve(u, None, Some("bob"));
+        let r = DataRoots::resolve(u, None, Some("bob"), &DocumentsSettings::default());
         assert_eq!(r.catalogue(), Path::new("/u/saves"));
         assert_eq!(r.player(), Path::new("/u/users/bob/saves"));
-        let r = DataRoots::resolve(u, Some(Path::new("/d")), Some("bob"));
+        let r = DataRoots::resolve(u, Some(Path::new("/d")), Some("bob"), &DocumentsSettings::default());
         assert_eq!(r.catalogue(), Path::new("/d"));
         assert_eq!(r.player(), Path::new("/u/users/bob/saves"));
-        let r = DataRoots::resolve(u, Some(Path::new("/d")), None);
+        let r = DataRoots::resolve(u, Some(Path::new("/d")), None, &DocumentsSettings::default());
         assert_eq!((r.catalogue(), r.player()), (Path::new("/d"), Path::new("/d")));
+    }
+
+    #[test]
+    fn documents_root_is_under_user_dir_whatever_the_data_dir_or_player() {
+        let u = Path::new("/u");
+        for r in [
+            DataRoots::resolve(u, None, None, &DocumentsSettings::default()),
+            DataRoots::resolve(u, Some(Path::new("/d")), None, &DocumentsSettings::default()),
+            DataRoots::resolve(u, Some(Path::new("/d")), Some("bob"), &DocumentsSettings::default()),
+        ] {
+            assert_eq!(r.documents(), Path::new("/u/documents"));
+        }
+        let r = DataRoots::resolve(u, None, Some("bob"), &DocumentsSettings { dir: Some("/manuals".into()), auto_create: true });
+        assert_eq!(r.documents(), Path::new("/manuals"));
     }
 }

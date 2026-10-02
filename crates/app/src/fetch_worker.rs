@@ -103,7 +103,7 @@ pub struct Fetcher {
 }
 
 impl Fetcher {
-    pub fn new(source: Box<dyn MetadataSource>, catalogue: PathBuf, delay: Duration) -> Self {
+    pub fn new(source: Box<dyn MetadataSource>, roots: crate::data_roots::DataRoots, delay: Duration) -> Self {
         let (req_tx, req_rx) = mpsc::channel::<FetchOrder>();
         let (res_tx, res_rx) = mpsc::channel::<FetchProgress>();
         let cancel = Arc::new(AtomicBool::new(false));
@@ -119,7 +119,7 @@ impl Fetcher {
                         break;
                     }
                     let progress = fetch_one(
-                        source.as_ref(), &catalogue, target, order.forced,
+                        source.as_ref(), &roots, target, order.forced,
                         id_override.as_deref(), delay, i, total,
                     );
                     if res_tx.send(progress).is_err() {
@@ -187,7 +187,7 @@ fn scott_ifdb_id(path: &Path, disk_entry: Option<&str>) -> Option<String> {
 #[allow(clippy::too_many_arguments)]
 fn fetch_one(
     source: &dyn MetadataSource,
-    catalogue: &Path,
+    roots: &crate::data_roots::DataRoots,
     target: FetchTarget,
     forced: bool,
     id_override: Option<&str>,
@@ -200,7 +200,7 @@ fn fetch_one(
     // fetching *Leather Goddesses* off `INFOCOM6` must not write its metadata
     // (and its cover) into *Sherlock*'s directory (SQ-0859).
     let game_dir = crate::storage::game_dir(
-        catalogue,
+        roots.catalogue(),
         &crate::storage::story_key_at_from(&path, disk_entry.as_deref()),
     );
     let existing = story_info::load(&game_dir, &ifid);
@@ -242,11 +242,11 @@ fn fetch_one(
             Ok(FetchOutcome::Found(iff)) => {
                 let cover = maybe_fetch_cover(source, &game_dir, &path, &iff);
                 let title = iff.title.clone().unwrap_or_else(|| stem_title(&path));
-                write_fetched(&game_dir, &ifid, found_meta(&iff, cover));
+                write_fetched(roots, &game_dir, &ifid, found_meta(&iff, cover));
                 (title, Outcome::Fetched)
             }
             Ok(FetchOutcome::NotFound) => {
-                write_fetched(&game_dir, &ifid, not_found_meta());
+                write_fetched(roots, &game_dir, &ifid, not_found_meta());
                 (stem_title(&path), Outcome::NotFound)
             }
             Err(FetchError::Transport(msg)) => {
@@ -268,15 +268,28 @@ fn fetch_one(
 /// `pub(crate)`: also called directly by `ifdb_search.rs` after an IFDB
 /// download (SQ-0474), reusing this writer so both paths produce an
 /// identical sidecar shape.
-pub(crate) fn write_fetched(game_dir: &Path, ifid: &str, fetched: FetchedMeta) {
+///
+/// **The one place a TUID is ever written** (fetch, IFDB-search download, metadata
+/// import all end here), so it is also where a game's documents folder is created
+/// (SQ-1679) — on the caller's worker thread, after the sidecar is safely saved.
+/// A relink to another TUID ensures the new folder and leaves the old one alone.
+pub(crate) fn write_fetched(roots: &crate::data_roots::DataRoots, game_dir: &Path, ifid: &str, fetched: FetchedMeta) {
     let mut info = story_info::load(game_dir, ifid).unwrap_or_else(|| StoryInfo {
         format_version: story_info::FORMAT_VERSION,
         ifid: ifid.to_string(),
         fetched: None,
         probe: None,
     });
+    let tuid = fetched.ifdb_tuid.clone().filter(|t| !t.is_empty());
+    let title = fetched.title.clone().filter(|t| !t.trim().is_empty()).unwrap_or_else(|| {
+        let key = game_dir.file_name().and_then(|n| n.to_str()).unwrap_or("");
+        key.strip_suffix(".save").unwrap_or(key).to_string()
+    });
     info.fetched = Some(fetched);
     let _ = story_info::save(game_dir, &info);
+    if let (Some(tuid), true) = (tuid, roots.creates_documents()) {
+        let _ = crate::documents::ensure_documents_dir(roots, &tuid, &title);
+    }
 }
 
 /// `pub(crate)`: also called by `ifdb_search.rs` (SQ-0474) — see
@@ -584,7 +597,7 @@ mod tests {
 
         let fake = Fake::new(HashMap::new());
         let calls = Arc::clone(&fake.calls);
-        let fetcher = Fetcher::new(Box::new(fake), data_base.clone(), Duration::ZERO);
+        let fetcher = Fetcher::new(Box::new(fake), crate::data_roots::DataRoots::single(&data_base), Duration::ZERO);
         fetcher.request(FetchOrder { stories: vec![FetchTarget { path, disk_entry: None, ifid }], forced: false , id_override: None});
 
         let progress = wait_for(&fetcher, 1);
@@ -610,7 +623,7 @@ mod tests {
         );
         let fake = Fake::new(responses);
         let calls = Arc::clone(&fake.calls);
-        let fetcher = Fetcher::new(Box::new(fake), data_base.clone(), Duration::ZERO);
+        let fetcher = Fetcher::new(Box::new(fake), crate::data_roots::DataRoots::single(&data_base), Duration::ZERO);
         fetcher.request(FetchOrder { stories: vec![FetchTarget { path, disk_entry: None, ifid: ifid.clone() }], forced: true , id_override: None});
 
         let progress = wait_for(&fetcher, 1);
@@ -635,7 +648,7 @@ mod tests {
         let mut responses = HashMap::new();
         responses.insert(ifid.clone(), FakeResp::NotFound);
         let fake = Fake::new(responses);
-        let fetcher = Fetcher::new(Box::new(fake), data_base.clone(), Duration::ZERO);
+        let fetcher = Fetcher::new(Box::new(fake), crate::data_roots::DataRoots::single(&data_base), Duration::ZERO);
         fetcher.request(FetchOrder { stories: vec![FetchTarget { path, disk_entry: None, ifid: ifid.clone() }], forced: false , id_override: None});
 
         let progress = wait_for(&fetcher, 1);
@@ -664,7 +677,7 @@ mod tests {
         let mut responses = HashMap::new();
         responses.insert(ifid.clone(), FakeResp::Err("connection reset".into()));
         let fake = Fake::new(responses);
-        let fetcher = Fetcher::new(Box::new(fake), data_base.clone(), Duration::ZERO);
+        let fetcher = Fetcher::new(Box::new(fake), crate::data_roots::DataRoots::single(&data_base), Duration::ZERO);
         fetcher.request(FetchOrder { stories: vec![FetchTarget { path, disk_entry: None, ifid: ifid.clone() }], forced: false , id_override: None});
 
         let progress = wait_for(&fetcher, 1);
@@ -693,7 +706,7 @@ mod tests {
         );
         let fake = Fake::new(responses);
         let calls = Arc::clone(&fake.calls);
-        let fetcher = Fetcher::new(Box::new(fake), data_base.clone(), Duration::ZERO);
+        let fetcher = Fetcher::new(Box::new(fake), crate::data_roots::DataRoots::single(&data_base), Duration::ZERO);
         fetcher.request(FetchOrder {
             stories: vec![FetchTarget { path, disk_entry: None, ifid: ifid.clone() }],
             forced: false,
@@ -709,6 +722,66 @@ mod tests {
         let reloaded = story_info::load(&game_dir, &ifid).expect("sidecar keyed to the story IFID");
         assert_eq!(reloaded.fetched.unwrap().title.as_deref(), Some("Found By Hand"));
         let _ = std::fs::remove_dir_all(&data_base);
+    }
+
+    fn found_by(tuid: &str, title: &str) -> FakeResp {
+        FakeResp::Found(Box::new(IFiction {
+            title: Some(title.into()),
+            ifdb: Some(crate::ifiction::IfdbExt {
+                tuid: tuid.into(),
+                link: None,
+                cover_url: None,
+                average_rating: None,
+                rating_count: None,
+            }),
+            ..Default::default()
+        }))
+    }
+
+    fn fetch_by_id(fetcher: &Fetcher, path: &Path, ifid: &str, tuid: &str) {
+        fetcher.request(FetchOrder {
+            stories: vec![FetchTarget { path: path.to_path_buf(), disk_entry: None, ifid: ifid.into() }],
+            forced: true,
+            id_override: Some(tuid.into()),
+        });
+        let progress = wait_for(fetcher, 1);
+        assert_eq!(progress[0].outcome, Outcome::Fetched);
+    }
+
+    /// SQ-1679: a fetch (or relink) that delivers a TUID creates that game's
+    /// documents folder when the user opted in, never touches the previous TUID's
+    /// folder on a relink, and creates nothing by default.
+    #[test]
+    fn a_fetch_that_writes_a_tuid_creates_the_documents_folder_only_when_opted_in() {
+        let ifid = "ZCODE-1-000001";
+        let mut responses = HashMap::new();
+        responses.insert("tuidaaa".to_string(), found_by("tuidaaa", "Zork: The Game?"));
+        responses.insert("tuidbbb".to_string(), found_by("tuidbbb", "Other Game"));
+
+        // Opted in.
+        let home = tmp();
+        let on = crate::data_roots::DataRoots::resolve(
+            &home, None, None, &crate::data_roots::DocumentsSettings { dir: None, auto_create: true },
+        );
+        let path = home.join("game.z5");
+        let fetcher = Fetcher::new(Box::new(Fake::new(responses.clone())), on.clone(), Duration::ZERO);
+        fetch_by_id(&fetcher, &path, ifid, "tuidaaa");
+        let first = on.documents().join("Zork_ The Game_ [tuidaaa]");
+        assert!(first.is_dir(), "{:?}", std::fs::read_dir(on.documents()).map(|r| r.flatten().map(|e| e.path()).collect::<Vec<_>>()));
+        std::fs::write(first.join("manual.pdf"), b"mine").unwrap();
+        // A relink to a different TUID: the new folder appears, the old one is untouched.
+        fetch_by_id(&fetcher, &path, ifid, "tuidbbb");
+        assert!(on.documents().join("Other Game [tuidbbb]").is_dir());
+        assert_eq!(std::fs::read(first.join("manual.pdf")).unwrap(), b"mine");
+        let _ = std::fs::remove_dir_all(&home);
+
+        // Default config: nothing is created.
+        let home = tmp();
+        let off = crate::data_roots::DataRoots::resolve(&home, None, None, &Default::default());
+        let fetcher = Fetcher::new(Box::new(Fake::new(responses)), off.clone(), Duration::ZERO);
+        fetch_by_id(&fetcher, &home.join("game.z5"), ifid, "tuidaaa");
+        assert!(!off.documents().exists(), "opt-in: a default config creates no folder");
+        let _ = std::fs::remove_dir_all(&home);
     }
 
     /// SQ-1226: a story only HAS a remembered tuid because something found it
@@ -751,7 +824,7 @@ mod tests {
         responses.insert(ifid.clone(), FakeResp::NotFound); // IFDB indexes no such IFID
         let fake = Fake::new(responses);
         let calls = Arc::clone(&fake.calls);
-        let fetcher = Fetcher::new(Box::new(fake), data_base.clone(), Duration::ZERO);
+        let fetcher = Fetcher::new(Box::new(fake), crate::data_roots::DataRoots::single(&data_base), Duration::ZERO);
         fetcher.request(FetchOrder {
             stories: vec![FetchTarget { path, disk_entry: None, ifid: ifid.clone() }],
             forced: true,
@@ -805,7 +878,7 @@ mod tests {
         fake.fetch_gate = Some(FetchGate { started: started_tx, release: Mutex::new(release_rx) });
         let calls = Arc::clone(&fake.calls);
 
-        let fetcher = Fetcher::new(Box::new(fake), data_base.clone(), Duration::ZERO);
+        let fetcher = Fetcher::new(Box::new(fake), crate::data_roots::DataRoots::single(&data_base), Duration::ZERO);
         fetcher.request(FetchOrder {
             stories: vec![
                 FetchTarget { path: path1, disk_entry: None, ifid: ifid1.clone() },
@@ -858,7 +931,7 @@ mod tests {
         let mut responses = HashMap::new();
         responses.insert(fetched.ifid.clone(), FakeResp::NotFound);
         let fake = Fake::new(responses);
-        let fetcher = Fetcher::new(Box::new(fake), data_base.clone(), Duration::ZERO);
+        let fetcher = Fetcher::new(Box::new(fake), crate::data_roots::DataRoots::single(&data_base), Duration::ZERO);
         fetcher.request(FetchOrder {
             stories: vec![skip1.clone(), skip2.clone(), fetched.clone()],
             forced: false,
@@ -895,7 +968,7 @@ mod tests {
             FakeResp::Found(Box::new(IFiction { title: Some("Title".into()), ..Default::default() })),
         );
         let fake = Fake::new(responses);
-        let fetcher = Fetcher::new(Box::new(fake), data_base.clone(), Duration::ZERO);
+        let fetcher = Fetcher::new(Box::new(fake), crate::data_roots::DataRoots::single(&data_base), Duration::ZERO);
         fetcher.request(FetchOrder { stories: vec![FetchTarget { path, disk_entry: None, ifid: ifid.clone() }], forced: true , id_override: None});
         wait_for(&fetcher, 1);
 
@@ -931,7 +1004,7 @@ mod tests {
         responses.insert(ifid.clone(), FakeResp::Found(Box::new(iff)));
         let fake = Fake::new(responses);
         let cover_calls = Arc::clone(&fake.cover_calls);
-        let fetcher = Fetcher::new(Box::new(fake), data_base.clone(), Duration::ZERO);
+        let fetcher = Fetcher::new(Box::new(fake), crate::data_roots::DataRoots::single(&data_base), Duration::ZERO);
         fetcher.request(FetchOrder { stories: vec![FetchTarget { path, disk_entry: None, ifid: ifid.clone() }], forced: true , id_override: None});
         wait_for(&fetcher, 1);
 
@@ -978,7 +1051,7 @@ mod tests {
         responses.insert(ifid.clone(), FakeResp::Found(Box::new(iff)));
         let mut fake = Fake::new(responses);
         fake.cover_bytes = b"<html><body>503 Service Unavailable</body></html>".to_vec();
-        let fetcher = Fetcher::new(Box::new(fake), data_base.clone(), Duration::ZERO);
+        let fetcher = Fetcher::new(Box::new(fake), crate::data_roots::DataRoots::single(&data_base), Duration::ZERO);
         fetcher.request(FetchOrder { stories: vec![FetchTarget { path, disk_entry: None, ifid: ifid.clone() }], forced: true, id_override: None });
         wait_for(&fetcher, 1);
 
@@ -1023,7 +1096,7 @@ mod tests {
         responses.insert(ifid.clone(), FakeResp::Found(Box::new(iff)));
         let fake = Fake::new(responses);
         let cover_calls = Arc::clone(&fake.cover_calls);
-        let fetcher = Fetcher::new(Box::new(fake), data_base.clone(), Duration::ZERO);
+        let fetcher = Fetcher::new(Box::new(fake), crate::data_roots::DataRoots::single(&data_base), Duration::ZERO);
         fetcher.request(FetchOrder { stories: vec![FetchTarget { path, disk_entry: None, ifid: ifid.clone() }], forced: true , id_override: None});
         wait_for(&fetcher, 1);
 

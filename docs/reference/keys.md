@@ -50,6 +50,7 @@ The built-in key bindings, one row per binding — several keys may reach the sa
 | Browser | `R` | `refresh-library` | fetch IFDB metadata for every story that is missing or stale |
 | Browser | `U` | `set-ifdb-url` | point the selected story at an IFDB page by hand |
 | Browser | `/` | `search-ifdb` | search IFDB by title or author and download a story into this directory |
+| Browser | `M` | `create-documents-folder` | create the selected story's documents folder (manuals, maps) beside its IFDB id |
 | Browser | `Shift+U` | `open-url` | download a story from a URL into this library and open it |
 | Browser | `Shift+H` | `download-hints` | download a matching InvisiClues hint file for the selected story |
 | Browser | `S` | `sort-library` | cycle the browser's sort column, keeping the direction |

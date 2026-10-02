@@ -110,6 +110,25 @@ const STARTUP: &[Row] = &[
         ],
     ),
     ex(
+        "documents_dir",
+        "\"/data/manuals\"",
+        &[
+            "Where each game's documents folder (manuals, feelies, maps) lives, as",
+            "`<Title> [<IFDB id>]/`. Shared by every player, so it is read from this",
+            "file only. Default: <user_dir>/documents.",
+        ],
+    ),
+    ex(
+        "create_documents_folders",
+        "true",
+        &[
+            "Create each linked game's documents folder automatically (default false:",
+            "the story info panel offers a button, or make the folder by hand; an",
+            "existing folder is always found).",
+            "Shared by every player: read from this file only.",
+        ],
+    ),
+    ex(
         "style",
         "\"style.toml\"",
         &[
