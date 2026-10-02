@@ -36,7 +36,7 @@ while any such tag, or this Unreleased section, still exists.*
   PDFs, scans, text files and zips. Solutions and hints are tagged *spoiler*. A
   zip opens to show what is inside without being downloaded, so you can take just
   the one entry you want from a bundle of fifty games, and a text file can be
-  previewed first. Nothing is fetched until you ask, files over 50 MB are refused,
+  previewed first. Nothing is fetched until you ask, files over 100 MB are refused,
   and a game that is not linked to IFDB says so.
 
 - Every game linked to IFDB can have a documents folder for its manual, feelies
@@ -63,6 +63,10 @@ while any such tag, or this Unreleased section, still exists.*
   only way to reach it. Sound works in this mode too, through a second proxy route.
 
 ### Fixed
+
+- Story downloads from IFDB are now limited to 100 MB per file, the same as
+  documents, and a file over the limit is refused with "Too large to download
+  (over 100 MB)". The documents limit is raised from 50 MB to 100 MB.
 
 - The room inspector now shows room descriptions in Zork Zero, Shogun and
   Arthur too, instead of leaving them blank in every graphical (Version 6) game.

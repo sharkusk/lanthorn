@@ -104,7 +104,7 @@ documents folder, which is made if it is not there yet. With nothing marked,
 - **Peek at text first.** `p` shows the first twenty lines of a text file, or of
   a text file inside a zip, before you decide.
 - Nothing is fetched until you ask for it, one request at a time, and a file over
-  50 MB is refused. A name that already exists in the folder is never overwritten:
+  100 MB is refused. A name that already exists in the folder is never overwritten:
   the new file is saved as `manual (2).pdf`. A game that is not linked to IFDB
   shows the button and menu row greyed out with *Link to IFDB first*.
 

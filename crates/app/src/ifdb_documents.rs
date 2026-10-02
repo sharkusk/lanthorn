@@ -32,7 +32,7 @@
 //! "contents unknown" and whole-file download only: the archive is NEVER fetched
 //! just to be listed.
 //!
-//! **Limits.** [`MAX_DOCUMENT`] per file or per inflated entry, judged by the
+//! **Limits.** [`MAX_DOWNLOAD`] per file or per inflated entry, judged by the
 //! declared size where there is one and again while reading (a zip bomb's
 //! declared size is no guarantee); URLs come from the IFDB record only; an entry
 //! name with `..`, an absolute path or a drive letter is refused, and only its
@@ -47,18 +47,15 @@
 
 use std::io::{self, Read};
 use std::path::Path;
-use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
-use std::sync::{mpsc, Arc};
-use std::thread;
+use std::sync::atomic::{AtomicUsize, Ordering};
+use std::sync::mpsc;
 
 use crate::data_roots::DataRoots;
 use crate::ifdb_search::{
-    basename_from_url, child_text, one_line, sanitize_basename, subtitle_of, RangeProbe,
-    SearchError, SearchSource,
+    basename_from_url, child_text, one_line, sanitize_basename, subtitle_of, too_large_message,
+    IfdbWorker, RangeProbe, SearchError, SearchSource, MAX_DOWNLOAD,
 };
 
-/// Cap on one downloaded file, or one inflated zip entry.
-pub const MAX_DOCUMENT: u64 = 50 * 1024 * 1024;
 /// Bytes fetched for a text preview.
 const PREVIEW_BYTES: u64 = 16 * 1024;
 /// Lines shown in a text preview.
@@ -602,51 +599,19 @@ pub enum DocEvent {
     Finished { dir: Option<std::path::PathBuf>, saved: Vec<String>, failed: Vec<(String, String)> },
 }
 
-/// One serial background thread for the documents chooser: the same shape as
-/// `ifdb_search::SearchWorker`, so there is one request in flight whatever the
-/// UI does. Dropping it ends the thread.
-pub struct DocumentWorker {
-    jobs: mpsc::Sender<DocJob>,
-    events: mpsc::Receiver<DocEvent>,
-    busy: Arc<AtomicBool>,
-    _thread: thread::JoinHandle<()>,
-}
+/// The documents chooser's worker: the same [`IfdbWorker`] the search modal
+/// uses, so there is one request in flight whatever the UI does.
+pub type DocumentWorker = IfdbWorker<DocJob, DocEvent>;
 
 impl DocumentWorker {
     pub fn new(source: Box<dyn SearchSource>, roots: DataRoots) -> Self {
-        let (jobs, job_rx) = mpsc::channel::<DocJob>();
-        let (tx, events) = mpsc::channel::<DocEvent>();
-        let busy = Arc::new(AtomicBool::new(false));
-        let flag = Arc::clone(&busy);
-        let thread = thread::spawn(move || {
-            while let Ok(job) = job_rx.recv() {
-                let alive = run_job(source.as_ref(), &roots, job, &tx);
-                flag.store(false, Ordering::Relaxed);
-                if !alive {
-                    return;
-                }
-            }
-        });
-        Self { jobs, events, busy, _thread: thread }
-    }
-
-    pub fn request(&self, job: DocJob) {
-        self.busy.store(true, Ordering::Relaxed);
-        let _ = self.jobs.send(job);
-    }
-
-    pub fn drain(&self) -> Vec<DocEvent> {
-        self.events.try_iter().collect()
-    }
-
-    pub fn busy(&self) -> bool {
-        self.busy.load(Ordering::Relaxed)
+        Self::spawn(move |job, out| run_job(source.as_ref(), &roots, job, &out.tx))
     }
 }
 
 /// Run one job, sending its events; `false` when the receiver is gone.
 fn run_job(source: &dyn SearchSource, roots: &DataRoots, job: DocJob, tx: &mpsc::Sender<DocEvent>) -> bool {
-    run_job_capped(source, roots, job, tx, MAX_DOCUMENT)
+    run_job_capped(source, roots, job, tx, MAX_DOWNLOAD)
 }
 
 fn run_job_capped(
@@ -712,9 +677,7 @@ fn run_job_capped(
                     save_document(&dir, &name, &bytes).map_err(|e| SearchError::Io(e.to_string())).map(|d| d.id)
                 }) {
                     Ok(id) => saved.push(id),
-                    Err(SearchError::TooLarge) => {
-                        failed.push((label, format!("larger than the {} limit", format_size(cap))))
-                    }
+                    Err(SearchError::TooLarge) => failed.push((label, too_large_message(cap))),
                     Err(e) => failed.push((label, e.to_string())),
                 }
                 if !send(DocEvent::Progress { done: n + 1, total, name: saved.last().cloned().unwrap_or_default() }) {
@@ -957,7 +920,7 @@ pub(crate) mod tests {
         let host = Host::new(true).with(URL, zip);
         let z = RemoteZip::open(&host, URL).unwrap().unwrap();
         let idx = z.entries().into_iter().find(|e| e.name == "ZorkI.txt").unwrap().index;
-        let (name, bytes) = z.read_entry(idx, MAX_DOCUMENT).unwrap();
+        let (name, bytes) = z.read_entry(idx, MAX_DOWNLOAD).unwrap();
         assert_eq!((name.as_str(), bytes.as_slice()), ("ZorkI.txt", &b"ZORK I walkthrough\n"[..]));
         let fetched: u64 = host.requested().iter().map(|r| r.1).sum();
         assert!(fetched < total / 10, "{fetched} of {total}");
@@ -997,7 +960,7 @@ pub(crate) mod tests {
         assert_eq!(names, ["fine.txt"], "only the safe one is offered");
         // Asked for by index anyway (a stale or hostile request), it is refused.
         let evil = (0..4).find(|i| z.raw[*i].path == "../evil.txt").unwrap();
-        assert!(matches!(z.read_entry(evil, MAX_DOCUMENT), Err(SearchError::NoFilename)));
+        assert!(matches!(z.read_entry(evil, MAX_DOWNLOAD), Err(SearchError::NoFilename)));
     }
 
     #[test]
@@ -1043,14 +1006,14 @@ pub(crate) mod tests {
         };
         let job = || DocJob::Download { tuid: "abc123".into(), title: "Zork I".into(), items: items() };
 
-        let (dir, saved, failed) = finished(run(&host, &roots, job(), MAX_DOCUMENT));
+        let (dir, saved, failed) = finished(run(&host, &roots, job(), MAX_DOWNLOAD));
         let dir = dir.unwrap();
         assert_eq!(dir, roots.documents().join("Zork I [abc123]"), "made on demand");
         assert!(failed.is_empty(), "{failed:?}");
         assert_eq!(saved, ["manual.pdf", "ZorkI.txt"]);
         assert_eq!(std::fs::read(dir.join("ZorkI.txt")).unwrap(), b"walkthrough");
 
-        let (_, saved2, _) = finished(run(&host, &roots, job(), MAX_DOCUMENT));
+        let (_, saved2, _) = finished(run(&host, &roots, job(), MAX_DOWNLOAD));
         assert_eq!(saved2, ["manual (2).pdf", "ZorkI (2).txt"], "a clash is suffixed, never overwritten");
         assert_eq!(files_in(&dir), ["ZorkI (2).txt", "ZorkI.txt", "manual (2).pdf", "manual.pdf"]);
         let _ = std::fs::remove_dir_all(home);
@@ -1071,9 +1034,50 @@ pub(crate) mod tests {
         let (dir, saved, failed) = finished(evs);
         assert!(saved.is_empty(), "{saved:?}");
         assert_eq!(failed.len(), 2, "{failed:?}");
-        assert!(failed.iter().all(|(_, why)| why.contains("limit")), "{failed:?}");
+        assert!(failed.iter().all(|(_, why)| why.starts_with("Too large to download")), "{failed:?}");
         assert_eq!(files_in(&dir.unwrap()), Vec::<String>::new(), "nothing, partial or whole, was left");
         let _ = std::fs::remove_dir_all(home);
+    }
+
+    /// The documents cap is the shared 100 MB (SQ-1682): a 60 MB file, which the
+    /// old 50 MB limit refused, now saves; 101 MB is still refused, in words.
+    #[test]
+    fn documents_share_the_hundred_megabyte_cap() {
+        assert_eq!(MAX_DOWNLOAD, 100 * 1024 * 1024);
+        let (home, roots) = roots("docs-dl-100mb");
+        let host = Host::new(true)
+            .with("https://x/sixty.pdf", vec![1u8; 60 * 1024 * 1024])
+            .with("https://x/huge.pdf", vec![1u8; 101 * 1024 * 1024]);
+        let items = vec![
+            DownloadItem::File { url: "https://x/sixty.pdf".into(), filename: "sixty.pdf".into() },
+            DownloadItem::File { url: "https://x/huge.pdf".into(), filename: "huge.pdf".into() },
+        ];
+        let job = DocJob::Download { tuid: "abc123".into(), title: "Zork I".into(), items };
+        let (dir, saved, failed) = finished(run(&host, &roots, job, MAX_DOWNLOAD));
+        assert_eq!(saved, vec!["sixty.pdf".to_string()]);
+        assert_eq!(failed.len(), 1, "{failed:?}");
+        assert_eq!(failed[0].1, "Too large to download (over 100 MB)");
+        assert_eq!(files_in(&dir.unwrap()), vec!["sixty.pdf".to_string()], "no partial huge.pdf");
+        let _ = std::fs::remove_dir_all(home);
+    }
+
+    /// A zip entry that inflates past the shared cap is stopped at it even when
+    /// the directory declares 10 bytes (101 MB of zeros deflates to ~100 KB).
+    #[test]
+    fn inflation_stops_at_the_shared_cap() {
+        let mut w = zip::ZipWriter::new(std::io::Cursor::new(Vec::new()));
+        let opts = zip::write::SimpleFileOptions::default().compression_method(zip::CompressionMethod::Deflated);
+        w.start_file("bomb.txt", opts).unwrap();
+        w.write_all(&vec![0u8; 101 * 1024 * 1024]).unwrap();
+        let mut zip = w.finish().unwrap().into_inner();
+        let host = Host::new(true).with(URL, zip.clone());
+        let z = RemoteZip::open(&host, URL).unwrap().unwrap();
+        assert!(matches!(z.read_entry(0, MAX_DOWNLOAD), Err(SearchError::TooLarge)), "declared size");
+        let at = zip.windows(4).position(|w| w == CENTRAL_SIG).unwrap();
+        zip[at + 24..at + 28].copy_from_slice(&10u32.to_le_bytes());
+        let host = Host::new(true).with(URL, zip);
+        let z = RemoteZip::open(&host, URL).unwrap().unwrap();
+        assert!(matches!(z.read_entry(0, MAX_DOWNLOAD), Err(SearchError::TooLarge)), "while inflating");
     }
 
     #[test]
@@ -1108,7 +1112,7 @@ pub(crate) mod tests {
             if !got.is_empty() {
                 break;
             }
-            thread::sleep(std::time::Duration::from_millis(1));
+            std::thread::sleep(std::time::Duration::from_millis(1));
         }
         assert!(matches!(&got[0], DocEvent::Resolved(Ok(d)) if d.len() == 12));
         let _ = std::fs::remove_dir_all(home);
@@ -1141,7 +1145,7 @@ pub(crate) mod tests {
         let zip = w.finish().unwrap().into_inner();
         let host = Host::new(true).with(URL, zip.clone());
         let z = RemoteZip::open(&host, URL).unwrap().unwrap();
-        assert_eq!(z.read_entry(0, MAX_DOCUMENT).unwrap(), ("walk.txt".to_string(), text.clone().into_bytes()));
+        assert_eq!(z.read_entry(0, MAX_DOWNLOAD).unwrap(), ("walk.txt".to_string(), text.clone().into_bytes()));
         let p = fetch_preview(&host, URL, Some(0)).unwrap();
         assert_eq!(p.lines().count(), PREVIEW_LINES);
         assert!(p.starts_with("line 0 of the walkthrough"));
@@ -1151,7 +1155,7 @@ pub(crate) mod tests {
         bad[60] ^= 0xFF;
         let host = Host::new(true).with(URL, bad);
         let z = RemoteZip::open(&host, URL).unwrap().unwrap();
-        assert!(matches!(z.read_entry(0, MAX_DOCUMENT), Err(SearchError::Archive(_))));
+        assert!(matches!(z.read_entry(0, MAX_DOWNLOAD), Err(SearchError::Archive(_))));
     }
 
     #[test]

@@ -1265,7 +1265,7 @@ for the one in use — the `↳` marking a wrapped continuation row carries
   skipped — press `o` on a game with no direct story file to open its IFDB
   page in your browser instead. `Esc` backs out a level: from a typed
   search's results it returns to the "Popular on IFDB" list, and from that
-  list it closes the modal. Downloads are capped at 32 MiB — enough for the
+  list it closes the modal. Downloads are capped at 100 MiB (the one cap documents share) — enough for the
   largest Glulx games in circulation, which carry their artwork and sound inside
   the blorb and run well past the "few MiB" a story file used to be — filenames
   are sanitised, and an existing file is never overwritten (a `-2`, `-3`, …

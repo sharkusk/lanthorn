@@ -150,17 +150,24 @@ use crate::ifiction::IFiction;
 const TIMEOUT: Duration = Duration::from_secs(15);
 const MAX_SEARCH_XML: u64 = 4 * 1024 * 1024; // 4 MiB — a ~100-game reply is well under this.
 
-/// Cap on one downloaded story file.
+/// The ONE cap on any single file lanthorn downloads from IFDB or a host its
+/// record names: a story file, a manual, a map, a zip, and one inflated zip
+/// entry (`ifdb_documents` reads this too — there is no second constant).
+/// Judged by the declared `Content-Length` first and again while reading, so a
+/// host that lies, or answers chunked, is cut off at the same figure.
 ///
-/// 32 MiB: comfortably past the largest game anyone ships, still far short of
-/// anything a mislabelled link could usefully deliver. It was 16 MiB under a
+/// 100 MiB (maintainer's decision, SQ-1682): comfortably past the largest game
+/// anyone ships (see [`crate::corpus`]) and past a scanned manual, still far
+/// short of anything a mislabelled link could usefully deliver. The story cap
+/// was 16 MiB under a
 /// sentence about story files being small, which refused *Kerkerkruip* outright
 /// — see [`crate::corpus`] for what that sentence was worth and why the figures
-/// live there rather than here.
+/// live there rather than here, then 32 MiB, while documents had their own
+/// 50 MB.
 ///
 /// The assertion below is what keeps the two honest: raise the corpus floor and
 /// the build fails until this is raised with it.
-pub const MAX_DOWNLOAD: u64 = 32 * 1024 * 1024;
+pub const MAX_DOWNLOAD: u64 = 100 * 1024 * 1024;
 const _: () = assert!(
     MAX_DOWNLOAD > crate::corpus::LARGEST_GAME,
     "the download cap must admit the largest game we know of, or the feature refuses real games"
@@ -186,9 +193,10 @@ pub const CONNECT_TIMEOUT: Duration = Duration::from_secs(15);
 /// nothing fails here rather than inside the body budget.
 pub const HEADERS_TIMEOUT: Duration = Duration::from_secs(20);
 /// Cap on reading the body. Sized from the numbers above, not from taste:
-/// [`MAX_DOWNLOAD`] at roughly 110 KB/s — a genuinely poor link — is about five
-/// minutes, and a transfer slower than that has stalled rather than started.
-pub const BODY_TIMEOUT: Duration = Duration::from_secs(300);
+/// [`MAX_DOWNLOAD`] at roughly 120 KB/s — a genuinely poor link — is about
+/// fifteen minutes, and a transfer slower than that has stalled rather than
+/// started.
+pub const BODY_TIMEOUT: Duration = Duration::from_secs(900);
 
 /// One game listing from an IFDB search.
 #[derive(Debug, Clone, PartialEq)]
@@ -307,9 +315,7 @@ impl std::fmt::Display for SearchError {
         match self {
             SearchError::Transport(_) => write!(f, "IFDB unreachable"),
             SearchError::Remote(m) => write!(f, "IFDB: {m}"),
-            SearchError::TooLarge => {
-                write!(f, "file exceeds {} MiB cap", MAX_DOWNLOAD / (1024 * 1024))
-            }
+            SearchError::TooLarge => f.write_str(&too_large_message(MAX_DOWNLOAD)),
             SearchError::NoFilename => write!(f, "no downloadable story file"),
             SearchError::NotAStory => write!(f, "downloaded file is not a valid story file"),
             SearchError::Io(m) => write!(f, "could not save file: {m}"),
@@ -413,55 +419,7 @@ impl SearchSource for IfdbSearchClient {
     }
 
     fn download(&self, url: &str, dest_dir: &Path) -> Result<PathBuf, SearchError> {
-        // Per-request, because this agent's own `timeout_global` is the XML
-        // endpoints' 15 seconds and a story file is not an XML reply. Cleared
-        // rather than raised: `timeout_global` covers all the others, so leaving
-        // it set would re-impose a whole-transfer cap over the phase budgets.
-        let mut resp = self
-            .agent
-            .get(url)
-            .config()
-            .timeout_global(None)
-            .timeout_connect(Some(CONNECT_TIMEOUT))
-            .timeout_recv_response(Some(HEADERS_TIMEOUT))
-            .timeout_recv_body(Some(BODY_TIMEOUT))
-            .build()
-            .call()
-            .map_err(|e| SearchError::Transport(e.to_string()))?;
-
-        // Fast reject on an honest Content-Length before reading a byte.
-        if let Some(len) = resp
-            .headers()
-            .get("content-length")
-            .and_then(|v| v.to_str().ok())
-            .and_then(|s| s.parse::<u64>().ok())
-        {
-            if len > MAX_DOWNLOAD {
-                return Err(SearchError::TooLarge);
-            }
-        }
-
-        // Derive the filename from Content-Disposition if the host offers one,
-        // else the URL basename. Never trusted blindly — see `download_filename`.
-        let disposition = resp
-            .headers()
-            .get("content-disposition")
-            .and_then(|v| v.to_str().ok());
-        let name = download_filename(disposition, url).ok_or(SearchError::NoFilename)?;
-
-        let bytes = read_capped(resp.body_mut().as_reader(), MAX_DOWNLOAD)?;
-
-        // SQ-0659: never write bytes that aren't plausibly a story of the type
-        // the filename claims — a 200 HTML landing page must not land on disk
-        // as `game.z5` (the picker's rescan would then drop it silently).
-        if !looks_like_story_file(&name, &bytes) {
-            return Err(SearchError::NotAStory);
-        }
-
-        std::fs::create_dir_all(dest_dir).map_err(|e| SearchError::Io(e.to_string()))?;
-        let dest = unique_dest(dest_dir, &name);
-        std::fs::write(&dest, &bytes).map_err(|e| SearchError::Io(e.to_string()))?;
-        Ok(dest)
+        self.download_capped(url, dest_dir, MAX_DOWNLOAD)
     }
 
     fn probe_range(&self, url: &str) -> Result<RangeProbe, SearchError> {
@@ -522,6 +480,62 @@ impl SearchSource for IfdbSearchClient {
 }
 
 impl IfdbSearchClient {
+    /// [`SearchSource::download`] with the cap as a parameter, so a test can
+    /// exercise the over-cap paths with a few bytes instead of a hundred MiB.
+    /// Nothing reaches `dest_dir` unless the whole body arrived under `cap`:
+    /// the file is buffered, checked, then written.
+    fn download_capped(&self, url: &str, dest_dir: &Path, cap: u64) -> Result<PathBuf, SearchError> {
+        // Per-request, because this agent's own `timeout_global` is the XML
+        // endpoints' 15 seconds and a story file is not an XML reply. Cleared
+        // rather than raised: `timeout_global` covers all the others, so leaving
+        // it set would re-impose a whole-transfer cap over the phase budgets.
+        let mut resp = self
+            .agent
+            .get(url)
+            .config()
+            .timeout_global(None)
+            .timeout_connect(Some(CONNECT_TIMEOUT))
+            .timeout_recv_response(Some(HEADERS_TIMEOUT))
+            .timeout_recv_body(Some(BODY_TIMEOUT))
+            .build()
+            .call()
+            .map_err(|e| SearchError::Transport(e.to_string()))?;
+
+        // Fast reject on an honest Content-Length before reading a byte.
+        if let Some(len) = resp
+            .headers()
+            .get("content-length")
+            .and_then(|v| v.to_str().ok())
+            .and_then(|s| s.parse::<u64>().ok())
+        {
+            if len > cap {
+                return Err(SearchError::TooLarge);
+            }
+        }
+
+        // Derive the filename from Content-Disposition if the host offers one,
+        // else the URL basename. Never trusted blindly — see `download_filename`.
+        let disposition = resp
+            .headers()
+            .get("content-disposition")
+            .and_then(|v| v.to_str().ok());
+        let name = download_filename(disposition, url).ok_or(SearchError::NoFilename)?;
+
+        let bytes = read_capped(resp.body_mut().as_reader(), cap)?;
+
+        // SQ-0659: never write bytes that aren't plausibly a story of the type
+        // the filename claims — a 200 HTML landing page must not land on disk
+        // as `game.z5` (the picker's rescan would then drop it silently).
+        if !looks_like_story_file(&name, &bytes) {
+            return Err(SearchError::NotAStory);
+        }
+
+        std::fs::create_dir_all(dest_dir).map_err(|e| SearchError::Io(e.to_string()))?;
+        let dest = unique_dest(dest_dir, &name);
+        std::fs::write(&dest, &bytes).map_err(|e| SearchError::Io(e.to_string()))?;
+        Ok(dest)
+    }
+
     /// A GET on a file host with the download phase budgets (see the timeouts
     /// above) rather than the XML endpoints' whole-call 15 seconds.
     fn file_request(&self, url: &str) -> ureq::RequestBuilder<ureq::typestate::WithoutBody> {
@@ -704,6 +718,17 @@ fn is_named_story_file(name: &Path) -> bool {
         return false;
     }
     crate::picker::has_story_ext(name)
+}
+
+/// The plain-words refusal shown in both choosers when a download is over the
+/// cap: "Too large to download (over 100 MB)".
+pub fn too_large_message(cap: u64) -> String {
+    const MIB: u64 = 1024 * 1024;
+    if cap.is_multiple_of(MIB) {
+        format!("Too large to download (over {} MB)", cap / MIB)
+    } else {
+        format!("Too large to download (over {})", crate::ifdb_documents::format_size(cap))
+    }
 }
 
 /// Read at most `cap` bytes from `r`; error with [`SearchError::TooLarge`] if
@@ -935,14 +960,89 @@ pub enum SearchEvent {
     Failed(String),
 }
 
-/// One serial background worker for the search modal. Dropping it ends the
-/// thread (the request channel closes).
-pub struct SearchWorker {
-    req_tx: mpsc::Sender<SearchJob>,
-    res_rx: mpsc::Receiver<SearchEvent>,
+/// Held for the whole of every job, by every [`IfdbWorker`] in the process, so
+/// IFDB (and the hosts its records name) see ONE request in flight per user
+/// action even when two workers exist at once — the story search modal's, and a
+/// documents chooser's opened while a request from the modal just closed is
+/// still running. Closing a chooser drops its worker but cannot recall a job
+/// already started; the gate makes the next job wait for it instead of
+/// overlapping it.
+static IN_FLIGHT: std::sync::Mutex<()> = std::sync::Mutex::new(());
+
+/// What a job handler writes to: the event channel, plus the busy flag so a
+/// handler's closing event can be sent with the flag already clear.
+pub struct Out<E> {
+    pub tx: mpsc::Sender<E>,
     busy: Arc<AtomicBool>,
-    _worker: thread::JoinHandle<()>,
 }
+
+impl<E> Out<E> {
+    /// Send an event; `false` when the receiver is gone.
+    pub fn send(&self, e: E) -> bool {
+        self.tx.send(e).is_ok()
+    }
+
+    /// Send the job's last event with `busy()` already false, so a caller that
+    /// drains it never reads a stale busy flag.
+    pub fn send_last(&self, e: E) -> bool {
+        self.busy.store(false, Ordering::Relaxed);
+        self.send(e)
+    }
+}
+
+/// The one serial IFDB worker: a thread, a job channel, an event channel and a
+/// busy flag. [`SearchWorker`] and `ifdb_documents::DocumentWorker` are this
+/// with their own job and event types; what a job does lives in the handler
+/// each is built with. Dropping it ends the thread once the job in hand
+/// finishes (the request channel closes).
+pub struct IfdbWorker<J, E> {
+    jobs: mpsc::Sender<J>,
+    events: mpsc::Receiver<E>,
+    busy: Arc<AtomicBool>,
+    _thread: thread::JoinHandle<()>,
+}
+
+impl<J: Send + 'static, E: Send + 'static> IfdbWorker<J, E> {
+    /// Start the thread. `handle` runs one job, sending its events through
+    /// `Out`, and returns `false` when the receiver is gone.
+    pub fn spawn(mut handle: impl FnMut(J, &Out<E>) -> bool + Send + 'static) -> Self {
+        let (jobs, job_rx) = mpsc::channel::<J>();
+        let (tx, events) = mpsc::channel::<E>();
+        let busy = Arc::new(AtomicBool::new(false));
+        let out = Out { tx, busy: Arc::clone(&busy) };
+        let thread = thread::spawn(move || {
+            while let Ok(job) = job_rx.recv() {
+                let alive = {
+                    let _one_at_a_time = IN_FLIGHT.lock().unwrap_or_else(|p| p.into_inner());
+                    handle(job, &out)
+                };
+                out.busy.store(false, Ordering::Relaxed);
+                if !alive {
+                    return;
+                }
+            }
+        });
+        Self { jobs, events, busy, _thread: thread }
+    }
+
+    /// Queue a job. A chooser only ever has one outstanding at a time.
+    pub fn request(&self, job: J) {
+        self.busy.store(true, Ordering::Relaxed);
+        let _ = self.jobs.send(job);
+    }
+
+    /// Non-blocking drain of all events ready so far.
+    pub fn drain(&self) -> Vec<E> {
+        self.events.try_iter().collect()
+    }
+
+    pub fn busy(&self) -> bool {
+        self.busy.load(Ordering::Relaxed)
+    }
+}
+
+/// The search modal's worker.
+pub type SearchWorker = IfdbWorker<SearchJob, SearchEvent>;
 
 impl SearchWorker {
     /// `covers` and `roots` are SQ-0474's post-download metadata/cover
@@ -952,35 +1052,9 @@ impl SearchWorker {
     /// story's `info.json` sidecar the same way the picker/fetch worker do
     /// (its catalogue folder).
     pub fn new(source: Box<dyn SearchSource>, covers: Box<dyn MetadataSource>, roots: crate::data_roots::DataRoots) -> Self {
-        let (req_tx, req_rx) = mpsc::channel::<SearchJob>();
-        let (res_tx, res_rx) = mpsc::channel::<SearchEvent>();
-        let busy = Arc::new(AtomicBool::new(false));
-        let worker_busy = Arc::clone(&busy);
-        let worker = thread::spawn(move || {
-            while let Ok(job) = req_rx.recv() {
-                let event = run_job(source.as_ref(), covers.as_ref(), &roots, job);
-                worker_busy.store(false, Ordering::Relaxed);
-                if res_tx.send(event).is_err() {
-                    return;
-                }
-            }
-        });
-        Self { req_tx, res_rx, busy, _worker: worker }
-    }
-
-    /// Queue a job. The modal only ever has one outstanding at a time.
-    pub fn request(&self, job: SearchJob) {
-        self.busy.store(true, Ordering::Relaxed);
-        let _ = self.req_tx.send(job);
-    }
-
-    /// Non-blocking drain of all events ready so far.
-    pub fn drain(&self) -> Vec<SearchEvent> {
-        self.res_rx.try_iter().collect()
-    }
-
-    pub fn busy(&self) -> bool {
-        self.busy.load(Ordering::Relaxed)
+        Self::spawn(move |job, out| {
+            out.send_last(run_job(source.as_ref(), covers.as_ref(), &roots, job))
+        })
     }
 }
 
@@ -1300,6 +1374,77 @@ mod tests {
             Err(SearchError::TooLarge) => {}
             other => panic!("expected TooLarge, got {other:?}"),
         }
+    }
+
+    /// Serve one canned HTTP response on a loopback port, once; returns its URL.
+    /// The server hangs up as soon as the response is written, so a client that
+    /// stops reading early is not an error here.
+    fn serve_once(head: &'static str, body: Vec<u8>) -> String {
+        use std::io::Write;
+        let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        let port = listener.local_addr().unwrap().port();
+        std::thread::spawn(move || {
+            let Ok((mut sock, _)) = listener.accept() else { return };
+            let mut req = [0u8; 4096];
+            let _ = sock.read(&mut req);
+            let _ = sock.write_all(head.as_bytes());
+            let _ = sock.write_all(&body);
+        });
+        format!("http://127.0.0.1:{port}/game.z5")
+    }
+
+    fn zcode(len: usize) -> Vec<u8> {
+        let mut z = vec![0u8; len];
+        z[0] = 5;
+        z
+    }
+
+    /// SQ-1682: a story over the cap by its declared length is refused before a
+    /// byte is read, with the player-facing words, and nothing reaches `dest`.
+    #[test]
+    fn a_story_over_the_cap_by_content_length_leaves_no_file() {
+        let dest = crate::scratch_dir("ifdb-story-cap-declared");
+        let url = serve_once("HTTP/1.1 200 OK\r\nContent-Length: 5000\r\nConnection: close\r\n\r\n", zcode(5000));
+        let err = IfdbSearchClient::new().download_capped(&url, &dest, 1000).unwrap_err();
+        assert!(matches!(err, SearchError::TooLarge), "{err:?}");
+        assert_eq!(std::fs::read_dir(&dest).unwrap().count(), 0, "no partial file");
+        assert_eq!(too_large_message(100 * 1024 * 1024), "Too large to download (over 100 MB)");
+        assert_eq!(SearchError::TooLarge.to_string(), "Too large to download (over 100 MB)");
+        let _ = std::fs::remove_dir_all(dest);
+    }
+
+    /// …and one that declares nothing (chunked) is cut off while streaming.
+    #[test]
+    fn a_chunked_story_over_the_cap_is_cut_off_while_streaming() {
+        let dest = crate::scratch_dir("ifdb-story-cap-chunked");
+        let mut body = Vec::new();
+        for _ in 0..5 {
+            body.extend_from_slice(b"400\r\n");
+            body.extend_from_slice(&zcode(0x400));
+            body.extend_from_slice(b"\r\n");
+        }
+        body.extend_from_slice(b"0\r\n\r\n");
+        let url = serve_once("HTTP/1.1 200 OK\r\nTransfer-Encoding: chunked\r\nConnection: close\r\n\r\n", body);
+        let err = IfdbSearchClient::new().download_capped(&url, &dest, 2000).unwrap_err();
+        assert!(matches!(err, SearchError::TooLarge), "{err:?}");
+        assert_eq!(std::fs::read_dir(&dest).unwrap().count(), 0, "no partial file");
+        let _ = std::fs::remove_dir_all(dest);
+    }
+
+    /// A story under the cap downloads as before.
+    #[test]
+    fn a_story_under_the_cap_downloads() {
+        let dest = crate::scratch_dir("ifdb-story-cap-under");
+        let url = serve_once("HTTP/1.1 200 OK\r\nContent-Length: 500\r\nConnection: close\r\n\r\n", zcode(500));
+        let path = IfdbSearchClient::new().download_capped(&url, &dest, 1000).unwrap();
+        assert_eq!(std::fs::read(&path).unwrap().len(), 500);
+        let _ = std::fs::remove_dir_all(dest);
+    }
+
+    /// The one cap is 100 MiB and the story cap is that same constant.
+    #[test]
+    fn the_cap_is_one_hundred_mebibytes() {
+        assert_eq!(MAX_DOWNLOAD, 100 * 1024 * 1024);
     }
 
     #[test]
