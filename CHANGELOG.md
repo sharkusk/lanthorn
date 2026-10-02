@@ -55,6 +55,10 @@ while any such tag, or this Unreleased section, still exists.*
   `Already in your documents: manual.pdf`. A different file with the same name still
   gets a `(2)` suffix.
 
+- A document's kind is now judged by what is in the file rather than by its name,
+  so a transcript called `zorkI.step1` or a manual with no extension shows as text,
+  and a `.txt` that is really a PDF or a zip no longer pretends to be text.
+
 - Several players can now share one lanthorn install. `--player <name>` (or the
   `LANTHORN_PLAYER` environment variable) gives each player their own saves, map,
   history, settings and look, while story titles, blurbs and covers are fetched

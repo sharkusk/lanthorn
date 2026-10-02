@@ -193,7 +193,8 @@ pub fn ensure_linked<'a>(roots: &DataRoots, games: impl IntoIterator<Item = (&'a
     }
 }
 
-/// What kind of document a file is, by extension.
+/// What kind of document a file is: by content ([`sniff_kind`]), with the name's
+/// extension ([`DocKind::of`]) as the fallback.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum DocKind {
     Pdf,
@@ -214,6 +215,79 @@ impl DocKind {
     }
 }
 
+/// How much of a file [`sniff_kind`] reads.
+const SNIFF_BYTES: usize = 8 * 1024;
+
+/// The kind of a file from its first bytes, falling back to its name. Pure, so a
+/// host holding the bytes already (a download, a zip entry) can classify without
+/// touching disk. `head` should be the file's first ~8 KB; more is ignored.
+///
+/// 1. A known binary signature wins over the extension: `%PDF` is a PDF, PNG /
+///    JPEG / GIF / WebP / TIFF are images, and ZIP, gzip, 7z and RAR are `Other`
+///    (a `.txt` that is really a zip is not text).
+/// 2. Otherwise, if the bytes are text, the file is [`DocKind::Text`] whatever it
+///    is called: `zorkI.step1`, `sample.from.zork` and extensionless files
+///    qualify. Text means no NUL byte and at least 95% of the bytes printable:
+///    ASCII 0x20..=0x7E, tab, CR, LF and form feed count, and every byte with the
+///    high bit set counts too, so Latin-1 and CP437-era files pass. CR-only line
+///    endings (old Mac files) are therefore text. UTF-16 has NULs and is not.
+///    The one exception is an `.svg` name, which stays an `Image`.
+/// 3. Binary with no known signature: the extension decides, except that a text
+///    extension (`.txt`, `.md`, ...) no longer means text, so it is `Other`.
+/// 4. An empty file has nothing to contradict its name, so the extension decides
+///    (an empty `.txt` is `Text`, an empty `.pdf` is `Pdf`, anything else `Other`).
+pub fn sniff_kind_bytes(head: &[u8], name: &str) -> DocKind {
+    let head = &head[..head.len().min(SNIFF_BYTES)];
+    let by_name = DocKind::of(name);
+    if head.is_empty() {
+        return by_name;
+    }
+    if head.starts_with(b"%PDF") {
+        return DocKind::Pdf;
+    }
+    let image = head.starts_with(b"\x89PNG\r\n\x1a\n")
+        || head.starts_with(&[0xFF, 0xD8, 0xFF])
+        || head.starts_with(b"GIF87a")
+        || head.starts_with(b"GIF89a")
+        || (head.len() >= 12 && &head[..4] == b"RIFF" && &head[8..12] == b"WEBP")
+        || head.starts_with(b"II*\0")
+        || head.starts_with(b"MM\0*");
+    if image {
+        return DocKind::Image;
+    }
+    let archive = head.starts_with(b"PK\x03\x04")
+        || head.starts_with(&[0x1F, 0x8B])
+        || head.starts_with(b"7z\xBC\xAF\x27\x1C")
+        || head.starts_with(b"Rar!\x1A\x07");
+    if archive {
+        return DocKind::Other;
+    }
+    if looks_like_text(head) {
+        return if by_name == DocKind::Image { DocKind::Image } else { DocKind::Text };
+    }
+    match by_name {
+        DocKind::Text => DocKind::Other,
+        other => other,
+    }
+}
+
+fn looks_like_text(head: &[u8]) -> bool {
+    if head.contains(&0) {
+        return false;
+    }
+    let printable = head.iter().filter(|&&b| matches!(b, 0x20..=0x7E | b'\t' | b'\n' | b'\r' | 0x0C) || b >= 0x80).count();
+    printable * 100 >= head.len() * 95
+}
+
+/// [`sniff_kind_bytes`] for a file on disk: reads only its first 8 KB.
+pub fn sniff_kind(path: &Path) -> io::Result<DocKind> {
+    use std::io::Read;
+    let mut head = Vec::with_capacity(SNIFF_BYTES);
+    std::fs::File::open(path)?.take(SNIFF_BYTES as u64).read_to_end(&mut head)?;
+    let name = path.file_name().and_then(|n| n.to_str()).unwrap_or("");
+    Ok(sniff_kind_bytes(&head, name))
+}
+
 /// One file in a documents folder.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct DocEntry {
@@ -229,7 +303,7 @@ pub struct DocEntry {
 fn entry_for(path: PathBuf, size: u64) -> Option<DocEntry> {
     let id = path.file_name()?.to_str()?.to_string();
     let display_name = Path::new(&id).file_stem().and_then(|s| s.to_str()).unwrap_or(&id).to_string();
-    Some(DocEntry { display_name, kind: DocKind::of(&id), size, path, id })
+    Some(DocEntry { display_name, kind: sniff_kind(&path).unwrap_or_else(|_| DocKind::of(&id)), size, path, id })
 }
 
 /// The documents in `dir`, sorted by name (case-insensitive). Top-level regular
@@ -497,6 +571,65 @@ mod tests {
     }
 
     #[test]
+    fn sniffing_reads_content_not_the_extension() {
+        let k = |b: &[u8], n: &str| sniff_kind_bytes(b, n);
+        // Text, whatever it is called, including CR-only and Latin-1/CP437 bytes.
+        assert_eq!(k(b"West of House\n", "zork1.txt"), DocKind::Text);
+        assert_eq!(k(b"line one\rline two\rline three\r", "old-mac"), DocKind::Text);
+        assert_eq!(k(b"caf\xE9 \x82\x84 na\xEFve\r\n", "zorkI.step1"), DocKind::Text);
+        assert_eq!(k(b">open mailbox\n", "sample.from.zork"), DocKind::Text);
+        assert_eq!(k("caf\u{e9} \u{2014} map".as_bytes(), "notes"), DocKind::Text);
+        // A .txt that is really binary is not text.
+        let binary: Vec<u8> = (0..4000u32).map(|i| (i * 7 % 251) as u8).collect();
+        assert!(binary.contains(&0));
+        assert_eq!(k(&binary, "fake.txt"), DocKind::Other);
+        let no_nul: Vec<u8> = (0..4000u32).map(|i| 1 + (i * 7 % 31) as u8).collect();
+        assert_eq!(k(&no_nul, "fake.txt"), DocKind::Other, "mostly control bytes");
+        // Signatures win over the extension.
+        assert_eq!(k(b"%PDF-1.4\n%\xE2\xE3", "manual.txt"), DocKind::Pdf);
+        assert_eq!(k(b"\x89PNG\r\n\x1a\n\0\0", "map"), DocKind::Image);
+        assert_eq!(k(&[0xFF, 0xD8, 0xFF, 0xE0, 0, 0x10], "map.txt"), DocKind::Image);
+        assert_eq!(k(b"GIF89a\x01\0", "x"), DocKind::Image);
+        assert_eq!(k(b"RIFF\x10\0\0\0WEBPVP8 ", "x"), DocKind::Image);
+        assert_eq!(k(b"PK\x03\x04\x14\0", "notes.txt"), DocKind::Other);
+        // Binary with no signature falls back to the extension, minus text.
+        assert_eq!(k(&binary, "scan.bmp"), DocKind::Image);
+        assert_eq!(k(&binary, "weird"), DocKind::Other);
+        // SVG is text on disk but stays an image.
+        assert_eq!(k(b"<svg xmlns='http://www.w3.org/2000/svg'/>", "map.svg"), DocKind::Image);
+        // Empty: the name decides.
+        assert_eq!(k(b"", "a.txt"), DocKind::Text);
+        assert_eq!(k(b"", "a.pdf"), DocKind::Pdf);
+        assert_eq!(k(b"", "a"), DocKind::Other);
+    }
+
+    #[test]
+    fn sniff_kind_reads_only_the_head_of_a_file_and_feeds_the_listing() {
+        let home = crate::scratch_dir("docs-sniff");
+        std::fs::write(home.join("zorkI.step1"), b"open mailbox\rtake leaflet\r").unwrap();
+        std::fs::write(home.join("fake.txt"), vec![0u8; 100]).unwrap();
+        std::fs::write(home.join("manual"), b"%PDF-1.5 ...").unwrap();
+        // Text in the first 8 KB, then binary: only the head is judged.
+        let mut long = vec![b'a'; SNIFF_BYTES];
+        long.extend(vec![0u8; 5000]);
+        std::fs::write(home.join("long.dat"), &long).unwrap();
+        assert_eq!(sniff_kind(&home.join("zorkI.step1")).unwrap(), DocKind::Text);
+        assert_eq!(sniff_kind(&home.join("long.dat")).unwrap(), DocKind::Text);
+        assert!(sniff_kind(&home.join("missing")).is_err());
+        let kinds: Vec<(String, DocKind)> = list(&home).unwrap().into_iter().map(|e| (e.id, e.kind)).collect();
+        assert_eq!(
+            kinds,
+            [
+                ("fake.txt".to_string(), DocKind::Other),
+                ("long.dat".to_string(), DocKind::Text),
+                ("manual".to_string(), DocKind::Pdf),
+                ("zorkI.step1".to_string(), DocKind::Text),
+            ]
+        );
+        let _ = std::fs::remove_dir_all(home);
+    }
+
+    #[test]
     fn identical_bytes_under_another_name_are_skipped() {
         let home = crate::scratch_dir("docs-dedup-name");
         let (dir, src) = (home.join("g [t]"), home.join("src"));
@@ -569,7 +702,7 @@ mod tests {
         let ids: Vec<&str> = listed.iter().map(|e| e.id.as_str()).collect();
         assert_eq!(ids, ["Manual (2).pdf", "Manual (3).pdf", "Manual.pdf", "map.PNG", "notes"]);
         assert_eq!(listed[3].kind, DocKind::Image);
-        assert_eq!(listed[4].kind, DocKind::Other);
+        assert_eq!(listed[4].kind, DocKind::Text, "an extensionless text file is text");
         assert_eq!(DocKind::of("a.TXT"), DocKind::Text);
         assert!(std::fs::read_dir(&dir).unwrap().flatten().all(|e| !e.file_name().to_string_lossy().contains(".part")), "no temp left");
         // remove: only inside the folder.
