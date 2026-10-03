@@ -176,7 +176,8 @@ fn finalize_into(bytes: &[u8], dest: HintDest, url: &str, title: &str) -> (HintD
             let result = std::fs::create_dir_all(&stage)
                 .and_then(|()| std::fs::write(&staged, bytes))
                 .and_then(|()| crate::documents::import_with(&dir, &staged, Some(meta)));
-            let _ = std::fs::remove_dir_all(&stage);
+            let _ = std::fs::remove_file(&staged);
+            let _ = std::fs::remove_dir(&stage);
             match result {
                 Ok(done) => (HintDlOutcome::Done, done.entry().path.clone()),
                 Err(e) => (HintDlOutcome::Failed(format!("write failed: {e}")), planned),
