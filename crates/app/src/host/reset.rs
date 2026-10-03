@@ -325,9 +325,11 @@ pub fn reset_game(
             // Preserve the per-game borderless-windows override across @restart
             // (SQ-0341); an explicit per-game value wins over a garglk.ini
             // `wborder`, else garglk's, else off (SQ-0344).
-            let borderless = crate::styles::read_per_game_borderless(game_dir)
-                .or_else(|| state.garglk_overlay.as_ref().and_then(|o| o.borderless))
-                .unwrap_or(false);
+            let borderless = crate::glk_cfg::resolve_borderless(
+                crate::styles::read_per_game_borderless(game_dir),
+                state.garglk_overlay.as_ref(),
+                state.glk_design.as_ref(),
+            );
             GlulxSession::new_in(
                 game_dir.to_path_buf(),
                 bytes,

@@ -84,6 +84,7 @@ pub mod engine;
 pub mod engine_helpers;
 pub mod native_font;
 pub mod garglk_ini;
+pub mod glk_cfg;
 pub mod glk_backend;
 pub mod glulx_debug;
 pub mod glulx_playerlock;

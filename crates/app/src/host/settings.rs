@@ -193,9 +193,11 @@ fn layer_per_game(state: &mut AppState, pg: &PerGameConfig) -> bool {
         cfg.v6_render = m;
         cfg.one_run.pin(keys::V6_RENDER, crate::config::v6_render_key(m));
     }
-    pg.borderless_windows
-        .or_else(|| state.garglk_overlay.as_ref().and_then(|o| o.borderless))
-        .unwrap_or(false)
+    crate::glk_cfg::resolve_borderless(
+        pg.borderless_windows,
+        state.garglk_overlay.as_ref(),
+        state.glk_design.as_ref(),
+    )
 }
 
 /// Finish what [`apply`] started, on the running `session`: write

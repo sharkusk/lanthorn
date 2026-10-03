@@ -887,9 +887,14 @@ pub fn boot_story(req: BootRequest<'_>, hooks: &mut dyn BootHooks) -> Result<Boo
     // SQ-0344: precedence mirrors honor_game_colours — an explicit per-game
     // `config.toml` value wins, else a discovered garglk.ini's `wborderx`/
     // `wbordery` (0 → borderless), else off.
-    let borderless = crate::styles::read_per_game_borderless(&game_dir)
-        .or_else(|| garglk_overlay.as_ref().and_then(|o| o.borderless))
-        .unwrap_or(false);
+    // SQ-1703: a story's Windows Glk `.cfg` `WindowBorders` comes next, below
+    // garglk.ini and above the default (`glk_cfg::resolve_borderless`).
+    let glk_design = crate::glk_cfg::discover(&story_path);
+    let borderless = crate::glk_cfg::resolve_borderless(
+        crate::styles::read_per_game_borderless(&game_dir),
+        garglk_overlay.as_ref(),
+        glk_design.as_ref(),
+    );
     // SQ-0304: per-game map-panel visibility. `Some(false)` → start with the map
     // hidden (captured here before `cfg` is moved into the engine build below).
     let start_map_hidden = crate::styles::read_per_game_show_map(&game_dir) == Some(false);
@@ -1526,6 +1531,7 @@ pub fn boot_story(req: BootRequest<'_>, hooks: &mut dyn BootHooks) -> Result<Boo
     // Stash the garglk.ini overlay (already folded into `cs` above) so the
     // post-IFID reload_style below — and every later /reload — re-applies it.
     state.garglk_overlay = garglk_overlay;
+    state.glk_design = glk_design;
     for w in style_w1.into_iter().chain(style_w2) {
         state.push_notice(&format!("[{}]", w));
     }

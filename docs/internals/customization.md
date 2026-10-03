@@ -470,6 +470,18 @@ is written back to any sidecar — and, consistent with `honor_game_colours`, an
 explicit per-game `config.toml` value always wins over the garglk.ini (the text
 margin has no per-game key today, so garglk overrides only your global default).
 
+**Windows Glk `.cfg` (SQ-1703)**: a Glulx story that ships a Windows Glulxe
+per-game config (`<story stem>.cfg` beside the story — exactly that spelling;
+`Photopia` and `Narcolepsy` carry one) is parsed by `glk_cfg` into one
+`GlkDesign` on `AppState::glk_design`: `WindowWidth`/`WindowHeight` (the design
+size in pixels), `WindowBorders`, `WindowFrame`, `WindowMask` (a Blorb Pict id),
+the font keys and `FullScreen`. Key meanings come from Windows Glulxe's own
+`config.htm`. So far only `WindowBorders` acts: the borderless-windows
+preference resolves per-game `config.toml` → garglk.ini `wborder` → the `.cfg`
+(`WindowBorders=no` → borderless) → bordered, in the one function
+`glk_cfg::resolve_borderless` that boot, `@restart` and the settings screen
+share. The design size and mask are parsed and exposed, not yet rendered.
+
 **And we answer for it.** A game can ask the interpreter what colour it actually
 paints a given style — and at least one game asks in order to find out whether
 its own config file was applied. Kerkerkruip's ini sets `style_User2` to Fashion
