@@ -30,9 +30,9 @@ use ratatui::layout::Rect;
 use ratatui::style::{Modifier, Style};
 
 use crate::engine::Engine;
-use crate::hint_download::{HintDest, HintDlOutcome, HintDownloader};
+use crate::hint_download::{HintDlOutcome, HintDlResult, HintDownloader};
 use crate::hints::HintStory;
-use crate::host::hints::{already_running, no_hint_message, start, HintStart};
+use crate::host::hints::{already_running, game_hint_status, no_hint_message, start, GameHintStatus, HintStart};
 use crate::render::transcript::wrap_line;
 use crate::state::{AppState, Focus, HintSession, HintSource};
 
@@ -88,6 +88,9 @@ pub struct HintsTab {
     pub docs: Option<PathBuf>,
     /// The chooser's highlighted row.
     pub choice: usize,
+    /// Where the game's hints stood at the last start; the tab offers the download
+    /// button exactly when this is [`GameHintStatus::Downloadable`].
+    pub status: GameHintStatus,
     /// A hint file the player picked, to remember and open at the next start.
     picked: Option<PathBuf>,
     downloader: HintDownloader,
@@ -102,6 +105,7 @@ impl Default for HintsTab {
             message: None,
             docs: None,
             choice: 0,
+            status: GameHintStatus::None,
             picked: None,
             downloader: HintDownloader::new(),
             hits: RefCell::new(HintsHits::default()),
@@ -129,8 +133,13 @@ impl HintsTab {
     }
 }
 
+/// The TUI's key help after the chooser's prompt ([`crate::host::hints::CHOOSE_PROMPT`]).
+const CHOOSE_KEYS: &str = " (click it, or Up/Down and Enter once the tab has the keyboard):";
+
 /// The chooser's intro line, shown above the tied candidates (SQ-1694).
-pub const CHOOSE_INTRO: &str = "Several hint files could be this game's \u{2014} pick one (click it, or Up/Down and Enter once the tab has the keyboard):";
+pub fn choose_intro() -> String {
+    format!("{}{CHOOSE_KEYS}", crate::host::hints::CHOOSE_PROMPT)
+}
 
 // ── Starting, ending, downloading ────────────────────────────────────────────
 
@@ -177,6 +186,8 @@ pub fn ensure_started_in(state: &mut AppState, story_path: &Path, ifid: &str, do
         None
     };
     state.hints_tab.phase = Phase::NotStarted;
+    let index = crate::hints::load_hint_index(&state.config.user_dir);
+    state.hints_tab.status = game_hint_status(story_path, story, &index);
     match start(story_path, story, picked.as_deref(), running.as_deref(), &state.dict_words, &state.config) {
         HintStart::Started(session) => {
             state.overlays.hints = Some(*session);
@@ -234,44 +245,40 @@ pub fn start_download(state: &mut AppState, story_path: &Path) {
 
 /// [`start_download`] with the documents folder already known.
 pub fn start_download_in(state: &mut AppState, story_path: &Path, documents: Option<PathBuf>) {
-    let line = if state.hints_tab.downloader.busy() {
-        crate::host::hints::ALREADY_DOWNLOADING.to_string()
-    } else if state.hints_tab.phase == Phase::Running {
-        "This story already has a hint file".to_string()
-    } else {
-        match crate::hints::hint_download_for(&state.ifid) {
-            None => "No InvisiClues found for this story".to_string(),
-            Some(dl) => {
-                let dest = HintDest::for_story(story_path, &dl.filename, documents);
-                let title = state.title.clone();
-                state.hints_tab.downloader.start(
-                    dl.url,
-                    dest,
-                    story_path.to_path_buf(),
-                    state.source.disk_entry.clone(),
-                    title,
-                );
-                "Downloading hints…".to_string()
-            }
-        }
-    };
+    let running = state.hints_tab.phase == Phase::Running;
+    let line = crate::host::hints::start_game_download(
+        &mut state.hints_tab.downloader,
+        &state.ifid,
+        &state.title,
+        story_path,
+        state.source.disk_entry.as_deref(),
+        documents.as_deref(),
+        running,
+    );
     state.hints_tab.message = Some(line.clone());
     state.set_status(line);
 }
 
-/// Drain finished downloads. A completed one wrote a hint file (into the documents
-/// folder or beside the story), so the tab asks to resolve again. `true` when a redraw is due.
-pub fn poll_download(state: &mut AppState) -> bool {
-    let mut changed = false;
-    for r in state.hints_tab.downloader.drain() {
-        changed = true;
+/// Drain finished downloads and hand them back, so a host can fold each into its
+/// story list ([`crate::picker::apply_hint_download`]). A completed one wrote a
+/// hint file (into the documents folder or beside the story), so the tab asks to
+/// resolve again; each result's line becomes the tab's message and the status.
+pub fn drain_downloads(state: &mut AppState) -> Vec<HintDlResult> {
+    let results = state.hints_tab.downloader.drain();
+    for r in &results {
         if r.outcome == HintDlOutcome::Done {
             state.hints_tab.phase = Phase::NotStarted;
         }
-        let line = crate::hint_download::download_result_line(&r);
+        let line = crate::hint_download::download_result_line(r);
         state.hints_tab.message = Some(line.clone());
         state.set_status(line);
     }
+    results
+}
+
+/// [`drain_downloads`] for the run loop: `true` when a redraw is due.
+pub fn poll_download(state: &mut AppState) -> bool {
+    let changed = !drain_downloads(state).is_empty();
     changed || state.hints_tab.downloader.busy()
 }
 
@@ -566,7 +573,7 @@ fn draw_notice(state: &AppState, text: &str, st: &Styles, area: Rect, buf: &mut 
         y += 1;
     }
     y += 1;
-    if y < area.bottom() {
+    if state.hints_tab.status == GameHintStatus::Downloadable && y < area.bottom() {
         let r = Rect::new(x, y, (crate::textwidth::str_cells(DOWNLOAD_LABEL) as u16).min(area.right().saturating_sub(x)), 1);
         crate::render::draw_str_clipped(buf, x, y, DOWNLOAD_LABEL, st.button, area);
         hits.download = Some(r);
@@ -595,7 +602,7 @@ fn draw_choose(
     let x = area.x + 1;
     let w = area.width.saturating_sub(2).max(1) as usize;
     let mut y = area.y;
-    for line in wrap_line(CHOOSE_INTRO, w as u16) {
+    for line in wrap_line(&choose_intro(), w as u16) {
         if y >= area.bottom() {
             return;
         }
@@ -838,7 +845,8 @@ mod tests {
 
     #[test]
     fn a_tab_with_no_session_draws_the_no_hint_body_not_a_panic() {
-        let state = AppState::default();
+        let mut state = AppState::default();
+        state.hints_tab.status = GameHintStatus::Downloadable;
         let all = screen_rows(60, 12, &state).join("\n");
         assert!(all.contains("no hint file found"), "{all}");
         assert!(all.contains("Download hints"), "{all}");
@@ -864,7 +872,8 @@ mod tests {
 
     #[test]
     fn the_body_is_framed_with_the_tab_name_and_the_download_button_sits_inside_it() {
-        let state = AppState::default();
+        let mut state = AppState::default();
+        state.hints_tab.status = GameHintStatus::Downloadable;
         let rows = screen_rows(60, 12, &state);
         let cells: Vec<Vec<char>> = rows.iter().map(|r| r.chars().collect()).collect();
         assert_eq!((cells[0][0], cells[0][59]), ('\u{250c}', '\u{2510}'), "top corners: {:?}", rows[0]);
@@ -897,6 +906,7 @@ mod tests {
     #[test]
     fn frameless_drops_the_frame_like_the_other_tabs() {
         let mut state = AppState::default();
+        state.hints_tab.status = GameHintStatus::Downloadable;
         frameless(&mut state);
         let rows = screen_rows(60, 12, &state);
         // Like the Inventory tab: no border glyphs, the title becomes a plain header row.

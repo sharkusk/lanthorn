@@ -224,6 +224,26 @@ pub fn start(
 /// The status line when a download is already running (browser and Hints tab).
 pub const ALREADY_DOWNLOADING: &str = "Already downloading hints…";
 
+/// Begin the download of the hint file for `ifid`, if one exists: the file goes to
+/// `documents` when the game is IFDB-linked, else beside the story. `false` when
+/// there is nothing to fetch. The ONE place a download is launched, shared by the
+/// browser ([`start_story_download`]) and the running game ([`start_game_download`]).
+fn launch_download(
+    downloader: &mut HintDownloader,
+    ifid: &str,
+    story_path: &Path,
+    disk_entry: Option<&str>,
+    title: &str,
+    documents: Option<&Path>,
+) -> bool {
+    let Some(dl) = hints::hint_download_for(ifid) else {
+        return false;
+    };
+    let dest = HintDest::for_story(story_path, &dl.filename, documents.map(Path::to_path_buf));
+    downloader.start(dl.url, dest, story_path.to_path_buf(), disk_entry.map(str::to_owned), title.to_owned());
+    true
+}
+
 /// Start the hint download for a story-browser row and return the status line.
 /// Busy, already-has ([`crate::picker::hint_status`], documents folder included)
 /// and nothing-to-fetch each answer without starting; otherwise the file goes to
@@ -240,13 +260,72 @@ pub fn start_story_download(
     if matches!(crate::picker::hint_status(entry, roots, index), HintStatus::File(_)) {
         return format!("{} already has a hint file", entry.title);
     }
-    let Some(dl) = hints::hint_download_for(&entry.meta.ifid) else {
+    let documents = crate::picker::entry_documents_dir(entry, roots);
+    if !launch_download(
+        downloader,
+        &entry.meta.ifid,
+        &entry.path,
+        entry.meta.disk_entry.as_deref(),
+        &entry.title,
+        documents.as_deref(),
+    ) {
         return format!("No InvisiClues found for {}", entry.title);
-    };
-    let dest = HintDest::for_story(&entry.path, &dl.filename, crate::picker::entry_documents_dir(entry, roots));
-    downloader.start(dl.url, dest, entry.path.clone(), entry.meta.disk_entry.clone(), entry.title.clone());
+    }
     format!("Downloading hints for {}…", entry.title)
 }
+
+/// Start the hint download for the RUNNING game and return the status line
+/// (SQ-1701). `session_running` is whether a hint session is already open (a
+/// hint file is in hand); `disk_entry` names the story on a multi-story disk
+/// image; `documents` is the game's documents folder when IFDB-linked. Busy,
+/// already-has and nothing-to-fetch each answer without starting.
+pub fn start_game_download(
+    downloader: &mut HintDownloader,
+    ifid: &str,
+    title: &str,
+    story_path: &Path,
+    disk_entry: Option<&str>,
+    documents: Option<&Path>,
+    session_running: bool,
+) -> String {
+    if downloader.busy() {
+        ALREADY_DOWNLOADING.to_string()
+    } else if session_running {
+        "This story already has a hint file".to_string()
+    } else if launch_download(downloader, ifid, story_path, disk_entry, title, documents) {
+        "Downloading hints…".to_string()
+    } else {
+        "No InvisiClues found for this story".to_string()
+    }
+}
+
+/// Where the running game's hints stand (SQ-1701): [`crate::picker::HintStatus`]
+/// for a game being played, which has no library row.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum GameHintStatus {
+    /// A hint file resolves; [`open`] will attempt to boot it.
+    Available,
+    /// Several hint files tie; the player picks one.
+    Choose(Vec<PathBuf>),
+    /// No file, but a matching InvisiClues can be downloaded.
+    Downloadable,
+    None,
+}
+
+/// [`GameHintStatus`] for a running game — [`available`] first (one resolution
+/// rule), then whether the catalogue has a download for the story's IFID.
+pub fn game_hint_status(story_path: &Path, story: HintStory<'_>, index: &HintIndex) -> GameHintStatus {
+    match available(story_path, story, index) {
+        HintAvailability::Available => GameHintStatus::Available,
+        HintAvailability::Choose(c) => GameHintStatus::Choose(c),
+        HintAvailability::None if hints::hint_download_for(story.ifid).is_some() => GameHintStatus::Downloadable,
+        HintAvailability::None => GameHintStatus::None,
+    }
+}
+
+/// The chooser's prompt line (without the TUI's key help), shown above the tied
+/// candidates (SQ-1694).
+pub const CHOOSE_PROMPT: &str = "Several hint files could be this game's \u{2014} pick one";
 
 /// InvisiClues narrow-screen warning auto-skipped.
 ///

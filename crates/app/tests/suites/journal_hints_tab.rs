@@ -28,6 +28,9 @@ use app::state::{AppState, Focus, Layout};
 
 use crate::fixture_paths::fixture_path;
 
+/// Zork I's IFID: the catalogue has a hint download for it.
+const ZORK_IFID: &str = "ZCODE-88-840726-A129";
+
 const FRAME: Rect = Rect { x: 0, y: 0, width: 120, height: 40 };
 
 fn key(code: KeyCode) -> KeyEvent {
@@ -210,7 +213,8 @@ fn no_hint_file_shows_the_message_and_a_download_button() {
     for honor in [true, false] {
         let (mut st, story) = no_hint_state();
         st.config.honor_game_colours = honor;
-        assert!(hints_tab::ensure_started(&mut st, &story, "NOPE"));
+        st.ifid = ZORK_IFID.into();
+        assert!(hints_tab::ensure_started(&mut st, &story, ZORK_IFID));
         assert_eq!(st.hints_tab.phase, Phase::NoHint);
         assert!(st.overlays.hints.is_none());
 
@@ -257,7 +261,7 @@ fn unrelated_generic_sidecars_are_not_a_choice_and_show_the_no_hint_body() {
     hints_tab::ensure_started(&mut st, &story, "AMBIG");
     assert_eq!(st.hints_tab.phase, Phase::NoHint);
     let (buf, body) = draw_tab(&st);
-    assert!(text_in(&buf, body).contains("Download hints"));
+    assert!(text_in(&buf, body).contains("no hint file found"));
 }
 
 #[test]
@@ -846,4 +850,107 @@ fn doc_kinds_have_one_label_each() {
     use app::documents::DocKind;
     assert_eq!(DocKind::Pdf.label(), "PDF");
     assert!(DocKind::HintProgram.label().starts_with("hint program"));
+}
+
+// ── SQ-1701: the in-game download flow as host-level calls ───────────────────
+
+fn offline_ok(bytes: Vec<u8>) -> app::hint_download::HintDownloader {
+    app::hint_download::HintDownloader::with_fetcher(std::sync::Arc::new(move |_| Ok(bytes.clone())))
+}
+
+#[test]
+fn start_game_download_decides_running_busy_nohint_and_start() {
+    use app::host::hints::{start_game_download, ALREADY_DOWNLOADING};
+    let Some(bytes) = std::fs::read(fixture_path("minizork-r34-s871124.z3")).ok() else { return };
+    let dir = app::scratch_dir("host-game-dl");
+    let story = dir.join("zork1.z3");
+    let mut dl = offline_ok(bytes);
+    // A running session: the story already has a hint file; nothing started.
+    assert_eq!(
+        start_game_download(&mut dl, ZORK_IFID, "Zork", &story, None, None, true),
+        "This story already has a hint file"
+    );
+    assert!(!dl.busy());
+    // No IFDB hint for this IFID.
+    assert_eq!(
+        start_game_download(&mut dl, "NOPE", "Zork", &story, None, None, false),
+        "No InvisiClues found for this story"
+    );
+    // Otherwise it starts, and the result names the story by its title.
+    assert_eq!(start_game_download(&mut dl, ZORK_IFID, "Zork", &story, None, None, false), "Downloading hints…");
+    // Busy beats everything.
+    assert_eq!(start_game_download(&mut dl, ZORK_IFID, "Zork", &story, None, None, true), ALREADY_DOWNLOADING);
+    let r = drain_one(&mut dl);
+    assert_eq!(app::hint_download::download_result_line(&r), "Downloaded hints for Zork");
+}
+
+#[test]
+fn the_tab_s_drain_returns_results_a_host_can_apply() {
+    let Some((row, roots, docs)) = linked_row("host-game-dl-drain") else { return };
+    let bytes = std::fs::read(fixture_path("minizork-r34-s871124.z3")).unwrap();
+    let mut st = AppState::default();
+    st.ifid = row.meta.ifid.clone();
+    st.title = row.title.clone();
+    st.hints_tab.set_downloader(offline_ok(bytes));
+    hints_tab::start_download_in(&mut st, &row.path, Some(docs.clone()));
+    let mut results = Vec::new();
+    for _ in 0..500 {
+        results.extend(hints_tab::drain_downloads(&mut st));
+        if !results.is_empty() {
+            break;
+        }
+        std::thread::sleep(std::time::Duration::from_millis(10));
+    }
+    assert_eq!(results.len(), 1, "the drain hands the result back");
+    assert_eq!(st.hints_tab.phase, Phase::NotStarted, "and the tab still re-resolves");
+    assert_eq!(st.hints_tab.message.as_deref(), Some("Downloaded hints for Zork"));
+    let mut rows = vec![row];
+    let (idx, line) = app::picker::apply_hint_download(&mut rows, &results[0]);
+    assert_eq!((idx, line.as_str()), (Some(0), "Downloaded hints for Zork"));
+    assert_eq!(rows[0].hint_sidecar.as_deref(), Some(docs.join("zork1inv.z5").as_path()));
+    let _ = roots;
+}
+
+#[test]
+fn game_hint_status_says_available_choose_downloadable_none_and_the_tab_offers_accordingly() {
+    use app::host::hints::{game_hint_status, GameHintStatus};
+    let Some((mut st, story, docs)) = with_docs("host-game-status", &["a-hints.z3", "b-hints.z3"]) else { return };
+    let index = app::hints::load_hint_index(&st.config.user_dir);
+    let status = |ifid: &str, d: Option<&std::path::Path>| {
+        game_hint_status(&story, app::hints::HintStory::new(ifid, "Game").with_documents(d), &index)
+    };
+    assert!(matches!(status("NOPE", Some(&docs)), GameHintStatus::Choose(c) if c.len() == 2));
+    assert_eq!(status("NOPE", None), GameHintStatus::None);
+    assert_eq!(status(ZORK_IFID, None), GameHintStatus::Downloadable);
+    std::fs::remove_file(docs.join("b-hints.z3")).unwrap();
+    assert_eq!(status("NOPE", Some(&docs)), GameHintStatus::Available);
+
+    // The tab offers the button exactly when Downloadable.
+    let (offered, _) = {
+        st.ifid = ZORK_IFID.into();
+        assert!(hints_tab::ensure_started_in(&mut st, &story, ZORK_IFID, None));
+        assert_eq!(st.hints_tab.status, GameHintStatus::Downloadable);
+        let (_, _) = draw_tab(&st);
+        (st.hints_tab.hits().download.is_some(), ())
+    };
+    assert!(offered);
+    let (mut st2, story2) = no_hint_state();
+    assert!(hints_tab::ensure_started(&mut st2, &story2, "NOPE"));
+    assert_eq!(st2.hints_tab.status, GameHintStatus::None);
+    draw_tab(&st2);
+    assert!(st2.hints_tab.hits().download.is_none(), "nothing to download: no button");
+}
+
+#[test]
+fn the_chooser_text_is_the_prompt_plus_the_tab_s_key_help() {
+    let Some((mut st, story, docs)) = with_docs("host-game-choose", &["a-hints.z3", "b-hints.z3"]) else { return };
+    assert!(hints_tab::ensure_started_in(&mut st, &story, "IFID", Some(&docs)));
+    assert!(matches!(st.hints_tab.phase, Phase::Choose(_)));
+    assert_eq!(app::host::hints::CHOOSE_PROMPT, "Several hint files could be this game's \u{2014} pick one");
+    assert_eq!(
+        hints_tab::choose_intro(),
+        "Several hint files could be this game's \u{2014} pick one (click it, or Up/Down and Enter once the tab has the keyboard):"
+    );
+    let (buf, body) = draw_tab(&st);
+    assert!(text_in(&buf, body).contains("Several hint files could be this game's"));
 }
