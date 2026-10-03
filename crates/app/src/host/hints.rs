@@ -18,6 +18,9 @@
 use std::path::{Path, PathBuf};
 
 use crate::config::Config;
+use crate::data_roots::DataRoots;
+use crate::hint_download::{HintDest, HintDownloader};
+use crate::picker::{HintStatus, StoryEntry};
 use crate::hints::{self, HintIndex, HintResolution, HintStory};
 use crate::session::{GameSession, InputKind};
 use crate::state::{HintSession, HintSource};
@@ -72,6 +75,8 @@ pub enum HintOpenError {
     ZipEntryNotFound,
     /// The hint file's bytes did not boot as a Z-machine story.
     BootFailed(String),
+    /// A chosen hint file could not be recorded as the story's (SQ-1694).
+    RememberFailed(String),
 }
 
 impl std::fmt::Display for HintOpenError {
@@ -81,6 +86,7 @@ impl std::fmt::Display for HintOpenError {
             HintOpenError::ZipReadFailed(e) => write!(f, "hints: cannot read zip entry: {e}"),
             HintOpenError::ZipEntryNotFound => write!(f, "hints: hint entry not found in zip"),
             HintOpenError::BootFailed(e) => write!(f, "hints: failed to load hint VM: {e}"),
+            HintOpenError::RememberFailed(e) => write!(f, "hints: cannot remember the choice: {e}"),
         }
     }
 }
@@ -161,6 +167,85 @@ pub fn open(
         label,
         builtin_hint,
     }))
+}
+
+/// What [`start`] did (SQ-1694).
+pub enum HintStart {
+    /// A hint session booted and is ready.
+    Started(Box<HintSession>),
+    /// The picked program is the one already running; nothing to do.
+    AlreadyRunning,
+    /// Several hint files tie; the player must pick one (answer with `picked`).
+    Choose(Vec<PathBuf>),
+    /// Nothing resolved; the text is [`no_hint_message`].
+    NoHint(String),
+    /// A source resolved (or a pick could not be remembered) but no session booted.
+    Failed(HintOpenError),
+}
+
+/// True when `picked` is the hint program the running session (whose
+/// [`HintSession::label`] is `running_label`) already shows.
+pub fn already_running(running_label: Option<&str>, picked: &Path) -> bool {
+    running_label.is_some() && running_label == picked.file_name().and_then(|n| n.to_str())
+}
+
+/// Start a story's hint session, the whole decision in one host-level call: a
+/// `picked` file (the answer to an earlier [`HintStart::Choose`]) is remembered
+/// first, unless it is the program already running (`running_label`, a no-op);
+/// then a tie becomes the chooser, nothing found becomes [`no_hint_message`], and
+/// anything else is [`open`]ed. `story` carries the documents folder.
+pub fn start(
+    story_path: &Path,
+    story: HintStory<'_>,
+    picked: Option<&Path>,
+    running_label: Option<&str>,
+    dict_words: &[String],
+    cfg: &Config,
+) -> HintStart {
+    if let Some(p) = picked {
+        if already_running(running_label, p) {
+            return HintStart::AlreadyRunning;
+        }
+        if let Err(e) = remember(&cfg.user_dir, story.ifid, p) {
+            return HintStart::Failed(HintOpenError::RememberFailed(e.to_string()));
+        }
+    }
+    let index = hints::load_hint_index(&cfg.user_dir);
+    if let HintAvailability::Choose(candidates) = available(story_path, story, &index) {
+        return HintStart::Choose(candidates);
+    }
+    match open(story_path, story, &index, dict_words, cfg) {
+        Ok(Some(session)) => HintStart::Started(Box::new(session)),
+        Ok(None) => HintStart::NoHint(no_hint_message(story.documents)),
+        Err(e) => HintStart::Failed(e),
+    }
+}
+
+/// The status line when a download is already running (browser and Hints tab).
+pub const ALREADY_DOWNLOADING: &str = "Already downloading hints…";
+
+/// Start the hint download for a story-browser row and return the status line.
+/// Busy, already-has ([`crate::picker::hint_status`], documents folder included)
+/// and nothing-to-fetch each answer without starting; otherwise the file goes to
+/// the game's documents folder when it is IFDB-linked, else beside the story.
+pub fn start_story_download(
+    downloader: &mut HintDownloader,
+    entry: &StoryEntry,
+    roots: &DataRoots,
+    index: &HintIndex,
+) -> String {
+    if downloader.busy() {
+        return ALREADY_DOWNLOADING.to_string();
+    }
+    if matches!(crate::picker::hint_status(entry, roots, index), HintStatus::File(_)) {
+        return format!("{} already has a hint file", entry.title);
+    }
+    let Some(dl) = hints::hint_download_for(&entry.meta.ifid) else {
+        return format!("No InvisiClues found for {}", entry.title);
+    };
+    let dest = HintDest::for_story(&entry.path, &dl.filename, crate::picker::entry_documents_dir(entry, roots));
+    downloader.start(dl.url, dest, entry.path.clone(), entry.meta.disk_entry.clone(), entry.title.clone());
+    format!("Downloading hints for {}…", entry.title)
 }
 
 /// InvisiClues narrow-screen warning auto-skipped.

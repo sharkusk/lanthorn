@@ -709,3 +709,141 @@ fn the_real_menu_draws_in_the_tab_with_its_prompt_in_both_focus_states() {
     let (buf, body) = draw_tab(&st);
     assert!(text_in(&buf, body).contains("press a key"), "focused char-mode prompt");
 }
+
+// ── SQ-1694 / SQ-1696: host-level start, and the browser's download flow ─────
+
+#[test]
+fn host_start_decides_choose_nohint_started_and_already_running() {
+    use app::host::hints::{start, HintStart};
+    let Some((st, story, docs)) = with_docs("host-hints-start", &["a-hints.z3", "b-hints.z3"]) else { return };
+    let story_ref = app::hints::HintStory::new("IFID", "Game").with_documents(Some(&docs));
+    // A tie: the chooser, nothing remembered yet.
+    let HintStart::Choose(c) = start(&story, story_ref, None, None, &[], &st.config) else { panic!("tie must choose") };
+    assert_eq!(c.len(), 2);
+    // A pick is remembered and opened; the same pick again while running is a no-op.
+    let HintStart::Started(sess) = start(&story, story_ref, Some(&c[1]), None, &[], &st.config) else {
+        panic!("a pick must start")
+    };
+    assert_eq!(sess.label, "b-hints.z3");
+    assert!(matches!(
+        start(&story, story_ref, Some(&c[1]), Some(&sess.label), &[], &st.config),
+        HintStart::AlreadyRunning
+    ));
+    // Nothing found: the TUI's own message.
+    let none = app::hints::HintStory::new("OTHER", "Game");
+    let HintStart::NoHint(msg) = start(&story, none, None, None, &[], &st.config) else { panic!("no hint") };
+    assert_eq!(msg, app::host::hints::no_hint_message(None));
+}
+
+/// A linked library row for the minizork stand-in whose hints are downloadable
+/// (Zork I's IFID), plus its roots. `None` without the fixture.
+fn linked_row(tag: &str) -> Option<(app::picker::StoryEntry, app::data_roots::DataRoots, PathBuf)> {
+    let bytes = std::fs::read(fixture_path("minizork-r34-s871124.z3")).ok()?;
+    let dir = app::scratch_dir(tag);
+    std::fs::write(dir.join("zork1.z3"), &bytes).unwrap();
+    let roots = app::data_roots::DataRoots::single(&dir);
+    let mut rows = app::picker::scan_stories(&dir, &roots);
+    let mut row = rows.remove(0);
+    row.meta.ifid = "ZCODE-88-840726-A129".into();
+    row.meta.ifdb_tuid = Some("t1".into());
+    row.title = "Zork".into();
+    let docs = roots.documents().join("Zork [t1]");
+    Some((row, roots, docs))
+}
+
+#[test]
+fn a_hint_downloaded_into_the_documents_folder_is_still_seen_after_a_restart() {
+    use app::picker::{hint_status, HintStatus};
+    let Some((row, roots, docs)) = linked_row("host-hints-restart") else { return };
+    let index = app::hints::load_hint_index(roots.catalogue());
+    assert_eq!(hint_status(&row, &roots, &index), HintStatus::Downloadable);
+    // The download landed in the documents folder; a fresh scan knows nothing of it
+    // (`hint_sidecar` is None), as after a restart.
+    std::fs::create_dir_all(&docs).unwrap();
+    std::fs::write(docs.join("zork1inv.z5"), std::fs::read(fixture_path("minizork-r34-s871124.z3")).unwrap()).unwrap();
+    assert!(row.hint_sidecar.is_none());
+    assert_eq!(hint_status(&row, &roots, &index), HintStatus::File(docs.join("zork1inv.z5")));
+    assert_eq!(app::picker::compute_row_badges(&row, &roots, &index).hint, app::picker::HintBadge::Present);
+    let mut dl = app::hint_download::HintDownloader::with_fetcher(std::sync::Arc::new(|_| panic!("must not fetch")));
+    assert_eq!(
+        app::host::hints::start_story_download(&mut dl, &row, &roots, &index),
+        "Zork already has a hint file"
+    );
+}
+
+fn drain_one(dl: &mut app::hint_download::HintDownloader) -> app::hint_download::HintDlResult {
+    for _ in 0..500 {
+        if let Some(r) = dl.drain().pop() {
+            return r;
+        }
+        std::thread::sleep(std::time::Duration::from_millis(10));
+    }
+    panic!("download did not finish");
+}
+
+#[test]
+fn the_browser_download_flow_runs_offline_through_a_fetcher() {
+    use app::picker::{apply_hint_download, hint_status, HintStatus};
+    let Some((row, roots, docs)) = linked_row("host-hints-flow") else { return };
+    let bytes = std::fs::read(fixture_path("minizork-r34-s871124.z3")).unwrap();
+    let served = bytes.clone();
+    let mut dl = app::hint_download::HintDownloader::with_fetcher(std::sync::Arc::new(move |url| {
+        assert!(url.starts_with("http"), "{url}");
+        Ok(served.clone())
+    }));
+    let index = app::hints::load_hint_index(roots.catalogue());
+    let mut rows = vec![row];
+    let line = app::host::hints::start_story_download(&mut dl, &rows[0], &roots, &index);
+    assert_eq!(line, "Downloading hints for Zork…");
+    assert_eq!(
+        app::host::hints::start_story_download(&mut dl, &rows[0], &roots, &index),
+        "Already downloading hints…"
+    );
+    let r = drain_one(&mut dl);
+    let (idx, line) = apply_hint_download(&mut rows, &r);
+    assert_eq!((idx, line.as_str()), (Some(0), "Downloaded hints for Zork"));
+    assert_eq!(rows[0].hint_sidecar.as_deref(), Some(docs.join("zork1inv.z5").as_path()));
+    // A failed fetch is reported and touches nothing.
+    let mut bad = app::hint_download::HintDownloader::with_fetcher(std::sync::Arc::new(|_| Err("offline".into())));
+    let mut fresh = vec![{
+        let mut e = rows[0].clone();
+        e.hint_sidecar = None;
+        e
+    }];
+    std::fs::remove_file(docs.join("zork1inv.z5")).unwrap();
+    assert_eq!(hint_status(&fresh[0], &roots, &index), HintStatus::Downloadable);
+    app::host::hints::start_story_download(&mut bad, &fresh[0], &roots, &index);
+    let r = drain_one(&mut bad);
+    assert_eq!(apply_hint_download(&mut fresh, &r), (None, "Hint download failed: offline".to_string()));
+}
+
+#[test]
+fn the_tab_s_download_message_names_the_story_by_title_not_file_stem() {
+    let Some(bytes) = std::fs::read(fixture_path("minizork-r34-s871124.z3")).ok() else { return };
+    let dir = app::scratch_dir("host-hints-tab-title");
+    let story = dir.join("deadline-r27-s831005.z3");
+    std::fs::write(&story, &bytes).unwrap();
+    let mut st = AppState::default();
+    st.config.user_dir = dir;
+    st.ifid = "ZCODE-18-820311-0000".into();
+    st.title = "Deadline".into();
+    st.hints_tab.set_downloader(app::hint_download::HintDownloader::with_fetcher(std::sync::Arc::new(move |_| {
+        Ok(bytes.clone())
+    })));
+    hints_tab::start_download_in(&mut st, &story, None);
+    for _ in 0..500 {
+        hints_tab::poll_download(&mut st);
+        if st.hints_tab.message.as_deref() == Some("Downloaded hints for Deadline") {
+            return;
+        }
+        std::thread::sleep(std::time::Duration::from_millis(10));
+    }
+    panic!("message was {:?}", st.hints_tab.message);
+}
+
+#[test]
+fn doc_kinds_have_one_label_each() {
+    use app::documents::DocKind;
+    assert_eq!(DocKind::Pdf.label(), "PDF");
+    assert!(DocKind::HintProgram.label().starts_with("hint program"));
+}

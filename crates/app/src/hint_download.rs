@@ -76,6 +76,20 @@ pub struct HintDownloader {
     tx: mpsc::Sender<HintDlResult>,
     rx: mpsc::Receiver<HintDlResult>,
     inflight: usize,
+    fetcher: Fetcher,
+}
+
+/// How a URL becomes bytes. The default is [`fetch_bytes`] (ureq); a host, or a
+/// test, supplies its own through [`HintDownloader::with_fetcher`].
+pub type Fetcher = std::sync::Arc<dyn Fn(&str) -> Result<Vec<u8>, String> + Send + Sync>;
+
+/// The status line for one finished download — shared by the story browser and
+/// the Hints tab so the two cannot word it differently.
+pub fn download_result_line(r: &HintDlResult) -> String {
+    match &r.outcome {
+        HintDlOutcome::Done => format!("Downloaded hints for {}", r.title),
+        HintDlOutcome::Failed(msg) => format!("Hint download failed: {msg}"),
+    }
 }
 
 impl Default for HintDownloader {
@@ -86,8 +100,14 @@ impl Default for HintDownloader {
 
 impl HintDownloader {
     pub fn new() -> Self {
+        Self::with_fetcher(std::sync::Arc::new(|url: &str| fetch_bytes(url)))
+    }
+
+    /// A downloader that gets its bytes from `fetcher` instead of the network, so
+    /// a host can exercise the download wiring offline.
+    pub fn with_fetcher(fetcher: Fetcher) -> Self {
         let (tx, rx) = mpsc::channel();
-        Self { tx, rx, inflight: 0 }
+        Self { tx, rx, inflight: 0, fetcher }
     }
 
     /// Begin downloading `url` to `dest` (the hint file for `story`, named after
@@ -103,8 +123,9 @@ impl HintDownloader {
     ) {
         self.inflight += 1;
         let tx = self.tx.clone();
+        let fetcher = self.fetcher.clone();
         thread::spawn(move || {
-            let (outcome, dest) = match fetch_bytes(&url) {
+            let (outcome, dest) = match fetcher(&url) {
                 Ok(bytes) => finalize_into(&bytes, dest, &url, &title),
                 Err(e) => {
                     let shown = match dest {

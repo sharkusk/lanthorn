@@ -32,7 +32,7 @@ use ratatui::style::{Modifier, Style};
 use crate::engine::Engine;
 use crate::hint_download::{HintDest, HintDlOutcome, HintDownloader};
 use crate::hints::HintStory;
-use crate::host::hints::{no_hint_message, HintAvailability};
+use crate::host::hints::{already_running, no_hint_message, start, HintStart};
 use crate::render::transcript::wrap_line;
 use crate::state::{AppState, Focus, HintSession, HintSource};
 
@@ -117,11 +117,20 @@ impl std::fmt::Debug for HintsTab {
 }
 
 impl HintsTab {
+    /// Replace the downloader, so a host or test can supply its own fetcher
+    /// ([`HintDownloader::with_fetcher`]).
+    pub fn set_downloader(&mut self, downloader: HintDownloader) {
+        self.downloader = downloader;
+    }
+
     /// Where the last draw put things.
     pub fn hits(&self) -> HintsHits {
         self.hits.borrow().clone()
     }
 }
+
+/// The chooser's intro line, shown above the tied candidates (SQ-1694).
+pub const CHOOSE_INTRO: &str = "Several hint files could be this game's \u{2014} pick one (click it, or Up/Down and Enter once the tab has the keyboard):";
 
 // ── Starting, ending, downloading ────────────────────────────────────────────
 
@@ -155,34 +164,31 @@ pub fn ensure_started_in(state: &mut AppState, story_path: &Path, ifid: &str, do
     if !state.hints_tab_visible() {
         return false;
     }
-    if let Some(picked) = state.hints_tab.picked.take() {
-        match crate::host::hints::remember(&state.config.user_dir, ifid, &picked) {
-            Ok(()) => state.hints_tab.phase = Phase::NotStarted,
-            Err(e) => {
-                state.hints_tab.phase = Phase::Failed(format!("hints: cannot remember the choice: {e}"));
-                return true;
-            }
-        }
-    }
-    if state.hints_tab.phase != Phase::NotStarted {
+    let picked = state.hints_tab.picked.take();
+    if picked.is_none() && state.hints_tab.phase != Phase::NotStarted {
         return false;
     }
-    let index = crate::hints::load_hint_index(&state.config.user_dir);
     let title = state.title.clone();
     let story = HintStory::new(ifid, &title).with_documents(documents);
     state.hints_tab.docs = documents.map(Path::to_path_buf);
-    if let HintAvailability::Choose(candidates) = crate::host::hints::available(story_path, story, &index) {
-        state.hints_tab.choice = 0;
-        state.hints_tab.phase = Phase::Choose(candidates);
-        return true;
-    }
-    match crate::host::hints::open(story_path, story, &index, &state.dict_words, &state.config) {
-        Ok(Some(session)) => {
-            state.overlays.hints = Some(session);
+    let running = if state.hints_tab.phase == Phase::Running {
+        state.overlays.hints.as_ref().map(|hs| hs.label.clone())
+    } else {
+        None
+    };
+    state.hints_tab.phase = Phase::NotStarted;
+    match start(story_path, story, picked.as_deref(), running.as_deref(), &state.dict_words, &state.config) {
+        HintStart::Started(session) => {
+            state.overlays.hints = Some(*session);
             state.hints_tab.phase = Phase::Running;
         }
-        Ok(None) => state.hints_tab.phase = Phase::NoHint,
-        Err(e) => state.hints_tab.phase = Phase::Failed(e.to_string()),
+        HintStart::AlreadyRunning => state.hints_tab.phase = Phase::Running,
+        HintStart::Choose(candidates) => {
+            state.hints_tab.choice = 0;
+            state.hints_tab.phase = Phase::Choose(candidates);
+        }
+        HintStart::NoHint(_) => state.hints_tab.phase = Phase::NoHint,
+        HintStart::Failed(e) => state.hints_tab.phase = Phase::Failed(e.to_string()),
     }
     true
 }
@@ -192,9 +198,8 @@ pub fn ensure_started_in(state: &mut AppState, story_path: &Path, ifid: &str, do
 /// click and Alt+4 it does not move the keyboard; the loop's next turn starts the
 /// session, remembering the file as this game's hint file.
 pub fn show_program(state: &mut AppState, path: PathBuf) {
-    let name = path.file_name().and_then(|n| n.to_str());
     let already = state.hints_tab.phase == Phase::Running
-        && state.overlays.hints.as_ref().is_some_and(|hs| Some(hs.label.as_str()) == name);
+        && already_running(state.overlays.hints.as_ref().map(|hs| hs.label.as_str()), &path);
     if !already {
         state.overlays.hints = None;
         state.hints_tab.phase = Phase::NotStarted;
@@ -230,7 +235,7 @@ pub fn start_download(state: &mut AppState, story_path: &Path) {
 /// [`start_download`] with the documents folder already known.
 pub fn start_download_in(state: &mut AppState, story_path: &Path, documents: Option<PathBuf>) {
     let line = if state.hints_tab.downloader.busy() {
-        "Already downloading hints…".to_string()
+        crate::host::hints::ALREADY_DOWNLOADING.to_string()
     } else if state.hints_tab.phase == Phase::Running {
         "This story already has a hint file".to_string()
     } else {
@@ -238,7 +243,7 @@ pub fn start_download_in(state: &mut AppState, story_path: &Path, documents: Opt
             None => "No InvisiClues found for this story".to_string(),
             Some(dl) => {
                 let dest = HintDest::for_story(story_path, &dl.filename, documents);
-                let title = story_path.file_stem().and_then(|s| s.to_str()).unwrap_or("this story").to_owned();
+                let title = state.title.clone();
                 state.hints_tab.downloader.start(
                     dl.url,
                     dest,
@@ -260,13 +265,10 @@ pub fn poll_download(state: &mut AppState) -> bool {
     let mut changed = false;
     for r in state.hints_tab.downloader.drain() {
         changed = true;
-        let line = match r.outcome {
-            HintDlOutcome::Done => {
-                state.hints_tab.phase = Phase::NotStarted;
-                format!("Downloaded hints for {}", r.title)
-            }
-            HintDlOutcome::Failed(msg) => format!("Hint download failed: {msg}"),
-        };
+        if r.outcome == HintDlOutcome::Done {
+            state.hints_tab.phase = Phase::NotStarted;
+        }
+        let line = crate::hint_download::download_result_line(&r);
         state.hints_tab.message = Some(line.clone());
         state.set_status(line);
     }
@@ -593,8 +595,7 @@ fn draw_choose(
     let x = area.x + 1;
     let w = area.width.saturating_sub(2).max(1) as usize;
     let mut y = area.y;
-    let intro = "Several hint files could be this game's \u{2014} pick one (click it, or Up/Down and Enter once the tab has the keyboard):";
-    for line in wrap_line(intro, w as u16) {
+    for line in wrap_line(CHOOSE_INTRO, w as u16) {
         if y >= area.bottom() {
             return;
         }

@@ -2625,6 +2625,65 @@ fn sibling_blorb_exists(path: &Path) -> bool {
     blorb::sibling_blorb_by_name(path).is_some()
 }
 
+/// Where a story row's hints stand (SQ-1696): the one answer the browser's info
+/// panel, its badge and the download key read, and a host reads the same way.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum HintStatus {
+    /// A hint file is in hand: the sidecar beside the story, or a hint program in
+    /// the game's documents folder (where an IFDB-linked game's download lands).
+    File(PathBuf),
+    /// No file, but a matching InvisiClues can be downloaded.
+    Downloadable,
+    None,
+}
+
+/// The game's documents folder when it is linked to IFDB (existing or planned).
+pub fn entry_documents_dir(entry: &StoryEntry, roots: &DataRoots) -> Option<PathBuf> {
+    crate::documents::locate(roots, entry.meta.ifdb_tuid.as_deref(), &entry.title).path().map(Path::to_path_buf)
+}
+
+/// [`HintStatus`] for `entry`. The documents folder is searched with
+/// [`hints::resolve_in_story_documents`] — step 0 of the rule the Hints tab opens
+/// by — so a restart that forgets the in-memory sidecar still sees a download.
+pub fn hint_status(entry: &StoryEntry, roots: &DataRoots, index: &hints::HintIndex) -> HintStatus {
+    if let Some(p) = &entry.hint_sidecar {
+        return HintStatus::File(p.clone());
+    }
+    if let Some(dir) = entry_documents_dir(entry, roots) {
+        let story = hints::HintStory::new(&entry.meta.ifid, &entry.title).with_documents(Some(&dir));
+        match hints::resolve_in_story_documents(&entry.path, story, index) {
+            Some(hints::HintResolution::File(p)) => return HintStatus::File(p),
+            Some(hints::HintResolution::Choose(mut files)) if !files.is_empty() => {
+                return HintStatus::File(files.swap_remove(0));
+            }
+            _ => {}
+        }
+    }
+    if hints::hint_download_for(&entry.meta.ifid).is_some() {
+        HintStatus::Downloadable
+    } else {
+        HintStatus::None
+    }
+}
+
+/// Fold a finished hint download into the row list: on success the row's
+/// `hint_sidecar` becomes the saved file. Returns the row's index (when it
+/// changed, so the caller can recompute that row's badges) and the status line.
+pub fn apply_hint_download(
+    stories: &mut [StoryEntry],
+    r: &crate::hint_download::HintDlResult,
+) -> (Option<usize>, String) {
+    let line = crate::hint_download::download_result_line(r);
+    if r.outcome != crate::hint_download::HintDlOutcome::Done {
+        return (None, line);
+    }
+    let idx = stories.iter().position(|e| e.is(&r.story, r.disk_entry.as_deref()));
+    if let Some(i) = idx {
+        stories[i].hint_sidecar = Some(r.dest.clone());
+    }
+    (idx, line)
+}
+
 /// Compute a row's artifact badges. `roots` is the storage base; the save
 /// badge lights when the story's per-game dir `<roots>/<story-key>/` exists
 /// and holds a `.lanthorn` or `.qzl` (SQ-0284). `hint_index` (IFID-keyed) is
@@ -2641,15 +2700,14 @@ pub fn compute_row_badges(
     // The PLAYER's folder: a catalogue-only folder (metadata, no saves) reads as
     // unplayed for a player who has never saved here (SQ-1676).
     let game_dir = entry.game_dir(roots);
-    let hint = if hint_index.get(ifid).is_some() || entry.hint_sidecar.is_some() {
+    let status = hint_status(entry, roots, hint_index);
+    let hint = if hint_index.get(ifid).is_some() || matches!(status, HintStatus::File(_)) {
         HintBadge::Present
+    } else if status == HintStatus::Downloadable {
+        // No local hint — light the lowercase glyph.
+        HintBadge::Available
     } else {
-        // No local hint — light the lowercase glyph if one is downloadable.
-        if hints::hint_download_for(&entry.meta.ifid).is_some() {
-            HintBadge::Available
-        } else {
-            HintBadge::None
-        }
+        HintBadge::None
     };
     RowBadges {
         blorb: row_is_blorb(entry),

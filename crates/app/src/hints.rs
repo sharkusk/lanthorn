@@ -650,15 +650,11 @@ pub enum HintResolution {
 ///    `read_zip_entry`.
 /// 5. Else: `AskUser`.
 pub fn resolve_hint_source(story_path: &Path, story: HintStory<'_>, index: &HintIndex) -> HintResolution {
-    let HintStory { ifid, title, documents } = story;
+    let HintStory { ifid, title, documents: _ } = story;
 
-    // Step 0 (SQ-1690): the game's documents folder. The TUID in its name proves
-    // the game across releases and disk images, so no name/IFID guessing applies.
-    if let Some(dir) = documents {
-        let stem = story_path.file_stem().and_then(|s| s.to_str()).unwrap_or("").to_ascii_lowercase();
-        if let Some(found) = resolve_in_documents(dir, HintTarget { stem: &stem, title, ifid }, index) {
-            return found;
-        }
+    // Step 0 (SQ-1690): the game's documents folder.
+    if let Some(found) = resolve_in_story_documents(story_path, story, index) {
+        return found;
     }
 
     // Step 1: remembered association.
@@ -767,6 +763,17 @@ fn identity_ties(target: HintTarget<'_>, names: &[String]) -> Vec<String> {
         return Vec::new();
     }
     names.iter().filter(|n| hint_matches_identity(n, target.ifid)).cloned().collect()
+}
+
+/// Step 0 of [`resolve_hint_source`] for a whole story: the hint program(s) in its
+/// documents folder, `None` when it has no folder or the folder holds none. The
+/// TUID in the folder's name proves the game across releases and disk images, so
+/// no name/IFID guessing applies. Public so the story browser's hint status asks
+/// the very same question the Hints tab does.
+pub fn resolve_in_story_documents(story_path: &Path, story: HintStory<'_>, index: &HintIndex) -> Option<HintResolution> {
+    let dir = story.documents?;
+    let stem = story_path.file_stem().and_then(|s| s.to_str()).unwrap_or("").to_ascii_lowercase();
+    resolve_in_documents(dir, HintTarget { stem: &stem, title: story.title, ifid: story.ifid }, index)
 }
 
 /// Step 0 of [`resolve_hint_source`]: the hint programs in the game's documents

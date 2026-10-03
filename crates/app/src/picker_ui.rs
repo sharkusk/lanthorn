@@ -1715,7 +1715,7 @@ pub(crate) fn run_story_picker(
                         &entry.path,
                         &entry.cover_key(roots),
                         slide.active(),
-                        entry.hint_sidecar.as_deref(),
+                        &app::picker::hint_status(entry, roots, &hint_index),
                         &cs,
                         buf,
                         &mut panel_link_rects,
@@ -1976,20 +1976,11 @@ pub(crate) fn run_story_picker(
         let mut hint_arrived = false;
         for r in hint_dl.drain() {
             hint_arrived = true;
-            match r.outcome {
-                app::hint_download::HintDlOutcome::Done => {
-                    if let Some(idx) =
-                        stories.iter().position(|e| e.is(&r.story, r.disk_entry.as_deref()))
-                    {
-                        stories[idx].hint_sidecar = Some(r.dest);
-                        row_badges[idx] = app::picker::compute_row_badges(&stories[idx], roots, &hint_index);
-                    }
-                    progress_line = Some(format!("Downloaded hints for {}", r.title));
-                }
-                app::hint_download::HintDlOutcome::Failed(msg) => {
-                    progress_line = Some(format!("Hint download failed: {msg}"));
-                }
+            let (idx, line) = app::picker::apply_hint_download(&mut stories, &r);
+            if let Some(idx) = idx {
+                row_badges[idx] = app::picker::compute_row_badges(&stories[idx], roots, &hint_index);
             }
+            progress_line = Some(line);
         }
 
         // Drain the open-a-URL downloads (SQ-1086). A finished one lands in
@@ -3048,35 +3039,9 @@ pub(crate) fn run_story_picker(
             // Saved in the IFDB-linked game's documents folder, else beside
             // the story (SQ-1690); ignored while one is downloading.
             Some(app::browser::BrowserAction::DownloadHints) => {
-                if let Some(entry) = stories.get(list.selected).filter(|e| !e.is_folder() && !hint_dl.busy()) {
-                    if entry.hint_sidecar.is_some() {
-                        progress_line = Some(format!("{} already has a hint file", entry.title));
-                    } else {
-                        match app::hints::hint_download_for(&entry.meta.ifid) {
-                            Some(dl) => {
-                                // SQ-1690: an IFDB-linked game's hints go in its
-                                // documents folder; any other beside the story.
-                                let documents =
-                                    app::documents::locate(roots, entry.meta.ifdb_tuid.as_deref(), &entry.title)
-                                        .path()
-                                        .map(|p| p.to_path_buf());
-                                let dest = app::hint_download::HintDest::for_story(&entry.path, &dl.filename, documents);
-                                progress_line =
-                                    Some(format!("Downloading hints for {}…", entry.title));
-                                hint_dl.start(
-                                    dl.url,
-                                    dest,
-                                    entry.path.clone(),
-                                    entry.meta.disk_entry.clone(),
-                                    entry.title.clone(),
-                                );
-                            }
-                            None => {
-                                progress_line =
-                                    Some(format!("No InvisiClues found for {}", entry.title));
-                            }
-                        }
-                    }
+                if let Some(entry) = stories.get(list.selected).filter(|e| !e.is_folder()) {
+                    progress_line =
+                        Some(app::host::hints::start_story_download(&mut hint_dl, entry, roots, &hint_index));
                 }
             }
             // Cycle the sort column, keeping direction; or toggle the
@@ -3733,7 +3698,7 @@ fn draw_info_panel(
     // (SQ-0859). See `app::picker::StoryEntry::cover_key`.
     cover_key: &std::path::Path,
     animating: bool,
-    hint_sidecar: Option<&std::path::Path>,
+    hint: &app::picker::HintStatus,
     cs: &app::colors::ColorScheme,
     buf: &mut ratatui::buffer::Buffer,
     link_rects: &mut Vec<(Rect, String)>,
@@ -3904,10 +3869,16 @@ fn draw_info_panel(
     // beside the story and hidden from the list. Named here so the player sees
     // hints are available and which file supplies them. With no local file, note
     // when a matching InvisiClues can be downloaded with `H` (SQ-0445).
-    if let Some(name) = hint_sidecar.and_then(|p| p.file_name()).and_then(|s| s.to_str()) {
-        lines.push((format!("Hints: {name}"), story_info_value));
-    } else if app::hints::hint_download_for(&meta.ifid).is_some() {
-        lines.push(("Hints: available to download (press H)".to_string(), story_info_value));
+    match hint {
+        app::picker::HintStatus::File(p) => {
+            if let Some(name) = p.file_name().and_then(|s| s.to_str()) {
+                lines.push((format!("Hints: {name}"), story_info_value));
+            }
+        }
+        app::picker::HintStatus::Downloadable => {
+            lines.push(("Hints: available to download (press H)".to_string(), story_info_value));
+        }
+        app::picker::HintStatus::None => {}
     }
     // author · year · genre (SQ-0348): one line, present parts only — a story
     // with none of the three renders no line at all, so a no-metadata panel
@@ -5969,7 +5940,7 @@ mod tests {
         let mut cover = app::cover::CoverState::default();
         let entry_path = std::path::Path::new("zork1.z3");
         super::draw_info_panel(
-            "Zork I", "zork1.z3", &meta, None, 0, area, None, &mut cover, entry_path, entry_path, false, None, &cs, &mut buf, &mut Vec::new(), &mut Vec::new(),
+            "Zork I", "zork1.z3", &meta, None, 0, area, None, &mut cover, entry_path, entry_path, false, &app::picker::HintStatus::None, &cs, &mut buf, &mut Vec::new(), &mut Vec::new(),
         );
         // Single-border top-left corner (BorderStyle::Single default).
         assert_eq!(buf.cell((0, 0)).unwrap().symbol(), "┌");
@@ -6054,7 +6025,7 @@ mod tests {
         let mut cover = app::cover::CoverState::default();
         let entry_path = std::path::Path::new("zork1.z3");
         super::draw_info_panel(
-            "Zork I", "zork1.z3", &meta, Some(&aux), 0, area, None, &mut cover, entry_path, entry_path, false, None, &cs, &mut buf, &mut Vec::new(), &mut Vec::new(),
+            "Zork I", "zork1.z3", &meta, Some(&aux), 0, area, None, &mut cover, entry_path, entry_path, false, &app::picker::HintStatus::None, &cs, &mut buf, &mut Vec::new(), &mut Vec::new(),
         );
 
         let text = buffer_to_string(&buf, area);
@@ -6180,7 +6151,7 @@ mod tests {
         let entry_path = std::path::Path::new(COMPILATION_FILE);
         super::draw_info_panel(
             "Leather Goddesses of Phobos", COMPILATION_FILE, &meta, None, 0, area, None,
-            &mut cover, entry_path, entry_path, false, None, &cs, &mut buf,
+            &mut cover, entry_path, entry_path, false, &app::picker::HintStatus::None, &cs, &mut buf,
             &mut Vec::new(), &mut Vec::new(),
         );
         let flat = panel_text_flat(&buf, area);
@@ -6223,7 +6194,7 @@ mod tests {
         let entry_path = std::path::Path::new(COMPILATION_FILE);
         super::draw_info_panel(
             "Leather Goddesses of Phobos", COMPILATION_FILE, &meta, None, 0, area, None,
-            &mut cover, entry_path, entry_path, false, None, &cs, &mut buf,
+            &mut cover, entry_path, entry_path, false, &app::picker::HintStatus::None, &cs, &mut buf,
             &mut Vec::new(), &mut Vec::new(),
         );
         let rows = panel_rows(&buf, area);
@@ -6272,7 +6243,7 @@ mod tests {
         let entry_path = std::path::Path::new("zork1.z3");
         let max_scroll = super::draw_info_panel(
             "Zork I", "zork1.z3", &meta, None, 0, area, None, &mut cover, entry_path,
-            entry_path, false, None, &cs, &mut buf, &mut Vec::new(), &mut Vec::new(),
+            entry_path, false, &app::picker::HintStatus::None, &cs, &mut buf, &mut Vec::new(), &mut Vec::new(),
         );
         assert_eq!(max_scroll, 0, "content that fits must not become scrollable");
         let rows = panel_rows(&buf, area);
@@ -6322,7 +6293,7 @@ mod tests {
         let mut render = |scroll: usize, buf: &mut Buffer| {
             super::draw_info_panel(
                 "Leather Goddesses of Phobos", COMPILATION_FILE, &meta, None, scroll, area, None,
-                &mut cover, entry_path, entry_path, false, None, &cs, buf,
+                &mut cover, entry_path, entry_path, false, &app::picker::HintStatus::None, &cs, buf,
                 &mut Vec::new(), &mut Vec::new(),
             )
         };
@@ -6379,7 +6350,7 @@ mod tests {
         super::draw_info_panel(
             "Game", "game.z5", &meta, None, 0, area, None, &mut cover,
             std::path::Path::new("game.z5"), std::path::Path::new("game.z5"),
-            false, None, &cs, &mut buf, &mut links, &mut Vec::new(),
+            false, &app::picker::HintStatus::None, &cs, &mut buf, &mut links, &mut Vec::new(),
         );
         assert!(links.len() > 1, "the link must wrap onto more than one row: {links:?}");
         assert!(links.iter().all(|(_, u)| u == url), "every row opens the full URL: {links:?}");
@@ -6411,7 +6382,7 @@ mod tests {
             let mut buf = Buffer::empty(area);
             super::draw_info_panel(
                 "宇宙船の物語", COMPILATION_FILE, &meta, None, 0, area, None, &mut cover,
-                entry_path, entry_path, false, None, &cs, &mut buf,
+                entry_path, entry_path, false, &app::picker::HintStatus::None, &cs, &mut buf,
                 &mut Vec::new(), &mut Vec::new(),
             );
         }
@@ -6481,7 +6452,7 @@ mod tests {
         let mut cover = app::cover::CoverState::default();
         let entry_path = std::path::Path::new("zork1.z3");
         let max_scroll = super::draw_info_panel(
-            "Zork I", "zork1.z3", &meta, None, 0, area, None, &mut cover, entry_path, entry_path, false, None, &cs, &mut buf, &mut Vec::new(), &mut Vec::new(),
+            "Zork I", "zork1.z3", &meta, None, 0, area, None, &mut cover, entry_path, entry_path, false, &app::picker::HintStatus::None, &cs, &mut buf, &mut Vec::new(), &mut Vec::new(),
         );
         let text_top = buffer_to_string(&buf, area);
         assert!(max_scroll > 0, "content should overflow a 10-row panel");
@@ -6490,7 +6461,7 @@ mod tests {
 
         let mut buf2 = Buffer::empty(area);
         let max_scroll2 = super::draw_info_panel(
-            "Zork I", "zork1.z3", &meta, None, max_scroll, area, None, &mut cover, entry_path, entry_path, false, None, &cs, &mut buf2, &mut Vec::new(), &mut Vec::new(),
+            "Zork I", "zork1.z3", &meta, None, max_scroll, area, None, &mut cover, entry_path, entry_path, false, &app::picker::HintStatus::None, &cs, &mut buf2, &mut Vec::new(), &mut Vec::new(),
         );
         let text_scrolled = buffer_to_string(&buf2, area);
         assert_eq!(max_scroll2, max_scroll);
@@ -6499,7 +6470,7 @@ mod tests {
         // Scrolling past max clamps to the same view as scroll == max_scroll.
         let mut buf3 = Buffer::empty(area);
         super::draw_info_panel(
-            "Zork I", "zork1.z3", &meta, None, 999, area, None, &mut cover, entry_path, entry_path, false, None, &cs, &mut buf3, &mut Vec::new(), &mut Vec::new(),
+            "Zork I", "zork1.z3", &meta, None, 999, area, None, &mut cover, entry_path, entry_path, false, &app::picker::HintStatus::None, &cs, &mut buf3, &mut Vec::new(), &mut Vec::new(),
         );
         let text_over = buffer_to_string(&buf3, area);
         assert_eq!(text_over, text_scrolled, "scroll past max should clamp to max_scroll view");
@@ -6777,7 +6748,7 @@ mod tests {
             let mut cover = app::cover::CoverState::default();
             let entry_path = std::path::Path::new(name);
             super::draw_info_panel(
-                "Zork I", name, meta, None, 0, area, None, &mut cover, entry_path, entry_path, false, None,
+                "Zork I", name, meta, None, 0, area, None, &mut cover, entry_path, entry_path, false, &app::picker::HintStatus::None,
                 &cs, &mut buf, &mut Vec::new(), &mut Vec::new(),
             );
             buffer_to_string(&buf, area)
@@ -6819,7 +6790,7 @@ mod tests {
         let mut cover = app::cover::CoverState::default();
         let entry_path = std::path::Path::new("game.gblorb");
         super::draw_info_panel(
-            "Game", "game.gblorb", &meta, None, 0, area, None, &mut cover, entry_path, entry_path, false, None, &cs, &mut buf, &mut Vec::new(), &mut Vec::new(),
+            "Game", "game.gblorb", &meta, None, 0, area, None, &mut cover, entry_path, entry_path, false, &app::picker::HintStatus::None, &cs, &mut buf, &mut Vec::new(), &mut Vec::new(),
         );
         let text = buffer_to_string(&buf, area);
         let lines: Vec<&str> = text.lines().collect();
@@ -6857,7 +6828,7 @@ mod tests {
         let mut cover = app::cover::CoverState::default();
         let entry_path = std::path::Path::new("game.gblorb");
         super::draw_info_panel(
-            "Game", "game.gblorb", &meta, None, 0, area, None, &mut cover, entry_path, entry_path, false, None, &cs, &mut buf, &mut Vec::new(), &mut Vec::new(),
+            "Game", "game.gblorb", &meta, None, 0, area, None, &mut cover, entry_path, entry_path, false, &app::picker::HintStatus::None, &cs, &mut buf, &mut Vec::new(), &mut Vec::new(),
         );
         let text = buffer_to_string(&buf, area);
         assert!(text.contains("Michael S. Gentry"), "author should render: {text:?}");
@@ -6907,7 +6878,7 @@ mod tests {
         let mut cover = app::cover::CoverState::default();
         super::draw_info_panel(
             "Beyond Zork", "beyondzork-r57-s871221.z5", &meta, Some(&aux), 0, area, None,
-            &mut cover, std::path::Path::new("beyondzork-r57-s871221.z5"), std::path::Path::new("beyondzork-r57-s871221.z5"), false, None, &cs, &mut buf, &mut Vec::new(), &mut Vec::new(),
+            &mut cover, std::path::Path::new("beyondzork-r57-s871221.z5"), std::path::Path::new("beyondzork-r57-s871221.z5"), false, &app::picker::HintStatus::None, &cs, &mut buf, &mut Vec::new(), &mut Vec::new(),
         );
         let text = buffer_to_string(&buf, area);
         assert!(text.contains("Resource blorb: beyondzork.blb"), "sidecar named up-front: {text:?}");
@@ -6956,7 +6927,7 @@ mod tests {
         let mut cover = app::cover::CoverState::default();
         super::draw_info_panel(
             "Zork Zero", "zork0-r393-s890714.z6", &meta, Some(&aux), 0, area, None,
-            &mut cover, &z0, &z0, false, None, &cs, &mut buf, &mut Vec::new(), &mut Vec::new(),
+            &mut cover, &z0, &z0, false, &app::picker::HintStatus::None, &cs, &mut buf, &mut Vec::new(), &mut Vec::new(),
         );
         let text = buffer_to_string(&buf, area);
         println!("{text}");
@@ -7027,7 +6998,7 @@ mod tests {
         let p = std::path::Path::new("arthur.z6");
         super::draw_info_panel(
             "Arthur", "arthur.z6", &meta, Some(&aux), 0, area, None, &mut cover, p, p, false,
-            None, &cs, &mut buf, &mut Vec::new(), &mut Vec::new(),
+            &app::picker::HintStatus::None, &cs, &mut buf, &mut Vec::new(), &mut Vec::new(),
         );
         let text = buffer_to_string(&buf, area);
         println!("{text}");
@@ -7113,7 +7084,7 @@ mod tests {
         let p = std::path::Path::new("arthur.z6");
         super::draw_info_panel(
             "Arthur", "arthur.z6", &meta, Some(&aux), 0, area, None, &mut cover, p, p, false,
-            None, &cs, &mut buf, &mut Vec::new(), &mut Vec::new(),
+            &app::picker::HintStatus::None, &cs, &mut buf, &mut Vec::new(), &mut Vec::new(),
         );
         let text = buffer_to_string(&buf, area);
         println!("{text}");
@@ -7195,7 +7166,7 @@ mod tests {
         let mut cover = app::cover::CoverState::default();
         super::draw_info_panel(
             "Arthur", "arthur-r74-s890714.z6", &meta, Some(&aux), 0, area, None,
-            &mut cover, &arthur, &arthur, false, None, &cs, &mut buf, &mut Vec::new(), &mut Vec::new(),
+            &mut cover, &arthur, &arthur, false, &app::picker::HintStatus::None, &cs, &mut buf, &mut Vec::new(), &mut Vec::new(),
         );
         let text = buffer_to_string(&buf, area);
         println!("{text}");
@@ -7235,7 +7206,7 @@ mod tests {
         let mut cover = app::cover::CoverState::default();
         super::draw_info_panel(
             "Zork Zero", "zork0.z6", &meta, Some(&aux), 0, area, None, &mut cover,
-            std::path::Path::new("zork0.z6"), std::path::Path::new("zork0.z6"), false, None, &cs, &mut buf, &mut Vec::new(),
+            std::path::Path::new("zork0.z6"), std::path::Path::new("zork0.z6"), false, &app::picker::HintStatus::None, &cs, &mut buf, &mut Vec::new(),
             &mut Vec::new(),
         );
         let text = buffer_to_string(&buf, area);
@@ -7260,7 +7231,7 @@ mod tests {
         let mut links: Vec<(Rect, String)> = Vec::new();
         super::draw_info_panel(
             "Game", "game.z5", &meta, None, 0, area, None, &mut cover,
-            std::path::Path::new("game.z5"), std::path::Path::new("game.z5"), false, None, &cs, &mut buf, &mut links, &mut Vec::new(),
+            std::path::Path::new("game.z5"), std::path::Path::new("game.z5"), false, &app::picker::HintStatus::None, &cs, &mut buf, &mut links, &mut Vec::new(),
         );
         let (rect, _) = links.first().expect("a link rect was recorded");
         let first = buf.cell(Position::new(rect.x, rect.y)).expect("link first cell");
@@ -7297,7 +7268,7 @@ mod tests {
             let aux = docs_aux(loc);
             super::draw_info_panel(
                 "Game", "game.z5", &minimal_story_meta(), Some(&aux), 0, area, None, &mut cover,
-                std::path::Path::new("game.z5"), std::path::Path::new("game.z5"), false, None, &cs, &mut buf, &mut links, &mut Vec::new(),
+                std::path::Path::new("game.z5"), std::path::Path::new("game.z5"), false, &app::picker::HintStatus::None, &cs, &mut buf, &mut links, &mut Vec::new(),
             );
             (buffer_to_string(&buf, area), links)
         };
@@ -7424,7 +7395,7 @@ mod tests {
             let mut cover = app::cover::CoverState::default();
             super::draw_info_panel(
                 "Game", "game.z5", meta, None, 0, area, None, &mut cover,
-                std::path::Path::new("game.z5"), std::path::Path::new("game.z5"), false, None, &cs, &mut buf, &mut Vec::new(), &mut Vec::new(),
+                std::path::Path::new("game.z5"), std::path::Path::new("game.z5"), false, &app::picker::HintStatus::None, &cs, &mut buf, &mut Vec::new(), &mut Vec::new(),
             );
             buffer_to_string(&buf, area)
         };
@@ -7452,7 +7423,7 @@ mod tests {
             let mut cover = app::cover::CoverState::default();
             super::draw_info_panel(
                 title, "game.z5", meta, None, 0, area, None, &mut cover,
-                std::path::Path::new("game.z5"), std::path::Path::new("game.z5"), false, None, &cs, &mut buf, &mut Vec::new(), &mut Vec::new(),
+                std::path::Path::new("game.z5"), std::path::Path::new("game.z5"), false, &app::picker::HintStatus::None, &cs, &mut buf, &mut Vec::new(), &mut Vec::new(),
             );
             buffer_to_string(&buf, area)
         };
@@ -7489,7 +7460,7 @@ mod tests {
         let mut rects: Vec<(Rect, String)> = Vec::new();
         super::draw_info_panel(
             "Zork I", "game.z5", &minimal_story_meta(), None, 0, area, None, &mut cover,
-            path, path, false, None, &cs, &mut buf, &mut rects, &mut Vec::new(),
+            path, path, false, &app::picker::HintStatus::None, &cs, &mut buf, &mut rects, &mut Vec::new(),
         );
         assert!(rects.is_empty(), "no link rects before a fetch: {rects:?}");
 
@@ -7501,7 +7472,7 @@ mod tests {
         rects.clear();
         super::draw_info_panel(
             "Zork I", "game.z5", &fetched, None, 0, area, None, &mut cover,
-            path, path, false, None, &cs, &mut buf, &mut rects, &mut Vec::new(),
+            path, path, false, &app::picker::HintStatus::None, &cs, &mut buf, &mut rects, &mut Vec::new(),
         );
         assert_eq!(rects.len(), 1, "one link rect once fetched: {rects:?}");
         let (rect, got) = &rects[0];
@@ -7529,7 +7500,7 @@ mod tests {
         let mut cover = app::cover::CoverState::default();
         let entry_path = std::path::Path::new("game.gblorb");
         let max_scroll = super::draw_info_panel(
-            "Game", "game.gblorb", &meta, None, 0, area, None, &mut cover, entry_path, entry_path, false, None, &cs, &mut buf, &mut Vec::new(), &mut Vec::new(),
+            "Game", "game.gblorb", &meta, None, 0, area, None, &mut cover, entry_path, entry_path, false, &app::picker::HintStatus::None, &cs, &mut buf, &mut Vec::new(), &mut Vec::new(),
         );
         assert!(max_scroll > 0, "a long wrapped blurb should overflow an 8-row panel");
         let text_top = buffer_to_string(&buf, area);
@@ -7537,7 +7508,7 @@ mod tests {
 
         let mut buf2 = Buffer::empty(area);
         let max_scroll2 = super::draw_info_panel(
-            "Game", "game.gblorb", &meta, None, max_scroll, area, None, &mut cover, entry_path, entry_path, false, None, &cs, &mut buf2, &mut Vec::new(), &mut Vec::new(),
+            "Game", "game.gblorb", &meta, None, max_scroll, area, None, &mut cover, entry_path, entry_path, false, &app::picker::HintStatus::None, &cs, &mut buf2, &mut Vec::new(), &mut Vec::new(),
         );
         assert_eq!(max_scroll2, max_scroll, "max_scroll must be stable across scroll positions");
         let text_scrolled = buffer_to_string(&buf2, area);
@@ -7565,7 +7536,7 @@ mod tests {
         let mut cover = app::cover::CoverState::default();
         let entry_path = std::path::Path::new("game.gblorb");
         let max_scroll = super::draw_info_panel(
-            "Game", "game.gblorb", &meta, None, 0, area, None, &mut cover, entry_path, entry_path, false, None, &cs, &mut buf, &mut Vec::new(), &mut Vec::new(),
+            "Game", "game.gblorb", &meta, None, 0, area, None, &mut cover, entry_path, entry_path, false, &app::picker::HintStatus::None, &cs, &mut buf, &mut Vec::new(), &mut Vec::new(),
         );
         assert!(max_scroll > 0, "blurb should overflow so the scrollbar shows");
         let text = buffer_to_string(&buf, area);
@@ -7603,7 +7574,7 @@ mod tests {
 
         super::draw_info_panel(
             "Cover Test", "cover-test.gblorb", &meta, None,
-            0, area, Some(&picker), &mut cover, &path, &path, false, None, &cs, &mut buf, &mut Vec::new(), &mut Vec::new(),
+            0, area, Some(&picker), &mut cover, &path, &path, false, &app::picker::HintStatus::None, &cs, &mut buf, &mut Vec::new(), &mut Vec::new(),
         );
 
         // Half-blocks emit the upper-half-block glyph in the reserved top band.
@@ -8037,7 +8008,7 @@ mod tests {
         let mut resource_rects: Vec<(Rect, super::ResourceRef)> = Vec::new();
         super::draw_info_panel(
             "Game", "game.gblorb", &meta, None, 0, area, None, &mut cover, entry_path, entry_path,
-            false, None, &cs, &mut buf, &mut Vec::new(), &mut resource_rects,
+            false, &app::picker::HintStatus::None, &cs, &mut buf, &mut Vec::new(), &mut resource_rects,
         );
         assert_eq!(resource_rects.len(), 1, "the Pict row is clickable");
         let (_, rref) = &resource_rects[0];
