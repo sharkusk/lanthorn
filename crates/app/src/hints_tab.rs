@@ -515,8 +515,15 @@ fn fill(buf: &mut Buffer, area: Rect, style: Style) {
 }
 
 /// Draw the tab into `area` (the Journal body) and record where things landed.
-pub fn draw(state: &AppState, area: Rect, buf: &mut Buffer) {
+pub fn draw(state: &AppState, outer: Rect, buf: &mut Buffer) {
     let st = Styles::of(state);
+    // The frame (shared with the Inventory tab) first; everything below, and
+    // every hit-rect, lives in its inner rect.
+    let area = if outer.width == 0 || outer.height == 0 {
+        outer
+    } else {
+        crate::journal::frame_body(buf, outer, "Hints", &state.colors, state.hints_have_keyboard())
+    };
     let tab = &state.hints_tab;
     let mut hits = HintsHits { area, ..HintsHits::default() };
     if area.width == 0 || area.height == 0 {
@@ -844,6 +851,57 @@ mod tests {
         for (w, h) in [(1, 1), (3, 1), (20, 2), (10, 3)] {
             let _ = screen_rows(w, h, &state);
         }
+    }
+
+    // ── the frame (shared with the Inventory tab) ─────────────────────────────
+
+    fn frameless(state: &mut AppState) {
+        let scheme = crate::colors::GhosttyScheme::default();
+        let parsed = crate::theme::toml_schema::parse("[panel]\nborder = { style = \"none\" }\n").unwrap();
+        state.colors.theme = crate::theme::resolve::resolve_theme(&scheme, &parsed);
+    }
+
+    #[test]
+    fn the_body_is_framed_with_the_tab_name_and_the_download_button_sits_inside_it() {
+        let state = AppState::default();
+        let rows = screen_rows(60, 12, &state);
+        let cells: Vec<Vec<char>> = rows.iter().map(|r| r.chars().collect()).collect();
+        assert_eq!((cells[0][0], cells[0][59]), ('\u{250c}', '\u{2510}'), "top corners: {:?}", rows[0]);
+        assert_eq!((cells[11][0], cells[11][59]), ('\u{2514}', '\u{2518}'), "bottom corners");
+        assert_eq!(cells[5][0], '\u{2502}', "left edge");
+        assert!(rows[0].contains("Hints"), "tab name as the title: {:?}", rows[0]);
+        let dl = state.hints_tab.hits().download.expect("download button");
+        assert!(dl.x >= 1 && dl.y >= 1 && dl.right() <= 59 && dl.bottom() <= 11, "inside the frame: {dl:?}");
+        let mut state = state;
+        state.journal_tab = crate::journal::JournalTab::Hints;
+        let click = crossterm::event::MouseEvent {
+            kind: MouseEventKind::Down(MouseButton::Left),
+            column: dl.x + 1,
+            row: dl.y,
+            modifiers: crossterm::event::KeyModifiers::NONE,
+        };
+        assert!(matches!(on_mouse(&mut state, &click), Some(HintMouse::Command(CMD_DOWNLOAD))));
+    }
+
+    #[test]
+    fn the_input_row_is_inside_the_frame() {
+        let Some(hs) = make_hint_session() else { return };
+        let state = tab_state(hs);
+        let rows = screen_rows(60, 12, &state);
+        let input = state.hints_tab.hits().input;
+        assert!(input.x >= 1 && input.right() <= 59 && input.bottom() <= 11, "{input:?}");
+        assert!(rows[11].starts_with('\u{2514}'), "bottom border below the input row");
+    }
+
+    #[test]
+    fn frameless_drops_the_frame_like_the_other_tabs() {
+        let mut state = AppState::default();
+        frameless(&mut state);
+        let rows = screen_rows(60, 12, &state);
+        // Like the Inventory tab: no border glyphs, the title becomes a plain header row.
+        assert!(rows.iter().all(|r| !r.contains('\u{250c}') && !r.contains('\u{2502}')), "{rows:?}");
+        assert!(rows[0].contains("Hints"), "{:?}", rows[0]);
+        assert!(rows.iter().any(|r| r.contains("Download hints")));
     }
 
     // ── key routing (ported from the retired modal) ───────────────────────────

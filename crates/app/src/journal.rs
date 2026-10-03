@@ -260,3 +260,26 @@ mod tests {
         assert_eq!(narrow[1].text, " Room ");
     }
 }
+
+/// Frame a Journal tab body the way the Inventory tab frames its list: the shared
+/// themed panel (`panel.border`, `:active` when `highlighted`), the tab's name as
+/// the title strip, and a `panel.border` of `none` (frameless) dropping the
+/// border exactly as it does for the other tabs. Returns the inner content rect.
+pub fn frame_body(buf: &mut Buffer, area: Rect, title: &str, colors: &ColorScheme, highlighted: bool) -> Rect {
+    use crate::render::paneframe::{InsetSegment, PaneGlyphs};
+    use crate::render::panel::{draw_panel, PanelSpec, PanelStrip};
+    let style = colors.theme.get("inventory_panel").style;
+    let border_selector = if highlighted { "panel.border:active" } else { "panel.border" };
+    let border_color = if highlighted { colors.theme.get("panel.border:active").style } else { style };
+    let spec = PanelSpec {
+        area,
+        border_selector,
+        border_color: Some(border_color),
+        border_style: None,
+        glyphs: &PaneGlyphs::default(),
+        header_on: true,
+        strip: Some(PanelStrip { segments: &[InsetSegment { text: title, active: false }], base: style, active: style }),
+        body_fill: None,
+    };
+    draw_panel(buf, &spec, &colors.theme).content
+}

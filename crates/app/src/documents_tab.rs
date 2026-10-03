@@ -737,8 +737,15 @@ fn put_link(buf: &mut Buffer, rect: Rect, text: &str, url: &str, style: Style) {
 }
 
 /// Draw the tab into `area` (the Journal body) and record where things landed.
-pub fn draw(state: &AppState, area: Rect, buf: &mut Buffer) {
+pub fn draw(state: &AppState, outer: Rect, buf: &mut Buffer) {
     let st = Styles::of(state);
+    // The frame (shared with the Inventory tab) first; everything below, and
+    // every hit-rect, lives in its inner rect.
+    let area = if outer.width == 0 || outer.height == 0 {
+        outer
+    } else {
+        crate::journal::frame_body(buf, outer, "Documents", &state.colors, false)
+    };
     let tab = &state.documents_tab;
     let mut hits = DocHits { area, ..DocHits::default() };
     if area.width == 0 || area.height == 0 {
@@ -1001,6 +1008,38 @@ mod tests {
         s
     }
 
+    // ── the frame (shared with the Inventory tab) ─────────────────────────────
+
+    #[test]
+    fn the_body_is_framed_with_the_tab_name_and_content_sits_inside_it() {
+        let (t, _d) = tab_with(&[("a.txt", b"x")]);
+        let s = state_with(t);
+        let rows: Vec<Vec<char>> = text_of(&render(&s, 60, 10)).lines().map(|r| r.chars().collect()).collect();
+        assert_eq!((rows[0][0], rows[0][59]), ('\u{250c}', '\u{2510}'));
+        assert_eq!((rows[9][0], rows[9][59]), ('\u{2514}', '\u{2518}'));
+        assert_eq!(rows[4][0], '\u{2502}');
+        assert!(rows[0].iter().collect::<String>().contains("Documents"));
+        let h = s.documents_tab.hits();
+        let row = h.rows[0].1;
+        assert!(row.x >= 1 && row.right() <= 59 && row.y >= 1 && row.bottom() <= 9, "{row:?}");
+        let dl = h.download.unwrap();
+        assert!(dl.x >= 1 && dl.y >= 1 && dl.bottom() <= 9, "{dl:?}");
+    }
+
+    #[test]
+    fn frameless_drops_the_frame_like_the_other_tabs() {
+        let (t, _d) = tab_with(&[("a.txt", b"x")]);
+        let mut s = state_with(t);
+        let scheme = crate::colors::GhosttyScheme::default();
+        let parsed = crate::theme::toml_schema::parse("[panel]\nborder = { style = \"none\" }\n").unwrap();
+        s.colors.theme = crate::theme::resolve::resolve_theme(&scheme, &parsed);
+        let out = text_of(&render(&s, 60, 10));
+        // Like the Inventory tab: no border glyphs, the title becomes a plain header row.
+        assert!(!out.contains('\u{250c}') && !out.contains('\u{2502}'), "{out}");
+        assert!(out.lines().next().unwrap().contains("Documents"), "{out}");
+        assert!(out.contains("a.txt"));
+    }
+
     #[test]
     fn utf8_decodes_as_is_and_other_bytes_fall_back_to_cp437() {
         assert_eq!(decode_text("café ☺".as_bytes(), false), "café ☺");
@@ -1144,7 +1183,7 @@ mod tests {
         let (t, dir) = tab_with(&[("a.txt", b"x")]);
         let s = state_with(t);
         let buf = render(&s, 70, 8);
-        let first: String = (0..70).map(|x| buf[(x, 0)].symbol().to_string()).collect();
+        let first: String = (0..70).map(|x| buf[(x, 1)].symbol().to_string()).collect();
         assert!(first.contains("\x1b]8;;file://"), "{first:?}");
         assert!(s.documents_tab.hits().path_link.unwrap().1.starts_with("file://"));
         let _ = dir;
@@ -1382,13 +1421,13 @@ mod tests {
         let mut m = Mapper::default();
         apply_action(Action::DocTabOpen(None), &mut s, &mut m);
         assert!(matches!(s.documents_tab.view, DocView::Text(_)));
-        let _ = render(&s, 40, 10);
+        let _ = render(&s, 40, 12);
         apply_action(Action::DocTabScroll(5), &mut s, &mut m);
         let DocView::Text(p) = &s.documents_tab.view else { panic!("pager") };
         assert_eq!(p.scroll.get(), 5);
         apply_action(Action::DocTabPage(1), &mut s, &mut m);
         let DocView::Text(p) = &s.documents_tab.view else { panic!("pager") };
-        assert_eq!(p.scroll.get(), 5 + 8, "a page is the viewport less one line (9 body rows here)");
+        assert_eq!(p.scroll.get(), 5 + 8, "a page is the viewport less one line (9 body rows here: 12 less the frame and the title)");
         apply_action(Action::DocTabClose, &mut s, &mut m);
         assert!(matches!(s.documents_tab.view, DocView::List));
     }
