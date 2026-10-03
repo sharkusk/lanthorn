@@ -4155,7 +4155,13 @@ impl AppState {
     /// draws a caret or dims an input row asks this, never `focus` alone — so the
     /// keyboard can never be in a window the player cannot see (SQ-0599's rule).
     pub fn hints_have_keyboard(&self) -> bool {
-        self.focus == Focus::Hints && self.hints_tab_visible() && self.overlays.hints.is_some()
+        self.focus == Focus::Hints && self.hints_tab_visible() && self.hints_tab_interactive()
+    }
+
+    /// Whether the Hints tab has something to focus: a running session, or the
+    /// chooser's rows (SQ-1690).
+    pub fn hints_tab_interactive(&self) -> bool {
+        self.overlays.hints.is_some() || matches!(self.hints_tab.phase, crate::hints_tab::Phase::Choose(_))
     }
 
     /// Show `tab` in the Journal, revealing the Journal first if the layout had
@@ -5126,7 +5132,7 @@ impl AppState {
     pub fn cycle_focus(&mut self, forward: bool) {
         // Stops after the story pane (position 0): the hint session's input while
         // the Hints tab is on screen (SQ-1685), then the inspector's windows.
-        let hints = self.hints_tab_visible() && self.overlays.hints.is_some();
+        let hints = self.hints_tab_visible() && self.hints_tab_interactive();
         let extra = if self.debug.is_some() {
             crate::debug_panel::WINDOW_TABS.len() // one stop per debug window
         } else {

@@ -15,33 +15,48 @@
 //! matching only): `resolve_hint_source` also looks inside zips and the
 //! story's own container, and is the one place a host must ask.
 
-use std::path::Path;
+use std::path::{Path, PathBuf};
 
 use crate::config::Config;
-use crate::hints::{self, HintIndex, HintResolution};
+use crate::hints::{self, HintIndex, HintResolution, HintStory};
 use crate::session::{GameSession, InputKind};
 use crate::state::{HintSession, HintSource};
 
 /// Whether [`open`] would find a hint source to boot, without booting one.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub enum HintAvailability {
     /// A hint file resolves; `open` will attempt to boot it.
     Available,
+    /// Several hint files tie and the player must pick one (SQ-1690); `open`
+    /// returns `Ok(None)` until a pick is [`remember`]ed. The candidates are
+    /// absolute paths, in a stable order.
+    Choose(Vec<PathBuf>),
     /// No hint source resolves automatically; `open` returns `Ok(None)`.
     None,
 }
 
-/// Whether a hint source resolves for `story_path`/`ifid` — the SAME question
+/// Whether a hint source resolves for `story_path`/`story` — the SAME question
 /// [`open`] itself asks via [`hints::resolve_hint_source`], so this can never
 /// say yes to a story `open` then fails to find anything for (or vice versa).
+/// `story` carries the IFID, the title and the game's documents folder, which is
+/// searched first (SQ-1690).
 ///
 /// Cheap: resolution reads the index and the filesystem (directory listing,
 /// maybe a zip's entry table) but never boots a VM.
-pub fn available(story_path: &Path, ifid: &str, title: &str, index: &HintIndex) -> HintAvailability {
-    match hints::resolve_hint_source(story_path, ifid, title, index) {
+pub fn available(story_path: &Path, story: HintStory<'_>, index: &HintIndex) -> HintAvailability {
+    match hints::resolve_hint_source(story_path, story, index) {
         HintResolution::File(_) | HintResolution::ZipEntry { .. } => HintAvailability::Available,
+        HintResolution::Choose(c) => HintAvailability::Choose(c),
         HintResolution::AskUser | HintResolution::None => HintAvailability::None,
     }
+}
+
+/// Remember that `chosen` is the hint file for `ifid` (the answer to a
+/// [`HintAvailability::Choose`]): the same per-IFID association table
+/// ([`hints::save_hint_assoc`], `<user_dir>/hints/index.toml`) every other
+/// resolution reads, so the next [`available`]/[`open`] finds it.
+pub fn remember(user_dir: &Path, ifid: &str, chosen: &Path) -> std::io::Result<()> {
+    hints::save_hint_assoc(user_dir, ifid, chosen)
 }
 
 /// Why [`open`] could not hand back a booted hint session, once a hint source
@@ -72,37 +87,46 @@ impl std::fmt::Display for HintOpenError {
 
 impl std::error::Error for HintOpenError {}
 
-/// The TUI's status text for [`open`] returning `Ok(None)` — no hint source
-/// resolved automatically — carried here so a host needs no separate copy of
-/// the wording.
-pub const NO_HINT_MESSAGE: &str =
-    "no hint file found — place <story>.hints.z5 next to the story, or use /hints <path>";
+/// The TUI's text for [`open`] returning `Ok(None)` — no hint source resolved
+/// automatically (SQ-1690). `documents` is the game's documents folder when it is
+/// linked to IFDB (see [`HintStory::documents`]); `None` means unlinked, and the
+/// message says to link first. Carried here so a host needs no copy of the wording.
+pub fn no_hint_message(documents: Option<&Path>) -> String {
+    match documents {
+        Some(dir) => format!(
+            "no hint file found — put a hint file (a Z-code .z5, such as zork1inv.z5) in this game's documents folder, {}, or use Download hints",
+            dir.display()
+        ),
+        None => "no hint file found — link this game to IFDB so it has a documents folder to put a hint file in, or use Download hints".to_string(),
+    }
+}
 
 /// Resolve and boot `story_path`'s hint session.
 ///
-/// `ifid`/`title` are the story's own (the mounted story's, for a disk image).
+/// `story` is the story's own IFID/title (the mounted story's, for a disk image)
+/// plus its documents folder, searched first.
 /// `index` is the loaded per-IFID association table ([`hints::load_hint_index`]);
 /// `dict_words` is the STORY's OWN dictionary (not the hint file's) — it drives
 /// [`hints::story_supports_hint`], which decides `HintSession::builtin_hint`
 /// (the "this game has its own hints — type HINT" suggestion).
 ///
 /// - `Ok(None)`: resolution found nothing to open automatically
-///   ([`HintResolution::AskUser`]/[`HintResolution::None`]) — [`NO_HINT_MESSAGE`]
-///   is the TUI's status text for it.
+///   ([`HintResolution::AskUser`]/[`HintResolution::None`]) or a choice is
+///   pending ([`HintAvailability::Choose`]) — [`no_hint_message`] is the TUI's
+///   text for the former.
 /// - `Err(_)`: a hint source resolved but could not become a running session.
 /// - `Ok(Some(_))`: a ready [`HintSession`], its InvisiClues narrow-screen
 ///   opening banner already skipped when `cfg.hint_skip_screen_warning` is on
 ///   and the boot output is that banner (see [`hint_opening`]).
 pub fn open(
     story_path: &Path,
-    ifid: &str,
-    title: &str,
+    story: HintStory<'_>,
     index: &HintIndex,
     dict_words: &[String],
     cfg: &Config,
 ) -> Result<Option<HintSession>, HintOpenError> {
     let builtin_hint = hints::story_supports_hint(dict_words.iter().cloned());
-    let resolution = hints::resolve_hint_source(story_path, ifid, title, index);
+    let resolution = hints::resolve_hint_source(story_path, story, index);
 
     let (bytes, label) = match resolution {
         HintResolution::File(p) => {
@@ -118,7 +142,7 @@ pub fn open(
             let label = entry.rsplit('/').next().unwrap_or(&entry).to_owned();
             (bytes, label)
         }
-        HintResolution::AskUser | HintResolution::None => return Ok(None),
+        HintResolution::Choose(_) | HintResolution::AskUser | HintResolution::None => return Ok(None),
     };
 
     let mut vm = GameSession::new(bytes, cfg.honor_game_colours, false, cfg.interpreter_number)

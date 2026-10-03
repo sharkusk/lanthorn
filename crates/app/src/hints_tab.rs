@@ -22,7 +22,7 @@
 //! drawn by [`crate::journal::draw_tab_bar`]).
 
 use std::cell::{Cell, RefCell};
-use std::path::Path;
+use std::path::{Path, PathBuf};
 
 use crossterm::event::{KeyCode, KeyEvent, KeyModifiers, MouseButton, MouseEvent, MouseEventKind};
 use ratatui::buffer::Buffer;
@@ -30,8 +30,9 @@ use ratatui::layout::Rect;
 use ratatui::style::{Modifier, Style};
 
 use crate::engine::Engine;
-use crate::hint_download::{HintDlOutcome, HintDownloader};
-use crate::host::hints::NO_HINT_MESSAGE;
+use crate::hint_download::{HintDest, HintDlOutcome, HintDownloader};
+use crate::hints::HintStory;
+use crate::host::hints::{no_hint_message, HintAvailability};
 use crate::render::transcript::wrap_line;
 use crate::state::{AppState, Focus, HintSession, HintSource};
 
@@ -50,9 +51,12 @@ pub enum Phase {
     NotStarted,
     /// `overlays.hints` holds the running session.
     Running,
-    /// Resolution found no hint file (a missing one and an ambiguous pair both
-    /// land here: today's `host::hints::open` answers `Ok(None)` for both).
+    /// Resolution found no hint file.
     NoHint,
+    /// Several hint files tie and the player picks one (SQ-1690): listed as rows,
+    /// clicked or chosen with Up/Down/Enter once the tab has the keyboard. The pick
+    /// is remembered per IFID.
+    Choose(Vec<PathBuf>),
     /// A hint file resolved but would not boot; the reason.
     Failed(String),
     /// The hint file quit (`@quit`). Showing the tab again starts it afresh.
@@ -68,6 +72,8 @@ pub struct HintsHits {
     pub input: Rect,
     /// The `[ Download hints… ]` button.
     pub download: Option<Rect>,
+    /// The chooser's rows, in candidate order (SQ-1690).
+    pub choices: Vec<Rect>,
     /// Largest transcript scroll offset of the last draw.
     pub max_scroll: u16,
 }
@@ -77,6 +83,13 @@ pub struct HintsTab {
     pub phase: Phase,
     /// What the button or a download last did, shown under the no-hint message.
     pub message: Option<String>,
+    /// The game's documents folder as of the last start, for the no-hint message
+    /// (`None`: not linked to IFDB).
+    pub docs: Option<PathBuf>,
+    /// The chooser's highlighted row.
+    pub choice: usize,
+    /// A hint file the player picked, to remember and open at the next start.
+    picked: Option<PathBuf>,
     downloader: HintDownloader,
     hits: RefCell<HintsHits>,
     max_scroll: Cell<u16>,
@@ -87,6 +100,9 @@ impl Default for HintsTab {
         HintsTab {
             phase: Phase::NotStarted,
             message: None,
+            docs: None,
+            choice: 0,
+            picked: None,
             downloader: HintDownloader::new(),
             hits: RefCell::new(HintsHits::default()),
             max_scroll: Cell::new(0),
@@ -109,16 +125,58 @@ impl HintsTab {
 
 // ── Starting, ending, downloading ────────────────────────────────────────────
 
+/// The running game's documents folder, existing or planned; `None` when the game
+/// is not linked to IFDB or the host has no library (SQ-1690). Loads the story's
+/// record, so callers ask only when they are about to start or download.
+pub fn game_documents_dir(state: &AppState, story_path: &Path) -> Option<PathBuf> {
+    let roots = state.data_roots.as_ref()?;
+    let entry = crate::picker::resolve_entry_from(story_path, state.source.disk_entry.as_deref(), roots)?;
+    crate::documents::locate(roots, entry.meta.ifdb_tuid.as_deref(), &entry.title).path().map(Path::to_path_buf)
+}
+
 /// Start the session the first time the tab is on screen. Called once per loop
 /// turn; `true` when something changed and a redraw is due.
 ///
-/// Resolution is [`crate::host::hints::open`] unchanged — this only decides WHEN.
+/// Resolution is [`crate::host::hints::open`] unchanged — this only decides WHEN,
+/// and asks [`crate::host::hints::available`] first so that a tie becomes the
+/// chooser ([`Phase::Choose`]) instead of "no hint file".
 pub fn ensure_started(state: &mut AppState, story_path: &Path, ifid: &str) -> bool {
-    if !state.hints_tab_visible() || state.hints_tab.phase != Phase::NotStarted {
+    let tab = &state.hints_tab;
+    if !state.hints_tab_visible() || (tab.phase != Phase::NotStarted && tab.picked.is_none()) {
+        return false;
+    }
+    let documents = game_documents_dir(state, story_path);
+    ensure_started_in(state, story_path, ifid, documents.as_deref())
+}
+
+/// [`ensure_started`] with the game's documents folder already known (the seam the
+/// tests use; `documents` is what [`game_documents_dir`] answers).
+pub fn ensure_started_in(state: &mut AppState, story_path: &Path, ifid: &str, documents: Option<&Path>) -> bool {
+    if !state.hints_tab_visible() {
+        return false;
+    }
+    if let Some(picked) = state.hints_tab.picked.take() {
+        match crate::host::hints::remember(&state.config.user_dir, ifid, &picked) {
+            Ok(()) => state.hints_tab.phase = Phase::NotStarted,
+            Err(e) => {
+                state.hints_tab.phase = Phase::Failed(format!("hints: cannot remember the choice: {e}"));
+                return true;
+            }
+        }
+    }
+    if state.hints_tab.phase != Phase::NotStarted {
         return false;
     }
     let index = crate::hints::load_hint_index(&state.config.user_dir);
-    match crate::host::hints::open(story_path, ifid, &state.title, &index, &state.dict_words, &state.config) {
+    let title = state.title.clone();
+    let story = HintStory::new(ifid, &title).with_documents(documents);
+    state.hints_tab.docs = documents.map(Path::to_path_buf);
+    if let HintAvailability::Choose(candidates) = crate::host::hints::available(story_path, story, &index) {
+        state.hints_tab.choice = 0;
+        state.hints_tab.phase = Phase::Choose(candidates);
+        return true;
+    }
+    match crate::host::hints::open(story_path, story, &index, &state.dict_words, &state.config) {
         Ok(Some(session)) => {
             state.overlays.hints = Some(session);
             state.hints_tab.phase = Phase::Running;
@@ -127,6 +185,22 @@ pub fn ensure_started(state: &mut AppState, story_path: &Path, ifid: &str) -> bo
         Err(e) => state.hints_tab.phase = Phase::Failed(e.to_string()),
     }
     true
+}
+
+/// A hint program was opened from the Documents tab (SQ-1690): show the Hints tab
+/// running THAT file, starting (or restarting) the session as needed. Like the tab
+/// click and Alt+4 it does not move the keyboard; the loop's next turn starts the
+/// session, remembering the file as this game's hint file.
+pub fn show_program(state: &mut AppState, path: PathBuf) {
+    let name = path.file_name().and_then(|n| n.to_str());
+    let already = state.hints_tab.phase == Phase::Running
+        && state.overlays.hints.as_ref().is_some_and(|hs| Some(hs.label.as_str()) == name);
+    if !already {
+        state.overlays.hints = None;
+        state.hints_tab.phase = Phase::NotStarted;
+        state.hints_tab.picked = Some(path);
+    }
+    state.set_journal_tab(crate::journal::JournalTab::Hints);
 }
 
 /// `open-hints` / Action::OpenHints: show the Hints tab and start its session if
@@ -145,9 +219,16 @@ fn end_session(state: &mut AppState) {
     }
 }
 
-/// `download-hints` for the running game: fetch a matching InvisiClues file beside
-/// the story. The result arrives through [`poll_download`].
+/// `download-hints` for the running game: fetch a matching InvisiClues file into
+/// its documents folder when it is linked to IFDB, else beside the story. The
+/// result arrives through [`poll_download`].
 pub fn start_download(state: &mut AppState, story_path: &Path) {
+    let documents = game_documents_dir(state, story_path);
+    start_download_in(state, story_path, documents);
+}
+
+/// [`start_download`] with the documents folder already known.
+pub fn start_download_in(state: &mut AppState, story_path: &Path, documents: Option<PathBuf>) {
     let line = if state.hints_tab.downloader.busy() {
         "Already downloading hints…".to_string()
     } else if state.hints_tab.phase == Phase::Running {
@@ -156,7 +237,7 @@ pub fn start_download(state: &mut AppState, story_path: &Path) {
         match crate::hints::hint_download_for(&state.ifid) {
             None => "No InvisiClues found for this story".to_string(),
             Some(dl) => {
-                let dest = story_path.with_file_name(&dl.filename);
+                let dest = HintDest::for_story(story_path, &dl.filename, documents);
                 let title = story_path.file_stem().and_then(|s| s.to_str()).unwrap_or("this story").to_owned();
                 state.hints_tab.downloader.start(
                     dl.url,
@@ -173,8 +254,8 @@ pub fn start_download(state: &mut AppState, story_path: &Path) {
     state.set_status(line);
 }
 
-/// Drain finished downloads. A completed one wrote a sidecar beside the story, so
-/// the tab asks to resolve again. `true` when a redraw is due.
+/// Drain finished downloads. A completed one wrote a hint file (into the documents
+/// folder or beside the story), so the tab asks to resolve again. `true` when a redraw is due.
 pub fn poll_download(state: &mut AppState) -> bool {
     let mut changed = false;
     for r in state.hints_tab.downloader.drain() {
@@ -278,6 +359,19 @@ pub fn on_key(state: &mut AppState, key: KeyEvent) -> KeyOutcome {
     if key.modifiers.intersects(KeyModifiers::CONTROL | KeyModifiers::ALT) {
         return KeyOutcome::PassThrough;
     }
+    if let Phase::Choose(candidates) = &state.hints_tab.phase {
+        let last = candidates.len().saturating_sub(1);
+        let current = state.hints_tab.choice.min(last);
+        match key.code {
+            KeyCode::Up => state.hints_tab.choice = current.saturating_sub(1),
+            KeyCode::Down => state.hints_tab.choice = (current + 1).min(last),
+            KeyCode::Enter => state.hints_tab.picked = candidates.get(current).cloned(),
+            KeyCode::Esc => state.focus = Focus::Game,
+            KeyCode::Tab | KeyCode::BackTab => state.cycle_focus(key.code == KeyCode::Tab),
+            _ => {}
+        }
+        return KeyOutcome::Handled;
+    }
     let anim = state.config.animation.clone();
     let max = state.hints_tab.max_scroll.get();
     let Some(hs) = state.overlays.hints.as_mut() else {
@@ -360,7 +454,13 @@ pub fn on_mouse(state: &mut AppState, m: &MouseEvent) -> Option<HintMouse> {
             if hits.download.is_some_and(|r| r.contains(pt)) {
                 return Some(HintMouse::Command(CMD_DOWNLOAD));
             }
-            if state.overlays.hints.is_some() && state.hints_tab.phase == Phase::Running {
+            if let Phase::Choose(candidates) = &state.hints_tab.phase {
+                if let Some(i) = hits.choices.iter().position(|r| r.contains(pt)) {
+                    state.hints_tab.choice = i;
+                    state.hints_tab.picked = candidates.get(i).cloned();
+                }
+                state.focus = Focus::Hints;
+            } else if state.overlays.hints.is_some() && state.hints_tab.phase == Phase::Running {
                 state.focus = Focus::Hints;
             }
             Some(HintMouse::Handled)
@@ -436,7 +536,8 @@ pub fn draw(state: &AppState, area: Rect, buf: &mut Buffer) {
             buf,
             &mut hits,
         ),
-        _ => draw_notice(state, NO_HINT_MESSAGE, &st, area, buf, &mut hits),
+        (Phase::Choose(candidates), _) => draw_choose(state, candidates, &st, area, buf, &mut hits),
+        _ => draw_notice(state, &no_hint_message(tab.docs.as_deref()), &st, area, buf, &mut hits),
     }
     tab.max_scroll.set(hits.max_scroll);
     *tab.hits.borrow_mut() = hits;
@@ -470,6 +571,43 @@ fn draw_notice(state: &AppState, text: &str, st: &Styles, area: Rect, buf: &mut 
             crate::render::draw_str_clipped(buf, x, y, &line, st.nohint, area);
             y += 1;
         }
+    }
+}
+
+/// The chooser (SQ-1690): the tied candidates as rows under one explaining line.
+fn draw_choose(
+    state: &AppState,
+    candidates: &[PathBuf],
+    st: &Styles,
+    area: Rect,
+    buf: &mut Buffer,
+    hits: &mut HintsHits,
+) {
+    let x = area.x + 1;
+    let w = area.width.saturating_sub(2).max(1) as usize;
+    let mut y = area.y;
+    let intro = "Several hint files could be this game's \u{2014} pick one (click it, or Up/Down and Enter once the tab has the keyboard):";
+    for line in wrap_line(intro, w as u16) {
+        if y >= area.bottom() {
+            return;
+        }
+        crate::render::draw_str_clipped(buf, x, y, &line, st.nohint, area);
+        y += 1;
+    }
+    y += 1;
+    let focused = state.hints_have_keyboard();
+    for (i, path) in candidates.iter().enumerate() {
+        if y >= area.bottom() {
+            break;
+        }
+        let name = path.file_name().and_then(|n| n.to_str()).unwrap_or("?");
+        let selected = i == state.hints_tab.choice;
+        let label = format!(" {} {} ", if selected { '\u{25b8}' } else { ' ' }, name);
+        let style = if selected && focused { st.button.add_modifier(Modifier::REVERSED) } else { st.button };
+        let width = (crate::textwidth::str_cells(&label) as u16).min(area.right().saturating_sub(x));
+        crate::render::draw_str_clipped(buf, x, y, &label, style, area);
+        hits.choices.push(Rect::new(x, y, width, 1));
+        y += 1;
     }
 }
 

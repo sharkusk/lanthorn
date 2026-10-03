@@ -65,6 +65,7 @@ use std::path::Path;
 use app::archive::{self, Meta, SaveTrigger};
 use app::engine::Engine;
 use app::hints;
+use app::hints::HintStory;
 use app::host::hints::{available, open, HintAvailability};
 use app::config::Config;
 use app::ifid::compute_ifid;
@@ -198,12 +199,12 @@ fn check_hints_machinery_agrees(story_path: &Path, story_bytes: &[u8]) {
     let index = hints::load_hint_index(&home);
 
     assert_eq!(
-        available(story_path, &ifid, "", &index),
+        available(story_path, HintStory::new(&ifid, ""), &index),
         HintAvailability::None,
         "Adventureland carries no hint sidecar anywhere lanthorn looks"
     );
     let cfg = Config::default();
-    let result = open(story_path, &ifid, "", &index, &[], &cfg).expect("no hint source is not an error");
+    let result = open(story_path, HintStory::new(&ifid, ""), &index, &[], &cfg).expect("no hint source is not an error");
     assert!(result.is_none(), "open() finds nothing, exactly as available() said");
 }
 

@@ -23,7 +23,8 @@ use std::path::{Path, PathBuf};
 
 use app::config::Config;
 use app::hints;
-use app::host::hints::{available, open, HintAvailability, NO_HINT_MESSAGE};
+use app::hints::HintStory;
+use app::host::hints::{available, no_hint_message, open, HintAvailability};
 use app::ifid::compute_ifid;
 
 /// The real `stories/` directory (not the fetched-fixtures one): the hint
@@ -63,13 +64,13 @@ fn available_and_open_agree_on_zork1_izm_and_skip_its_banner() {
     let index = empty_index();
 
     assert_eq!(
-        available(&story_path, &ifid, "", &index),
+        available(&story_path, HintStory::new(&ifid, ""), &index),
         HintAvailability::Available,
         "zork1izm.z5 sits beside zork1-r88-s840726.z3, so a hint source resolves"
     );
 
     let cfg = Config::default();
-    let session = open(&story_path, &ifid, "", &index, &[], &cfg)
+    let session = open(&story_path, HintStory::new(&ifid, ""), &index, &[], &cfg)
         .expect("a resolved hint source boots")
         .expect("available() said yes, so open() must find the same source");
 
@@ -116,13 +117,13 @@ fn available_and_open_agree_on_zork2_inv_slag_naming() {
     let index = empty_index();
 
     assert_eq!(
-        available(&story_path, &ifid, "", &index),
+        available(&story_path, HintStory::new(&ifid, ""), &index),
         HintAvailability::Available,
         "zork2inv.z5 sits beside zork2-r48-s840904.z3, so a hint source resolves"
     );
 
     let cfg = Config::default();
-    let session = open(&story_path, &ifid, "", &index, &[], &cfg)
+    let session = open(&story_path, HintStory::new(&ifid, ""), &index, &[], &cfg)
         .expect("a resolved hint source boots")
         .expect("available() said yes, so open() must find the same source");
 
@@ -150,16 +151,14 @@ fn a_story_with_no_hint_sidecar_says_no_and_returns_ok_none() {
     let index = empty_index();
 
     assert_eq!(
-        available(&story_path, &ifid, "", &index),
+        available(&story_path, HintStory::new(&ifid, ""), &index),
         HintAvailability::None,
         "Tangle.z5 has no hint sidecar anywhere lanthorn looks"
     );
 
     let cfg = Config::default();
-    let result = open(&story_path, &ifid, "", &index, &[], &cfg).expect("no hint source is not an error");
+    let result = open(&story_path, HintStory::new(&ifid, ""), &index, &[], &cfg).expect("no hint source is not an error");
     assert!(result.is_none(), "open() finds nothing, exactly as available() said");
-    // The TUI shows exactly this text on `Ok(None)` (main.rs's `open_hints`).
-    assert_eq!(NO_HINT_MESSAGE, "no hint file found — place <story>.hints.z5 next to the story, or use /hints <path>");
 }
 
 #[test]
@@ -194,13 +193,13 @@ fn solid_gold_release_is_not_treated_as_a_hint_sidecar() {
     let ifid = compute_ifid(&story_bytes);
     let index = empty_index();
     assert_eq!(
-        available(&plain_story, &ifid, "", &index),
+        available(&plain_story, HintStory::new(&ifid, ""), &index),
         HintAvailability::None,
         "a Solid Gold release beside the story must not be picked up as its hint sidecar"
     );
     let cfg = Config::default();
     let result =
-        open(&plain_story, &ifid, "", &index, &[], &cfg).expect("no hint source is not an error");
+        open(&plain_story, HintStory::new(&ifid, ""), &index, &[], &cfg).expect("no hint source is not an error");
     assert!(result.is_none(), "open() must not open the Solid Gold release as a hint VM");
 
     let _ = std::fs::remove_dir_all(&home);
@@ -222,10 +221,97 @@ fn zork1_adf_finds_its_own_hint_file_in_game() {
     assert_eq!(ifid, "ZCODE-88-840726-A129", "mounted story IFID, not the filename");
     let index = empty_index();
 
-    assert_eq!(available(&adf, &ifid, "", &index), HintAvailability::Available);
-    let session = open(&adf, &ifid, "", &index, &[], &Config::default())
+    assert_eq!(available(&adf, HintStory::new(&ifid, ""), &index), HintAvailability::Available);
+    let session = open(&adf, HintStory::new(&ifid, ""), &index, &[], &Config::default())
         .expect("a resolved hint source boots")
         .expect("available() said yes, so open() must find the same source");
     assert_eq!(session.label, "zork1izm.z5");
     eprintln!("RAN: zork1 ADF -> {}", session.label);
 }
+
+// ── SQ-1690: the per-game documents folder, the chooser, the message ─────────
+
+/// A scratch library: a story, a bootable stand-in hint program (the fetched
+/// `minizork` fixture under a hint-file name) and an empty documents folder.
+/// `None` without the fixture (CI fetches it).
+struct DocsLib {
+    story: PathBuf,
+    docs: PathBuf,
+    user: PathBuf,
+    hint_bytes: Vec<u8>,
+}
+
+fn docs_lib(tag: &str) -> Option<DocsLib> {
+    let hint_bytes = std::fs::read(crate::fixture_paths::fixture_path("minizork-r34-s871124.z3")).ok()?;
+    let lib = app::scratch_dir(tag);
+    let story = lib.join("zork1.z3");
+    std::fs::write(&story, &hint_bytes).unwrap();
+    let docs = lib.join("Zork [tuid]");
+    std::fs::create_dir_all(&docs).unwrap();
+    let user = app::scratch_dir("sq1690-user");
+    Some(DocsLib { story, docs, user, hint_bytes })
+}
+
+fn label_of(session: &app::state::HintSession) -> &str {
+    &session.label
+}
+
+#[test]
+fn sq1690_the_documents_folder_is_searched_first_and_a_lone_odd_name_is_accepted() {
+    let Some(l) = docs_lib("sq1690-host-first") else { return };
+    // The old home also has a sidecar; the folder must win. Its name matches
+    // nothing about the story: the TUID proves the game.
+    std::fs::write(l.story.with_file_name("zork1inv.z3"), &l.hint_bytes).unwrap();
+    std::fs::write(l.docs.join("clues-from-the-web-hints.z3"), &l.hint_bytes).unwrap();
+    let index = hints::load_hint_index(&l.user);
+    let story = HintStory::new("IFID", "Zork").with_documents(Some(&l.docs));
+    assert_eq!(available(&l.story, story, &index), HintAvailability::Available);
+    let session = open(&l.story, story, &index, &[], &Config::default()).unwrap().expect("opens");
+    assert_eq!(label_of(&session), "clues-from-the-web-hints.z3", "documents first");
+}
+
+#[test]
+fn sq1690_an_empty_documents_folder_falls_back_to_the_sidecar_beside_the_story() {
+    let Some(l) = docs_lib("sq1690-host-fallback") else { return };
+    std::fs::write(l.story.with_file_name("zork1inv.z3"), &l.hint_bytes).unwrap();
+    let index = hints::load_hint_index(&l.user);
+    let story = HintStory::new("IFID", "Zork").with_documents(Some(&l.docs));
+    let session = open(&l.story, story, &index, &[], &Config::default()).unwrap().expect("opens");
+    assert_eq!(label_of(&session), "zork1inv.z3");
+}
+
+#[test]
+fn sq1690_tied_candidates_are_offered_and_a_pick_is_remembered() {
+    let Some(l) = docs_lib("sq1690-host-choose") else { return };
+    for n in ["aaa-inv.z3", "bbb-inv.z3"] {
+        std::fs::write(l.docs.join(n), &l.hint_bytes).unwrap();
+    }
+    let index = hints::load_hint_index(&l.user);
+    let story = HintStory::new("IFID", "Zork").with_documents(Some(&l.docs));
+    let HintAvailability::Choose(candidates) = available(&l.story, story, &index) else {
+        panic!("two unrankable hint programs are a choice")
+    };
+    assert_eq!(candidates, vec![l.docs.join("aaa-inv.z3"), l.docs.join("bbb-inv.z3")]);
+    assert!(open(&l.story, story, &index, &[], &Config::default()).unwrap().is_none(), "nothing opens until picked");
+
+    app::host::hints::remember(&l.user, "IFID", &candidates[1]).unwrap();
+    let index = hints::load_hint_index(&l.user); // a fresh load, as the next run does
+    assert_eq!(available(&l.story, story, &index), HintAvailability::Available);
+    let session = open(&l.story, story, &index, &[], &Config::default()).unwrap().expect("opens");
+    assert_eq!(label_of(&session), "bbb-inv.z3");
+}
+
+#[test]
+fn sq1690_the_no_hint_message_names_the_folder_or_says_to_link_first() {
+    let linked = no_hint_message(Some(Path::new("/lib/documents/Zork [t]")));
+    assert!(linked.contains("/lib/documents/Zork [t]"), "{linked}");
+    assert!(linked.contains("documents folder"), "{linked}");
+    assert!(linked.contains("Download hints"), "{linked}");
+    let unlinked = no_hint_message(None);
+    assert!(unlinked.contains("link this game to IFDB"), "{unlinked}");
+    assert!(unlinked.contains("Download hints"), "{unlinked}");
+    for m in [&linked, &unlinked] {
+        assert!(!m.contains("/hints"), "the command that never existed is gone: {m}");
+    }
+}
+

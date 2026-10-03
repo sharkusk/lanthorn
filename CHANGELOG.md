@@ -31,6 +31,17 @@ while any such tag, or this Unreleased section, still exists.*
 
 - **Click a dotted "to/from" room on the map to jump there**: the map switches to
   that room's layer with the room selected.
+- **Hint files can live in the game's documents folder.** Drop an *InvisiClues* file
+  there and the Hints tab uses it for that game whatever it is called, across every
+  release and disk image; the old places (beside the story, zips, your remembered
+  choice) still work and nothing is moved. **Download hints** now saves into the
+  documents folder for a game linked to IFDB (beside the story otherwise). In the
+  Documents tab a hint file shows as "hint program — opens in Hints tab".
+- When **several hint files could be the game's**, the Hints tab now lists them so you
+  can pick one (click, or Tab / Up / Down / Enter) and remembers your choice, instead
+  of claiming there is no hint file. The "no hint file" message no longer points at
+  a command that does not exist: it names the game's documents folder, or tells you
+  to link the game to IFDB first.
 - Downloaded documents **keep IFDB's description**: each file in the Documents tab
   shows what IFDB said about it ("Walkthrough — Competition version") on a second
   line under its name, and files pulled out of a zip say which zip they came from.

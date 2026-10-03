@@ -125,6 +125,16 @@ pub enum Location {
     Missing(PathBuf),
 }
 
+impl Location {
+    /// The folder's path, existing or planned; `None` for an unlinked game.
+    pub fn path(&self) -> Option<&Path> {
+        match self {
+            Location::Unlinked => None,
+            Location::Exists(p) | Location::Missing(p) => Some(p),
+        }
+    }
+}
+
 /// Look up (never create) the folder state for a game.
 pub fn locate(roots: &DataRoots, tuid: Option<&str>, title: &str) -> Location {
     let Some(tuid) = tuid.filter(|t| valid_tuid(t)) else { return Location::Unlinked };
@@ -208,6 +218,12 @@ pub enum DocKind {
     Pdf,
     Image,
     Text,
+    /// An InvisiClues-style hint program (SQ-1690): a Z-code file the hint rules
+    /// ([`crate::hints::is_hint_program_bytes`]) recognise. Not paged as a
+    /// document: opening it shows the Hints tab. A variant rather than a flag
+    /// because it is decided by the same sniff as every other kind, and every
+    /// place that opens a document has to say what it does for it.
+    HintProgram,
     Other,
 }
 
@@ -230,6 +246,7 @@ const SNIFF_BYTES: usize = 8 * 1024;
 /// host holding the bytes already (a download, a zip entry) can classify without
 /// touching disk. `head` should be the file's first ~8 KB; more is ignored.
 ///
+/// 0. A hint program ([`crate::hints::is_hint_program_bytes`]) is [`DocKind::HintProgram`].
 /// 1. A known binary signature wins over the extension: `%PDF` is a PDF, PNG /
 ///    JPEG / GIF / WebP / TIFF are images, and ZIP, gzip, 7z and RAR are `Other`
 ///    (a `.txt` that is really a zip is not text).
@@ -249,6 +266,9 @@ pub fn sniff_kind_bytes(head: &[u8], name: &str) -> DocKind {
     let by_name = DocKind::of(name);
     if head.is_empty() {
         return by_name;
+    }
+    if crate::hints::is_hint_program_bytes(name, head) {
+        return DocKind::HintProgram;
     }
     if head.starts_with(b"%PDF") {
         return DocKind::Pdf;

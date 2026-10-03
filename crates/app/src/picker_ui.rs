@@ -3045,7 +3045,8 @@ pub(crate) fn run_story_picker(
             // Download a matching InvisiClues hint file for the
             // selected story (SQ-0445) when it has none locally — SLAG
             // (IF Archive) preferred, else the Internet Archive izm set.
-            // Saved beside the story; ignored while one is downloading.
+            // Saved in the IFDB-linked game's documents folder, else beside
+            // the story (SQ-1690); ignored while one is downloading.
             Some(app::browser::BrowserAction::DownloadHints) => {
                 if let Some(entry) = stories.get(list.selected).filter(|e| !e.is_folder() && !hint_dl.busy()) {
                     if entry.hint_sidecar.is_some() {
@@ -3053,7 +3054,13 @@ pub(crate) fn run_story_picker(
                     } else {
                         match app::hints::hint_download_for(&entry.meta.ifid) {
                             Some(dl) => {
-                                let dest = entry.path.with_file_name(&dl.filename);
+                                // SQ-1690: an IFDB-linked game's hints go in its
+                                // documents folder; any other beside the story.
+                                let documents =
+                                    app::documents::locate(roots, entry.meta.ifdb_tuid.as_deref(), &entry.title)
+                                        .path()
+                                        .map(|p| p.to_path_buf());
+                                let dest = app::hint_download::HintDest::for_story(&entry.path, &dl.filename, documents);
                                 progress_line =
                                     Some(format!("Downloading hints for {}…", entry.title));
                                 hint_dl.start(

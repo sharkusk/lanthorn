@@ -33,6 +33,7 @@ use app::archive::{self, Meta, SaveTrigger, SessionRecord};
 use app::config::Config;
 use app::engine::{Engine, StatusField, StatusModel};
 use app::hints;
+use app::hints::HintStory;
 use app::host::hints::{available, open, HintAvailability};
 use app::ifid::compute_ifid;
 use app::session::{
@@ -296,12 +297,12 @@ fn check_hints_machinery_agrees(story_path: &Path, story_bytes: &[u8]) {
     }
 
     assert_eq!(
-        available(story_path, &ifid, "", &index),
+        available(story_path, HintStory::new(&ifid, ""), &index),
         HintAvailability::Available,
         "hhgginv.z5 sits beside hitchhiker-r59-s851108.z3, so a hint source resolves"
     );
     let cfg = Config::default();
-    let session = open(story_path, &ifid, "", &index, &[], &cfg)
+    let session = open(story_path, HintStory::new(&ifid, ""), &index, &[], &cfg)
         .expect("a resolved hint source boots")
         .expect("available() said yes, so open() must find the same source");
     let opening = session.transcript.join("\n");

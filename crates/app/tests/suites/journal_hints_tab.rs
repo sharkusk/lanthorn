@@ -217,7 +217,8 @@ fn no_hint_file_shows_the_message_and_a_download_button() {
         let (buf, body) = draw_tab(&st);
         let shown = text_in(&buf, body);
         assert!(shown.contains("no hint file found"), "honor={honor}: {shown}");
-        assert!(shown.contains("/hints <path>"), "the manual route is named: {shown}");
+        assert!(!shown.contains("/hints"), "no advice about a command that does not exist: {shown}");
+        assert!(shown.contains("link this game to IFDB"), "unlinked: say to link first: {shown}");
         assert!(shown.contains("[ Download hints… ]"), "{shown}");
 
         let btn = st.hints_tab.hits().download.expect("the button is a hit target");
@@ -241,10 +242,10 @@ fn download_hints_is_one_command_in_the_game_and_the_browser() {
 }
 
 #[test]
-fn an_ambiguous_choice_has_no_picker_today_and_shows_the_no_hint_body() {
-    // Two story-less generic sidecars: `resolve_hint_source` answers AskUser, which
-    // `host::hints::open` reports as `Ok(None)` — the TUI has never had a chooser for
-    // it (the old `open_hints` carried a TODO). The tab shows the no-hint body.
+fn unrelated_generic_sidecars_are_not_a_choice_and_show_the_no_hint_body() {
+    // Two story-less generic sidecars beside an unrelated story: nothing says either
+    // is THIS game's, so the tab does not offer them (a shared stories folder would
+    // otherwise list every hint file in it).
     let dir = app::scratch_dir("journal-hints-ambiguous");
     for name in ["zork1inv.z5", "zork2inv.z5"] {
         std::fs::write(dir.join(name), b"x").unwrap();
@@ -254,9 +255,123 @@ fn an_ambiguous_choice_has_no_picker_today_and_shows_the_no_hint_body() {
     st.config.user_dir = dir;
     st.set_journal_tab(JournalTab::Hints);
     hints_tab::ensure_started(&mut st, &story, "AMBIG");
-    assert!(matches!(st.hints_tab.phase, Phase::NoHint | Phase::Failed(_)), "{:?}", st.hints_tab.phase);
+    assert_eq!(st.hints_tab.phase, Phase::NoHint);
     let (buf, body) = draw_tab(&st);
     assert!(text_in(&buf, body).contains("Download hints"));
+}
+
+#[test]
+fn a_linked_game_s_no_hint_body_names_its_documents_folder() {
+    let (mut st, story) = no_hint_state();
+    let docs = app::scratch_dir("journal-hints-docs-empty").join("Lonely [tuid]");
+    assert!(hints_tab::ensure_started_in(&mut st, &story, "NOPE", Some(&docs)));
+    assert_eq!(st.hints_tab.phase, Phase::NoHint);
+    let (buf, body) = draw_tab(&st);
+    let shown = text_in(&buf, body).replace(['\n'], "");
+    assert!(shown.contains("documents folder"), "{shown}");
+    assert!(shown.contains("Lonely [tuid]"), "the path is shown: {shown}");
+    assert!(!shown.contains("link this game to IFDB"), "{shown}");
+}
+
+// ── SQ-1690: documents folder first, and the chooser ─────────────────────────
+
+/// A state on the Hints tab with a documents folder holding `names` (each the
+/// minizork stand-in), or `None` without the fixture.
+fn with_docs(tag: &str, names: &[&str]) -> Option<(AppState, PathBuf, PathBuf)> {
+    let bytes = std::fs::read(fixture_path("minizork-r34-s871124.z3")).ok()?;
+    let dir = app::scratch_dir(tag);
+    let story = dir.join("story.z3");
+    std::fs::write(&story, &bytes).unwrap();
+    let docs = dir.join("Game [tuid]");
+    std::fs::create_dir_all(&docs).unwrap();
+    for n in names {
+        std::fs::write(docs.join(n), &bytes).unwrap();
+    }
+    let mut st = AppState::default();
+    st.config.user_dir = dir;
+    st.set_journal_tab(JournalTab::Hints);
+    Some((st, story, docs))
+}
+
+#[test]
+fn a_hint_program_in_the_documents_folder_starts_the_session() {
+    let Some((mut st, story, docs)) = with_docs("journal-hints-docs-first", &["whatever-hints.z3"]) else { return };
+    assert!(hints_tab::ensure_started_in(&mut st, &story, "IFID", Some(&docs)));
+    assert_eq!(st.hints_tab.phase, Phase::Running);
+    assert_eq!(st.overlays.hints.as_ref().unwrap().label, "whatever-hints.z3");
+}
+
+#[test]
+fn tied_hint_programs_show_a_chooser_that_a_click_resolves_and_remembers() {
+    for honor in [true, false] {
+        let Some((mut st, story, docs)) = with_docs("journal-hints-choose", &["aaa-inv.z3", "bbb-inv.z3"]) else { return };
+        st.config.honor_game_colours = honor;
+        assert!(hints_tab::ensure_started_in(&mut st, &story, "IFID", Some(&docs)));
+        assert!(matches!(&st.hints_tab.phase, Phase::Choose(c) if c.len() == 2), "{:?}", st.hints_tab.phase);
+        assert!(st.overlays.hints.is_none());
+
+        let (buf, body) = draw_tab(&st);
+        let shown = text_in(&buf, body);
+        assert!(shown.contains("aaa-inv.z3") && shown.contains("bbb-inv.z3"), "honor={honor}: {shown}");
+        let rows = st.hints_tab.hits().choices;
+        assert_eq!(rows.len(), 2);
+
+        // Click the second row: it is remembered per IFID and the session starts.
+        let click = mouse(MouseEventKind::Down(MouseButton::Left), rows[1].x + 1, rows[1].y);
+        assert_eq!(hints_tab::on_mouse(&mut st, &click), Some(HintMouse::Handled));
+        assert!(hints_tab::ensure_started_in(&mut st, &story, "IFID", Some(&docs)));
+        assert_eq!(st.hints_tab.phase, Phase::Running);
+        assert_eq!(st.overlays.hints.as_ref().unwrap().label, "bbb-inv.z3");
+        let index = app::hints::load_hint_index(&st.config.user_dir);
+        assert_eq!(index.get("IFID"), Some(docs.join("bbb-inv.z3")), "remembered in hints/index.toml");
+
+        // A fresh run resolves it straight away, no chooser.
+        let mut next = AppState::default();
+        next.config.user_dir = st.config.user_dir.clone();
+        next.set_journal_tab(JournalTab::Hints);
+        hints_tab::ensure_started_in(&mut next, &story, "IFID", Some(&docs));
+        assert_eq!(next.hints_tab.phase, Phase::Running);
+    }
+}
+
+#[test]
+fn the_chooser_takes_the_keyboard_modelessly_and_arrows_enter_and_esc_work() {
+    let Some((mut st, story, docs)) = with_docs("journal-hints-choose-keys", &["aaa-inv.z3", "bbb-inv.z3"]) else { return };
+    hints_tab::ensure_started_in(&mut st, &story, "IFID", Some(&docs));
+    // Showing the chooser does not move the keyboard; typing is the story's.
+    assert_eq!(st.focus, Focus::Game);
+    assert_eq!(hints_tab::on_key(&mut st, key(KeyCode::Down)), KeyOutcome::PassThrough);
+    // Tab (the ordinary focus cycle) brings the keyboard in, Esc gives it back.
+    st.cycle_focus(true);
+    assert_eq!(st.focus, Focus::Hints);
+    assert_eq!(hints_tab::on_key(&mut st, key(KeyCode::Down)), KeyOutcome::Handled);
+    assert_eq!(st.hints_tab.choice, 1);
+    assert_eq!(hints_tab::on_key(&mut st, key(KeyCode::Up)), KeyOutcome::Handled);
+    assert_eq!(hints_tab::on_key(&mut st, key(KeyCode::Down)), KeyOutcome::Handled);
+    assert_eq!(hints_tab::on_key(&mut st, key(KeyCode::Enter)), KeyOutcome::Handled);
+    hints_tab::ensure_started_in(&mut st, &story, "IFID", Some(&docs));
+    assert_eq!(st.overlays.hints.as_ref().unwrap().label, "bbb-inv.z3");
+
+    let Some((mut st2, story2, docs2)) = with_docs("journal-hints-choose-esc", &["aaa-inv.z3", "bbb-inv.z3"]) else { return };
+    hints_tab::ensure_started_in(&mut st2, &story2, "IFID", Some(&docs2));
+    st2.cycle_focus(true);
+    assert_eq!(hints_tab::on_key(&mut st2, key(KeyCode::Esc)), KeyOutcome::Handled);
+    assert_eq!(st2.focus, Focus::Game);
+}
+
+#[test]
+fn download_hints_for_a_linked_game_saves_into_its_documents_folder() {
+    // The destination rule the tab hands the downloader: documents folder when the
+    // game has one, beside the story otherwise (the finished-file behaviour is
+    // pinned in hint_download's own cases).
+    use app::hint_download::HintDest;
+    let story = std::path::Path::new("/lib/deadline.z3");
+    let docs = PathBuf::from("/docs/Deadline [t]");
+    assert!(matches!(
+        HintDest::for_story(story, "deadlineinv.z5", Some(docs)),
+        HintDest::Documents { filename, .. } if filename == "deadlineinv.z5"
+    ));
+    assert_eq!(HintDest::for_story(story, "deadlineinv.z5", None), HintDest::Beside("/lib/deadlineinv.z5".into()));
 }
 
 // ── Focus: who gets the keyboard ─────────────────────────────────────────────

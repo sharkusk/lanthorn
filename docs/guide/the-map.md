@@ -43,13 +43,17 @@ right-click menu does; Details opens the Room tab.
 Esc, clicking the room again, or clicking empty map space puts the card away; with
 nothing selected there is no card.
 
-**The Hints tab.** A game's *InvisiClues* file, if lanthorn finds one beside the
-story (or you have downloaded one), runs here in a window of its own: its topic
-menu on top, the clue text below, an input row at the bottom. It starts the first
-time you show the tab and keeps its place while you look at other tabs. With no hint
-file the tab says so and offers **Download hints…** (`/download-hints`, also
-`Shift+H` in the story browser). If the story ships its own `HINT` command, the tab
-points you at that too.
+**The Hints tab.** A game's *InvisiClues* file, if lanthorn finds one in the game's
+documents folder, beside the story (or you have downloaded one), runs here in a
+window of its own: its topic menu on top, the clue text below, an input row at the
+bottom. It starts the first time you show the tab and keeps its place while you look
+at other tabs. With no hint file the tab says so, names the game's documents folder
+(or says to link the game to IFDB first, if it is not linked) and offers **Download
+hints…** (`/download-hints`, also `Shift+H` in the story browser). If several hint
+files could be the game's, the tab lists them as rows: click one, or press **Tab** to
+give the tab the keyboard, **Up/Down** and **Enter**, and **Esc** to give it back.
+The pick is remembered for the game. If the story ships its own `HINT` command, the
+tab points you at that too.
 
 Who is typing? The keyboard stays with the story when you show the tab by clicking
 its label, pressing **Alt+4** or running `/open-hints`. It moves to the hint window
@@ -67,7 +71,9 @@ game's documents folder (see [getting started](getting-started.md)) is listed in
 the Documents tab with its kind and size, so you can read it without leaving the
 story. The header shows the folder as a link, with **Download documents…** to pull
 manuals and maps from IFDB and, when the folder does not exist yet, **Create
-documents folder**. A game that is not linked to IFDB says "Link to IFDB for a
+documents folder**. A hint file there (an *InvisiClues* program) is listed as
+"hint program — opens in Hints tab": opening it shows the Hints tab running that
+file, and the keyboard stays in the story. A game that is not linked to IFDB says "Link to IFDB for a
 documents folder"; an empty folder tells you to drop files in or download some.
 
 Click a row to select it and double-click to open it. Text opens in a pager that

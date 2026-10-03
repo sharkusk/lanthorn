@@ -31,6 +31,29 @@ pub enum HintDlOutcome {
     Failed(String),
 }
 
+/// Where a download is saved (SQ-1690).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum HintDest {
+    /// Beside the story, at this exact path: the unlinked game's home, as always.
+    Beside(PathBuf),
+    /// Into the IFDB-linked game's documents folder `dir` (created on demand),
+    /// through `documents::import`, so a copy already there is not duplicated and
+    /// a name clash with different bytes never overwrites.
+    Documents { dir: PathBuf, filename: String },
+}
+
+impl HintDest {
+    /// The destination for `filename` for the story at `story`: its documents
+    /// folder when the game has one (`documents` is its path, existing or not),
+    /// else beside the story.
+    pub fn for_story(story: &Path, filename: &str, documents: Option<PathBuf>) -> HintDest {
+        match documents {
+            Some(dir) => HintDest::Documents { dir, filename: filename.to_owned() },
+            None => HintDest::Beside(story.with_file_name(filename)),
+        }
+    }
+}
+
 /// One completed download, drained by the picker loop.
 #[derive(Debug, Clone)]
 pub struct HintDlResult {
@@ -40,7 +63,8 @@ pub struct HintDlResult {
     /// (SQ-0859): one compilation is several rows, and the path alone would
     /// badge whichever of them sorted first.
     pub disk_entry: Option<String>,
-    /// Where the file was (or would have been) saved, beside the story.
+    /// Where the file was (or would have been) saved: beside the story, or the
+    /// file in the documents folder that now holds these bytes.
     pub dest: PathBuf,
     /// The story's display title, for the status line.
     pub title: String,
@@ -72,7 +96,7 @@ impl HintDownloader {
     pub fn start(
         &mut self,
         url: String,
-        dest: PathBuf,
+        dest: HintDest,
         story: PathBuf,
         disk_entry: Option<String>,
         title: String,
@@ -80,9 +104,15 @@ impl HintDownloader {
         self.inflight += 1;
         let tx = self.tx.clone();
         thread::spawn(move || {
-            let outcome = match fetch_bytes(&url) {
-                Ok(bytes) => finalize_download(&bytes, &dest),
-                Err(e) => HintDlOutcome::Failed(e),
+            let (outcome, dest) = match fetch_bytes(&url) {
+                Ok(bytes) => finalize_into(&bytes, dest, &url, &title),
+                Err(e) => {
+                    let shown = match dest {
+                        HintDest::Beside(p) => p,
+                        HintDest::Documents { dir, filename } => dir.join(filename),
+                    };
+                    (HintDlOutcome::Failed(e), shown)
+                }
             };
             let _ = tx.send(HintDlResult { story, disk_entry, dest, title, outcome });
         });
@@ -115,6 +145,44 @@ fn fetch_bytes(url: &str) -> Result<Vec<u8>, String> {
         .limit(MAX_HINT)
         .read_to_vec()
         .map_err(|e| e.to_string())
+}
+
+/// Validate `bytes` and save them to `dest`; the path they ended up at comes back
+/// with the outcome. A documents-folder save stages the bytes in a private
+/// temporary folder and hands them to [`crate::documents::import_with`] (which
+/// creates the folder, de-duplicates and writes atomically).
+fn finalize_into(bytes: &[u8], dest: HintDest, url: &str, title: &str) -> (HintDlOutcome, PathBuf) {
+    use std::sync::atomic::{AtomicUsize, Ordering};
+    static NTH: AtomicUsize = AtomicUsize::new(0);
+    match dest {
+        HintDest::Beside(p) => (finalize_download(bytes, &p), p),
+        HintDest::Documents { dir, filename } => {
+            let planned = dir.join(&filename);
+            if !looks_like_zmachine(bytes) {
+                return (HintDlOutcome::Failed("downloaded file is not a Z-machine story".to_string()), planned);
+            }
+            let stage = std::env::temp_dir().join(format!(
+                "lanthorn-hint-{}-{}",
+                std::process::id(),
+                NTH.fetch_add(1, Ordering::Relaxed)
+            ));
+            let staged = stage.join(&filename);
+            let meta = crate::documents::DocMeta::now(
+                Some(format!("InvisiClues hints for {title}")),
+                None,
+                Some(url.to_owned()),
+                true,
+            );
+            let result = std::fs::create_dir_all(&stage)
+                .and_then(|()| std::fs::write(&staged, bytes))
+                .and_then(|()| crate::documents::import_with(&dir, &staged, Some(meta)));
+            let _ = std::fs::remove_dir_all(&stage);
+            match result {
+                Ok(done) => (HintDlOutcome::Done, done.entry().path.clone()),
+                Err(e) => (HintDlOutcome::Failed(format!("write failed: {e}")), planned),
+            }
+        }
+    }
 }
 
 /// Validate `bytes` as a Z-machine story and, if valid, write them to `dest`.
@@ -293,5 +361,37 @@ mod tests {
         let mut dl = HintDownloader::new();
         assert!(!dl.busy());
         assert!(dl.drain().is_empty());
+    }
+
+    /// SQ-1690: a download for an IFDB-linked game lands in its documents folder,
+    /// created on demand; a second download of the same bytes writes nothing.
+    #[test]
+    fn finalize_into_a_documents_folder_creates_it_and_deduplicates() {
+        let root = crate::scratch_dir("hintdl-docs");
+        let dir = root.join("Deadline [tuid1]");
+        let dest = || HintDest::Documents { dir: dir.clone(), filename: "deadlineinv.z5".into() };
+        let (outcome, at) = finalize_into(&zmachine_v5(), dest(), "http://x/deadlineinv.z5", "Deadline");
+        assert_eq!(outcome, HintDlOutcome::Done);
+        assert_eq!(at, dir.join("deadlineinv.z5"));
+        assert_eq!(std::fs::read(&at).unwrap(), zmachine_v5());
+        let (again, at2) = finalize_into(&zmachine_v5(), dest(), "http://x/deadlineinv.z5", "Deadline");
+        assert_eq!(again, HintDlOutcome::Done);
+        assert_eq!(at2, at, "the same bytes are not copied again");
+        let files: Vec<_> = crate::documents::list(&dir).unwrap().into_iter().map(|e| e.id).collect();
+        assert_eq!(files, ["deadlineinv.z5"]);
+        let (bad, _) = finalize_into(b"<html>", dest(), "u", "t");
+        assert!(matches!(bad, HintDlOutcome::Failed(_)));
+    }
+
+    /// SQ-1690: an unlinked game keeps the old beside-the-story destination.
+    #[test]
+    fn dest_is_beside_the_story_unless_the_game_has_a_documents_folder() {
+        let story = Path::new("/lib/deadline.z3");
+        assert_eq!(HintDest::for_story(story, "deadlineinv.z5", None), HintDest::Beside("/lib/deadlineinv.z5".into()));
+        let docs = PathBuf::from("/docs/Deadline [t]");
+        assert_eq!(
+            HintDest::for_story(story, "deadlineinv.z5", Some(docs.clone())),
+            HintDest::Documents { dir: docs, filename: "deadlineinv.z5".into() }
+        );
     }
 }

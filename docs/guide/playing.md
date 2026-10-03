@@ -117,11 +117,17 @@ format other interpreters use, so a script recorded elsewhere replays here.
 `/open-hints` (or **Alt+4**) shows the Journal's **Hints** tab, which runs a
 companion *InvisiClues* file beside the story — its own topic menu on top, the
 clue text below, driven with the arrow keys and whatever it prompts for once you
-click into it. lanthorn finds a hint file sitting beside the story automatically,
-or you can fetch one for free — from the story picker before you even start
-playing (see [Getting started](getting-started.md)), or with the tab's
-**Download hints…** button (`/download-hints`) in the game. The tab and how the
-keyboard moves in and out of it are described in [the map](the-map.md).
+click into it. lanthorn looks first in the game's **documents folder** — drop a
+hint file there and it is this game's hints whatever the file is called, in every
+release and disk image of the game — and then beside the story. You can also fetch
+one for free, from the story picker before you even start playing (see
+[Getting started](getting-started.md)) or with the tab's **Download hints…**
+button (`/download-hints`) in the game; a game linked to IFDB gets it saved in its
+documents folder, any other beside the story. A hint file in the Documents tab is
+listed as a *hint program* and opens in the Hints tab. If several hint files could
+be the game's, the tab lists them and asks you to pick; it remembers your pick. The
+tab and how the keyboard moves in and out of it are described in
+[the map](the-map.md).
 
 ## Going deeper
 

@@ -276,6 +276,9 @@ pub enum OpenOutcome {
     NeedsConfirm(String),
     /// Showing in the Journal (pager, image or the external card).
     Opened,
+    /// A hint program (SQ-1690): not shown here. The caller switches to the
+    /// Hints tab with this file.
+    HintProgram(PathBuf),
     /// The file could not be read.
     Failed(String),
 }
@@ -339,6 +342,7 @@ fn kind_label(k: DocKind) -> &'static str {
         DocKind::Pdf => "PDF",
         DocKind::Image => "image",
         DocKind::Text => "text",
+        DocKind::HintProgram => "hint program \u{2014} opens in Hints tab",
         DocKind::Other => "file",
     }
 }
@@ -437,7 +441,7 @@ impl DocumentsTab {
         opener: &mut dyn FnMut(&str),
     ) -> OpenOutcome {
         let Some(entry) = self.entries.get(idx).cloned() else { return OpenOutcome::Nothing };
-        if !confirmed && is_spoiler(&entry) {
+        if !confirmed && is_spoiler(&entry) && entry.kind != DocKind::HintProgram {
             return OpenOutcome::NeedsConfirm(entry.id);
         }
         self.selected = idx;
@@ -445,6 +449,9 @@ impl DocumentsTab {
             DocView::External(ExternalView { name: entry.id.clone(), path: entry.path.clone(), note, web })
         };
         match entry.kind {
+            // Never paged and never spoiler-asked: the Hints tab is the viewer, and
+            // a hint program shows nothing until the player asks it something.
+            DocKind::HintProgram => OpenOutcome::HintProgram(entry.path.clone()),
             DocKind::Text => match read_capped(&entry.path, TEXT_CAP) {
                 Ok((bytes, truncated)) => {
                     self.view = DocView::Text(Pager::new(&entry.id, &bytes, truncated));
@@ -540,6 +547,10 @@ pub fn open_selected(state: &mut AppState, idx: Option<usize>, confirmed: bool) 
             state.overlays.dialog_focus = 1; // Cancel is the safe default
         }
         OpenOutcome::Failed(why) => state.documents_tab.message = Some(why),
+        OpenOutcome::HintProgram(path) => {
+            state.documents_tab.message = None;
+            crate::hints_tab::show_program(state, path);
+        }
         OpenOutcome::Opened | OpenOutcome::Nothing => state.documents_tab.message = None,
     }
 }
@@ -1393,5 +1404,50 @@ mod tests {
         assert!(!refresh_if_needed(&mut s, Path::new("/nowhere/story.z5")), "nothing to do until told");
         let out = text_of(&render(&s, 50, 6));
         assert!(out.contains("No library"), "{out}");
+    }
+
+    fn zcode_hint() -> Vec<u8> {
+        let mut b = vec![0u8; 64];
+        b[0] = 5;
+        b
+    }
+
+    /// SQ-1690: a hint program is its own kind of row, labelled for what opening it
+    /// does, and opening it hands back the path rather than paging the file.
+    #[test]
+    fn a_hint_program_row_says_so_and_opens_the_hints_tab_instead_of_a_pager() {
+        let z = zcode_hint();
+        let (t, dir) = tab_with(&[("zork1inv.z5", &z), ("notes.txt", b"hello")]);
+        let hint = t.entries.iter().position(|e| e.id == "zork1inv.z5").unwrap();
+        assert_eq!(t.entries[hint].kind, DocKind::HintProgram);
+        let mut s = state_with(t);
+        let shown = text_of(&render(&s, 70, 12));
+        assert!(shown.contains("hint program \u{2014} opens in Hints tab"), "{shown}");
+        // Even a spoiler-flagged hint file is not asked about: the Hints tab shows
+        // nothing until the player asks it something.
+        s.documents_tab.entries[hint].spoiler = true;
+        let out = s.documents_tab.open_entry(hint, false, false, &mut |_| panic!("no external opener"));
+        assert_eq!(out, OpenOutcome::HintProgram(dir.join("zork1inv.z5")));
+        assert!(!s.documents_tab.viewer_open(), "no pager, no card");
+    }
+
+    #[test]
+    fn opening_a_hint_program_shows_the_hints_tab_without_moving_focus() {
+        let z = zcode_hint();
+        let (t, dir) = tab_with(&[("zork1inv.z5", &z)]);
+        let mut s = state_with(t);
+        s.set_journal_tab(crate::journal::JournalTab::Documents);
+        assert_eq!(s.focus, crate::state::Focus::Game);
+        open_selected(&mut s, Some(0), false);
+        assert_eq!(s.journal_tab, crate::journal::JournalTab::Hints);
+        assert_eq!(s.focus, crate::state::Focus::Game, "the keyboard stays in the story");
+        assert_eq!(s.hints_tab.phase, crate::hints_tab::Phase::NotStarted, "the run loop starts the session");
+        // The loop's next turn starts it and remembers this file as the game's hints.
+        s.config.user_dir = crate::scratch_dir("docs-tab-hint-user");
+        let story = dir.join("story.z3");
+        std::fs::write(&story, b"story").unwrap();
+        crate::hints_tab::ensure_started_in(&mut s, &story, "IFID-X", Some(&dir));
+        assert_ne!(s.hints_tab.phase, crate::hints_tab::Phase::NotStarted);
+        assert_eq!(crate::hints::load_hint_index(&s.config.user_dir).get("IFID-X"), Some(dir.join("zork1inv.z5")));
     }
 }

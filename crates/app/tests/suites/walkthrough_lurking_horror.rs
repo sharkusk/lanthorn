@@ -70,6 +70,7 @@ use app::archive::{self, Meta, SaveTrigger, SessionRecord};
 use app::config::Config;
 use app::engine::{Engine, StatusField, StatusModel};
 use app::hints::{self, extract_story, LoadedStory};
+use app::hints::HintStory;
 use app::host::hints::{available, open, HintAvailability};
 use app::ifid::compute_ifid;
 use app::session::{
@@ -343,11 +344,11 @@ fn check_hints_machinery_agrees(story_path: &Path, story_bytes: &[u8]) {
     let home = app::scratch_dir("sq1600-lurkinghorror-hint-index");
     let index = hints::load_hint_index(&home);
 
-    let avail = available(story_path, &ifid, "", &index);
+    let avail = available(story_path, HintStory::new(&ifid, ""), &index);
     let cfg = Config::default();
-    let opened = open(story_path, &ifid, "", &index, &[], &cfg);
+    let opened = open(story_path, HintStory::new(&ifid, ""), &index, &[], &cfg);
     match avail {
-        HintAvailability::None => {
+        HintAvailability::None | HintAvailability::Choose(_) => {
             let result = opened.expect("no hint source is not an error");
             assert!(result.is_none(), "open() finds nothing, exactly as available() said");
         }
