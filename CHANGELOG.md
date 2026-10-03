@@ -131,6 +131,11 @@ while any such tag, or this Unreleased section, still exists.*
 
 ### Fixed
 
+- **Up/down rooms and the dotted links to other map layers no longer cut across
+  other paths.** The "to ..." boxes standing for other layers now sit beside the
+  room whose passage leads there, instead of being pushed aside across a
+  neighbouring route, and a room reached by stairs is tucked in where its
+  connector crosses nothing.
 - **Folders of Commodore 64 disks list much faster.** Crunched disk images with
   no playable game were unpacked three times each, every time the folder was
   listed or a library was indexed. They are now unpacked once, and lanthorn

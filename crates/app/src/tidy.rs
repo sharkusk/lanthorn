@@ -1154,6 +1154,38 @@ mod tests {
         }
     }
 
+    /// SQ-1693 specimen (Zork I r88, ADF save): the Up/Down connectors of #88 Up a Tree and of
+    /// the "to Cellar" ghost used to cut across other paths.
+    fn sq1693_layer0(g: &mapper::graph::MapGraph) -> mapper::layer::LayerId {
+        g.layer_of(193)
+    }
+
+    #[test]
+    fn sq1693_cellar_ghost_sits_on_living_rooms_doorstep() {
+        let g = tidied("zork1_r88_sq1693_updown.json");
+        let rm = mapper::render::render_layer(&g, sq1693_layer0(&g));
+        let cell = |id: u32| rm.rooms.iter().find(|r| r.id == id).expect("room drawn").cell;
+        assert_eq!(cell(72), (cell(193).0, cell(193).1 + 1), "to Cellar ghost below Living Room");
+    }
+
+    #[test]
+    #[ignore = "SQ-1693 part B"]
+    fn sq1693_specimen_has_no_crossings_and_keeps_its_hints() {
+        let g = tidied("zork1_r88_sq1693_updown.json");
+        let (overlaps, crossings) = crate::render::map::layer_overlap_stats(&g, sq1693_layer0(&g));
+        assert_eq!((overlaps, crossings), (0, 0), "layer 0 overlaps/crossings");
+        let score = mapper::layout::directional_hint_score(&g);
+        assert!(score >= 3286, "hint score {score}");
+        let bent = g
+            .connections()
+            .iter()
+            .filter(|c| mapper::direction::grid_offset(c.dir).is_some() && !mapper::layout::edge_is_satisfied(&g, c))
+            .count();
+        assert!(bent <= 17, "{bent} bent compass edges");
+        assert!(pos(&g, 143).1 < pos(&g, 88).1, "Clearing {:?} sits above Up a Tree {:?}", pos(&g, 143), pos(&g, 88));
+        assert_clean(&g);
+    }
+
     #[test]
     fn sq1669_old_specimen_places_forest_west_of_west_of_house() {
         let g = tidied("zork1_r88_sq1669_old.json");

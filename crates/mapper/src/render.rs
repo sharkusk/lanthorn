@@ -438,6 +438,28 @@ pub fn render_layer_traced(
             },
         ));
     }
+    // A later ghost may have opened a line and pushed an earlier ghost off its doorstep, leaving
+    // that cell empty (SQ-1693). Put any ghost whose doorstep is now free back on it, to a fixed
+    // point. Specs are walked in their fixed order and every move lands on a free cell, so it is
+    // deterministic; each move takes a ghost strictly nearer its anchor, so it terminates.
+    loop {
+        let mut moved = false;
+        for spec in &specs {
+            let Some(&a) = plane.get(&spec.anchor) else { continue };
+            let Some(&cur) = plane.get(&spec.id) else { continue };
+            if !ghosts.iter().any(|(id, _)| *id == spec.id) {
+                continue;
+            }
+            let want = (a.0 + spec.offset.0, a.1 + spec.offset.1);
+            if cur != want && !plane.values().any(|&q| q == want) {
+                plane.insert(spec.id, want);
+                moved = true;
+            }
+        }
+        if !moved {
+            break;
+        }
+    }
     // Every crossing this layer touches, as an ordinary connection of the sub-graph: the routers
     // draw a two-way crossing with a head at each end and a one-way with one, exactly as they do
     // for a passage between two real rooms.
@@ -950,5 +972,33 @@ mod tests {
             (ghost.0).abs() <= 1 && (ghost.1).abs() <= 1,
             "and it is still on the Hall's own doorstep: {ghost:?}"
         );
+    }
+
+    /// SQ-1693: a later ghost that opens a row pushes an earlier one off its doorstep; the pass
+    /// after seating puts it back where its anchor's direction wants it.
+    #[test]
+    fn a_ghost_pushed_off_its_doorstep_is_reseated_when_the_doorstep_empties() {
+        let mut g = crate::graph::MapGraph::new();
+        for (id, n) in [(1, "Hall"), (2, "Pantry"), (3, "Crate"), (4, "CellarA"), (5, "CellarB")] {
+            g.upsert_room(id, n.into());
+        }
+        g.set_pos(1, (0, -1));
+        g.set_pos(2, (1, -1));
+        g.set_pos(3, (1, 0)); // the second ghost's doorstep: opening its row moves the first ghost
+        g.set_pos(4, (0, 0));
+        g.set_pos(5, (0, 0));
+        let l = g.new_layer(Some(0), "Under".into());
+        g.set_room_layer(4, l);
+        g.set_room_layer(5, l);
+        g.add_edge(1, Direction::Down, 4);
+        g.add_edge(4, Direction::Up, 1);
+        g.add_edge(2, Direction::Down, 5);
+        g.add_edge(5, Direction::Up, 2);
+        let rm = render_layer(&g, 0);
+        let cell = |id| rm.rooms.iter().find(|r| r.id == id).unwrap().cell;
+        let hall = cell(1);
+        assert_eq!(cell(4), (hall.0, hall.1 + 1), "first ghost back on the Hall's doorstep");
+        let pantry = cell(2);
+        assert_eq!(cell(5), (pantry.0, pantry.1 + 1), "second ghost on the Pantry's doorstep");
     }
 }

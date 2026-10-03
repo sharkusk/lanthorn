@@ -1,0 +1,1522 @@
+{
+  "version": 1,
+  "rooms": [
+    {
+      "id": 25,
+      "name": "Canyon View",
+      "label_override": null,
+      "notes": "",
+      "pos": [
+        -1,
+        1
+      ],
+      "layer": 0,
+      "loc_method": "via status variable",
+      "tried": [
+        "Down",
+        "W"
+      ],
+      "probed": [
+        "W",
+        "S",
+        "N",
+        "SW",
+        "NW"
+      ],
+      "random_exits": [],
+      "random_destinations": [],
+      "random_inherited": [],
+      "aliases": [],
+      "seq": 15,
+      "description": "You are at the top of the Great Canyon on its west wall. From here there is a marvelous view of the canyon and parts of the Frigid River upstream. Across the canyon, the walls of the White Cliffs join the mighty ramparts of the Flathead Mountains to the east. Following the Canyon upstream to the north, Aragain Falls may be seen, complete with rainbow. The mighty Frigid River flows out from a great dark cavern. To the west and south can be seen an immense forest, stretching for miles around. A path leads northwest. It is possible to climb down into the canyon from here.",
+      "description_turn": 40
+    },
+    {
+      "id": 26,
+      "name": "Rocky Ledge",
+      "label_override": null,
+      "notes": "",
+      "pos": [
+        -1,
+        2
+      ],
+      "layer": 0,
+      "loc_method": "via status variable",
+      "tried": [
+        "Down",
+        "Up"
+      ],
+      "probed": [
+        "Up"
+      ],
+      "random_exits": [],
+      "random_destinations": [],
+      "random_inherited": [],
+      "aliases": [],
+      "seq": 16,
+      "description": "You are on a ledge about halfway up the wall of the river canyon. You can see from here that the main flow from Aragain Falls twists along a passage which it is impossible for you to enter. Below you is the canyon bottom. Above you is more cliff, which appears climbable.",
+      "description_turn": 41
+    },
+    {
+      "id": 27,
+      "name": "Canyon Bottom",
+      "label_override": null,
+      "notes": "",
+      "pos": [
+        -1,
+        3
+      ],
+      "layer": 0,
+      "loc_method": "via status variable",
+      "tried": [
+        "N",
+        "Up"
+      ],
+      "probed": [
+        "Up"
+      ],
+      "random_exits": [],
+      "random_destinations": [],
+      "random_inherited": [],
+      "aliases": [],
+      "seq": 17,
+      "description": "You are beneath the walls of the river canyon which may be climbable here. The lesser part of the runoff of Aragain Falls flows by below. To the north is a narrow path.",
+      "description_turn": 42
+    },
+    {
+      "id": 41,
+      "name": "East-West Passage",
+      "label_override": null,
+      "notes": "",
+      "pos": [
+        0,
+        0
+      ],
+      "layer": 1,
+      "loc_method": "via status variable",
+      "tried": [
+        "W"
+      ],
+      "probed": [
+        "W"
+      ],
+      "random_exits": [],
+      "random_destinations": [],
+      "random_inherited": [],
+      "aliases": [],
+      "seq": 21,
+      "description": "This is a narrow east-west passageway. There is a narrow stairway leading down at the north end of the room.",
+      "description_turn": 78
+    },
+    {
+      "id": 71,
+      "name": "East of Chasm",
+      "label_override": null,
+      "notes": "",
+      "pos": [
+        -1,
+        2
+      ],
+      "layer": 1,
+      "loc_method": "via status variable",
+      "tried": [
+        "W",
+        "E"
+      ],
+      "probed": [
+        "N"
+      ],
+      "random_exits": [],
+      "random_destinations": [],
+      "random_inherited": [],
+      "aliases": [],
+      "seq": 22,
+      "description": "You are on the east edge of a chasm, the bottom of which cannot be seen. A narrow passage goes north, and the path you are on continues to the east.",
+      "description_turn": 83
+    },
+    {
+      "id": 72,
+      "name": "Cellar",
+      "label_override": null,
+      "notes": "",
+      "pos": [
+        -1,
+        1
+      ],
+      "layer": 1,
+      "loc_method": "via status variable",
+      "tried": [
+        "N",
+        "E",
+        "W",
+        "S"
+      ],
+      "probed": [
+        "Up",
+        "E",
+        "W",
+        "NE",
+        "SE",
+        "SW",
+        "NW"
+      ],
+      "random_exits": [],
+      "random_destinations": [],
+      "random_inherited": [],
+      "aliases": [],
+      "seq": 19,
+      "description": "You are in a dark and damp cellar with a narrow passageway leading north, and a crawlway to the south. On the west is the bottom of a steep metal ramp which is unclimbable.\nYour sword is glowing with a faint blue glow.",
+      "description_turn": 71
+    },
+    {
+      "id": 74,
+      "name": "Clearing",
+      "label_override": null,
+      "notes": "",
+      "pos": [
+        -2,
+        -1
+      ],
+      "layer": 0,
+      "loc_method": "via status variable",
+      "tried": [
+        "N",
+        "E",
+        "W"
+      ],
+      "probed": [
+        "S",
+        "W"
+      ],
+      "random_exits": [],
+      "random_destinations": [],
+      "random_inherited": [],
+      "aliases": [],
+      "seq": 12,
+      "description": "You are in a small clearing in a well marked forest path that extends to the east and west.",
+      "description_turn": 33
+    },
+    {
+      "id": 75,
+      "name": "Forest Path",
+      "label_override": null,
+      "notes": "",
+      "pos": [
+        -4,
+        -4
+      ],
+      "layer": 0,
+      "loc_method": "via status variable",
+      "tried": [
+        "N",
+        "Up",
+        "W",
+        "E"
+      ],
+      "probed": [
+        "S",
+        "E"
+      ],
+      "random_exits": [],
+      "random_destinations": [],
+      "random_inherited": [],
+      "aliases": [],
+      "seq": 7,
+      "description": "You hear in the distance the chirping of a song bird.",
+      "description_turn": 35
+    },
+    {
+      "id": 76,
+      "name": "Forest",
+      "label_override": null,
+      "notes": "",
+      "pos": [
+        -2,
+        1
+      ],
+      "layer": 0,
+      "loc_method": "via status variable",
+      "tried": [
+        "N",
+        "E",
+        "S",
+        "NW",
+        "W"
+      ],
+      "probed": [
+        "W",
+        "E",
+        "S",
+        "NE",
+        "SE",
+        "SW",
+        "NW"
+      ],
+      "random_exits": [],
+      "random_destinations": [],
+      "random_inherited": [],
+      "aliases": [],
+      "seq": 11,
+      "description": "This is a dimly lit forest, with large trees all around.\nYou hear in the distance the chirping of a song bird.",
+      "description_turn": 32
+    },
+    {
+      "id": 77,
+      "name": "Forest",
+      "label_override": null,
+      "notes": "",
+      "pos": [
+        -2,
+        -4
+      ],
+      "layer": 0,
+      "loc_method": "via status variable",
+      "tried": [
+        "W",
+        "E",
+        "S",
+        "N"
+      ],
+      "probed": [
+        "S",
+        "N",
+        "SW",
+        "NW",
+        "NE",
+        "SE"
+      ],
+      "random_exits": [],
+      "random_destinations": [],
+      "random_inherited": [],
+      "aliases": [],
+      "seq": 13,
+      "description": "You hear in the distance the chirping of a song bird.",
+      "description_turn": 38
+    },
+    {
+      "id": 78,
+      "name": "Forest",
+      "label_override": null,
+      "notes": "",
+      "pos": [
+        -7,
+        -4
+      ],
+      "layer": 0,
+      "loc_method": "via status variable",
+      "tried": [
+        "N",
+        "S",
+        "E",
+        "W"
+      ],
+      "probed": [
+        "E",
+        "NE",
+        "SE",
+        "W",
+        "SW",
+        "NW"
+      ],
+      "random_exits": [],
+      "random_destinations": [],
+      "random_inherited": [],
+      "aliases": [],
+      "seq": 10,
+      "description": "This is a forest, with trees in all directions. To the east, there appears to be sunlight.",
+      "description_turn": 29
+    },
+    {
+      "id": 79,
+      "name": "Behind House",
+      "label_override": null,
+      "notes": "",
+      "pos": [
+        -3,
+        -1
+      ],
+      "layer": 0,
+      "loc_method": "via status variable",
+      "tried": [
+        "W",
+        "S",
+        "E"
+      ],
+      "probed": [
+        "W",
+        "N"
+      ],
+      "random_exits": [],
+      "random_destinations": [],
+      "random_inherited": [],
+      "aliases": [],
+      "seq": 2,
+      "description": "You are behind the white house. A path leads into the forest to the east. In one corner of the house there is a small window which is slightly ajar.",
+      "description_turn": 4
+    },
+    {
+      "id": 80,
+      "name": "South of House",
+      "label_override": null,
+      "notes": "",
+      "pos": [
+        -4,
+        0
+      ],
+      "layer": 0,
+      "loc_method": "via status variable",
+      "tried": [
+        "W",
+        "E"
+      ],
+      "probed": [
+        "N",
+        "W",
+        "E",
+        "SE",
+        "NE",
+        "SW",
+        "S"
+      ],
+      "random_exits": [],
+      "random_destinations": [],
+      "random_inherited": [],
+      "aliases": [],
+      "seq": 6,
+      "description": "You are facing the south side of a white house. There is no door here, and all the windows are boarded.",
+      "description_turn": 19
+    },
+    {
+      "id": 81,
+      "name": "North of House",
+      "label_override": null,
+      "notes": "",
+      "pos": [
+        -4,
+        -3
+      ],
+      "layer": 0,
+      "loc_method": "via status variable",
+      "tried": [
+        "E",
+        "N"
+      ],
+      "probed": [
+        "S",
+        "W"
+      ],
+      "random_exits": [],
+      "random_destinations": [],
+      "random_inherited": [],
+      "aliases": [],
+      "seq": 1,
+      "description": "You are facing the north side of a white house. There is no door here, and all the windows are boarded up. To the north a narrow path winds through the trees.",
+      "description_turn": 3
+    },
+    {
+      "id": 88,
+      "name": "Up a Tree",
+      "label_override": null,
+      "notes": "",
+      "pos": [
+        -3,
+        -5
+      ],
+      "layer": 0,
+      "loc_method": "via status variable",
+      "tried": [
+        "Down"
+      ],
+      "probed": [
+        "Down"
+      ],
+      "random_exits": [],
+      "random_destinations": [],
+      "random_inherited": [],
+      "aliases": [],
+      "seq": 9,
+      "description": "You are about 10 feet above the ground nestled among some large branches. The nearest branch above you is above your reach.\nBeside you on the branch is a small bird's nest.\nIn the bird's nest is a large egg encrusted with precious jewels, apparently scavenged by a childless songbird. The egg is covered with fine gold inlay, and ornamented in lapis lazuli and mother-of-pearl. Unlike most eggs, this one is hinged and closed with a delicate looking clasp. The egg appears extremely fragile.",
+      "description_turn": 26
+    },
+    {
+      "id": 94,
+      "name": "Studio",
+      "label_override": null,
+      "notes": "",
+      "pos": [
+        0,
+        1
+      ],
+      "layer": 1,
+      "loc_method": "via status variable",
+      "tried": [
+        "Up"
+      ],
+      "probed": [
+        "S"
+      ],
+      "random_exits": [],
+      "random_destinations": [],
+      "random_inherited": [],
+      "aliases": [],
+      "seq": 24,
+      "description": "This appears to have been an artist's studio. The walls and floors are splattered with paints of 69 different colors. Strangely enough, nothing of value is hanging here. At the south end of the room is an open door (also covered with paint). A dark and narrow chimney leads up from a fireplace; although you might be able to get up it, it seems unlikely you could get back down.\nLoosely attached to a wall is a small piece of paper.",
+      "description_turn": 86
+    },
+    {
+      "id": 102,
+      "name": "The Troll Room",
+      "label_override": null,
+      "notes": "",
+      "pos": [
+        -1,
+        0
+      ],
+      "layer": 1,
+      "loc_method": "via status variable",
+      "tried": [
+        "E",
+        "S"
+      ],
+      "probed": [
+        "S"
+      ],
+      "random_exits": [],
+      "random_destinations": [],
+      "random_inherited": [],
+      "aliases": [],
+      "seq": 20,
+      "description": "There is a sword here.",
+      "description_turn": 79
+    },
+    {
+      "id": 136,
+      "name": "End of Rainbow",
+      "label_override": null,
+      "notes": "",
+      "pos": [
+        0,
+        1
+      ],
+      "layer": 0,
+      "loc_method": "via status variable",
+      "tried": [
+        "SW"
+      ],
+      "probed": [
+        "S",
+        "E",
+        "W",
+        "SE",
+        "SW"
+      ],
+      "random_exits": [],
+      "random_destinations": [],
+      "random_inherited": [],
+      "aliases": [],
+      "seq": 18,
+      "description": "You are on a small, rocky beach on the continuation of the Frigid River past the Falls. The beach is narrow due to the presence of the White Cliffs. The river canyon opens here and sunlight shines in from above. A rainbow crosses over the falls to the east and a narrow path continues to the southwest.",
+      "description_turn": 43
+    },
+    {
+      "id": 143,
+      "name": "Clearing",
+      "label_override": null,
+      "notes": "",
+      "pos": [
+        -4,
+        -5
+      ],
+      "layer": 0,
+      "loc_method": "via status variable",
+      "tried": [
+        "Down",
+        "S",
+        "W",
+        "E"
+      ],
+      "probed": [
+        "S",
+        "W"
+      ],
+      "random_exits": [],
+      "random_destinations": [],
+      "random_inherited": [],
+      "aliases": [],
+      "seq": 8,
+      "description": "On the ground is a pile of leaves.",
+      "description_turn": 30
+    },
+    {
+      "id": 148,
+      "name": "Gallery",
+      "label_override": null,
+      "notes": "",
+      "pos": [
+        0,
+        2
+      ],
+      "layer": 1,
+      "loc_method": "via status variable",
+      "tried": [
+        "N"
+      ],
+      "probed": [
+        "W"
+      ],
+      "random_exits": [],
+      "random_destinations": [],
+      "random_inherited": [],
+      "aliases": [],
+      "seq": 23,
+      "description": "This is an art gallery. Most of the paintings have been stolen by vandals with exceptional taste. The vandals left through either the north or west exits.\nFortunately, there is still one chance for you to be a vandal, for on the far wall is a painting of unparalleled beauty.",
+      "description_turn": 85
+    },
+    {
+      "id": 180,
+      "name": "West of House",
+      "label_override": null,
+      "notes": "",
+      "pos": [
+        -6,
+        -1
+      ],
+      "layer": 0,
+      "loc_method": "via status variable",
+      "tried": [
+        "N",
+        "W"
+      ],
+      "probed": [
+        "E",
+        "S"
+      ],
+      "random_exits": [],
+      "random_destinations": [],
+      "random_inherited": [],
+      "aliases": [],
+      "seq": 0,
+      "description": "There is a small mailbox here.",
+      "description_turn": 20
+    },
+    {
+      "id": 193,
+      "name": "Living Room",
+      "label_override": null,
+      "notes": "",
+      "pos": [
+        -5,
+        -1
+      ],
+      "layer": 0,
+      "loc_method": "via status variable",
+      "tried": [
+        "W",
+        "E",
+        "Down"
+      ],
+      "probed": [
+        "E"
+      ],
+      "random_exits": [],
+      "random_destinations": [],
+      "random_inherited": [],
+      "aliases": [],
+      "seq": 4,
+      "description": "You are in the living room. There is a doorway to the east, a wooden door with strange gothic lettering to the west, which appears to be nailed shut, a trophy case, and a large oriental rug in the center of the room.\nAbove the trophy case hangs an elvish sword of great antiquity.\nA battery-powered brass lantern is on the trophy case.",
+      "description_turn": 8
+    },
+    {
+      "id": 201,
+      "name": "Attic",
+      "label_override": null,
+      "notes": "",
+      "pos": [
+        -4,
+        -2
+      ],
+      "layer": 0,
+      "loc_method": "via status variable",
+      "tried": [
+        "Down"
+      ],
+      "probed": [
+        "Down"
+      ],
+      "random_exits": [],
+      "random_destinations": [],
+      "random_inherited": [],
+      "aliases": [],
+      "seq": 5,
+      "description": "This is the attic. The only exit is a stairway leading down.\nA large coil of rope is lying in the corner.\nOn a table is a nasty-looking knife.",
+      "description_turn": 13
+    },
+    {
+      "id": 203,
+      "name": "Kitchen",
+      "label_override": null,
+      "notes": "",
+      "pos": [
+        -4,
+        -1
+      ],
+      "layer": 0,
+      "loc_method": "via status variable",
+      "tried": [
+        "W",
+        "Up",
+        "E"
+      ],
+      "probed": [
+        "E",
+        "Down",
+        "N",
+        "S",
+        "NE",
+        "SE",
+        "SW",
+        "NW"
+      ],
+      "random_exits": [],
+      "random_destinations": [],
+      "random_inherited": [],
+      "aliases": [],
+      "seq": 3,
+      "description": "You are in the kitchen of the white house. A table seems to have been used recently for the preparation of food. A passage leads to the west and a dark staircase can be seen leading upward. A dark chimney leads down and to the east is a small window which is open.\nOn the table is an elongated brown sack, smelling of hot peppers.\nA bottle is sitting on the table.\nThe glass bottle contains:\n  A quantity of water",
+      "description_turn": 6
+    },
+    {
+      "id": 239,
+      "name": "Forest",
+      "label_override": null,
+      "notes": "",
+      "pos": [
+        -1,
+        -4
+      ],
+      "layer": 0,
+      "loc_method": "via status variable",
+      "tried": [
+        "W"
+      ],
+      "probed": [
+        "W"
+      ],
+      "random_exits": [],
+      "random_destinations": [],
+      "random_inherited": [],
+      "aliases": [],
+      "seq": 14,
+      "description": "The forest thins out, revealing impassable mountains.",
+      "description_turn": 37
+    }
+  ],
+  "connections": [
+    {
+      "origin": 180,
+      "dir": "N",
+      "dest": 81,
+      "distorted": true,
+      "weight": "Hard"
+    },
+    {
+      "origin": 81,
+      "dir": "W",
+      "dest": 180,
+      "distorted": true,
+      "weight": "Hard"
+    },
+    {
+      "origin": 81,
+      "dir": "E",
+      "dest": 79,
+      "distorted": true,
+      "weight": "Hard"
+    },
+    {
+      "origin": 79,
+      "dir": "N",
+      "dest": 81,
+      "distorted": true,
+      "weight": "Hard"
+    },
+    {
+      "origin": 79,
+      "dir": "W",
+      "dest": 203,
+      "distorted": false,
+      "weight": "Hard"
+    },
+    {
+      "origin": 203,
+      "dir": "E",
+      "dest": 79,
+      "distorted": false,
+      "weight": "Hard"
+    },
+    {
+      "origin": 203,
+      "dir": "W",
+      "dest": 193,
+      "distorted": false,
+      "weight": "Hard"
+    },
+    {
+      "origin": 193,
+      "dir": "E",
+      "dest": 203,
+      "distorted": false,
+      "weight": "Hard"
+    },
+    {
+      "origin": 203,
+      "dir": "Up",
+      "dest": 201,
+      "distorted": false,
+      "weight": "Hard"
+    },
+    {
+      "origin": 201,
+      "dir": "Down",
+      "dest": 203,
+      "distorted": false,
+      "weight": "Hard"
+    },
+    {
+      "origin": 79,
+      "dir": "S",
+      "dest": 80,
+      "distorted": true,
+      "weight": "Hard"
+    },
+    {
+      "origin": 80,
+      "dir": "W",
+      "dest": 180,
+      "distorted": true,
+      "weight": "Hard"
+    },
+    {
+      "origin": 80,
+      "dir": "E",
+      "dest": 79,
+      "distorted": true,
+      "weight": "Hard"
+    },
+    {
+      "origin": 180,
+      "dir": "S",
+      "dest": 80,
+      "distorted": true,
+      "weight": "Hard"
+    },
+    {
+      "origin": 81,
+      "dir": "N",
+      "dest": 75,
+      "distorted": false,
+      "weight": "Hard"
+    },
+    {
+      "origin": 75,
+      "dir": "S",
+      "dest": 81,
+      "distorted": false,
+      "weight": "Hard"
+    },
+    {
+      "origin": 75,
+      "dir": "N",
+      "dest": 143,
+      "distorted": false,
+      "weight": "Hard"
+    },
+    {
+      "origin": 143,
+      "dir": "S",
+      "dest": 75,
+      "distorted": false,
+      "weight": "Hard"
+    },
+    {
+      "origin": 75,
+      "dir": "Up",
+      "dest": 88,
+      "distorted": false,
+      "weight": "Hard"
+    },
+    {
+      "origin": 88,
+      "dir": "Down",
+      "dest": 75,
+      "distorted": false,
+      "weight": "Hard"
+    },
+    {
+      "origin": 75,
+      "dir": "W",
+      "dest": 78,
+      "distorted": false,
+      "weight": "Hard"
+    },
+    {
+      "origin": 78,
+      "dir": "E",
+      "dest": 75,
+      "distorted": false,
+      "weight": "Hard"
+    },
+    {
+      "origin": 78,
+      "dir": "N",
+      "dest": 143,
+      "distorted": true,
+      "weight": "Hard"
+    },
+    {
+      "origin": 143,
+      "dir": "W",
+      "dest": 78,
+      "distorted": true,
+      "weight": "Hard"
+    },
+    {
+      "origin": 78,
+      "dir": "S",
+      "dest": 76,
+      "distorted": true,
+      "weight": "Hard"
+    },
+    {
+      "origin": 76,
+      "dir": "W",
+      "dest": 78,
+      "distorted": true,
+      "weight": "Hard"
+    },
+    {
+      "origin": 76,
+      "dir": "N",
+      "dest": 74,
+      "distorted": false,
+      "weight": "Hard"
+    },
+    {
+      "origin": 74,
+      "dir": "S",
+      "dest": 76,
+      "distorted": false,
+      "weight": "Hard"
+    },
+    {
+      "origin": 74,
+      "dir": "N",
+      "dest": 77,
+      "distorted": false,
+      "weight": "Hard"
+    },
+    {
+      "origin": 77,
+      "dir": "S",
+      "dest": 74,
+      "distorted": false,
+      "weight": "Hard"
+    },
+    {
+      "origin": 77,
+      "dir": "W",
+      "dest": 75,
+      "distorted": false,
+      "weight": "Hard"
+    },
+    {
+      "origin": 75,
+      "dir": "E",
+      "dest": 77,
+      "distorted": false,
+      "weight": "Hard"
+    },
+    {
+      "origin": 77,
+      "dir": "E",
+      "dest": 239,
+      "distorted": false,
+      "weight": "Hard"
+    },
+    {
+      "origin": 239,
+      "dir": "W",
+      "dest": 77,
+      "distorted": false,
+      "weight": "Hard"
+    },
+    {
+      "origin": 74,
+      "dir": "E",
+      "dest": 25,
+      "distorted": true,
+      "weight": "Hard"
+    },
+    {
+      "origin": 25,
+      "dir": "W",
+      "dest": 76,
+      "distorted": false,
+      "weight": "Hard"
+    },
+    {
+      "origin": 25,
+      "dir": "NW",
+      "dest": 74,
+      "distorted": false,
+      "weight": "Hard"
+    },
+    {
+      "origin": 25,
+      "dir": "Down",
+      "dest": 26,
+      "distorted": false,
+      "weight": "Hard"
+    },
+    {
+      "origin": 26,
+      "dir": "Up",
+      "dest": 25,
+      "distorted": false,
+      "weight": "Hard"
+    },
+    {
+      "origin": 26,
+      "dir": "Down",
+      "dest": 27,
+      "distorted": false,
+      "weight": "Hard"
+    },
+    {
+      "origin": 27,
+      "dir": "Up",
+      "dest": 26,
+      "distorted": false,
+      "weight": "Hard"
+    },
+    {
+      "origin": 27,
+      "dir": "N",
+      "dest": 136,
+      "distorted": true,
+      "weight": "Hard"
+    },
+    {
+      "origin": 136,
+      "dir": "SW",
+      "dest": 27,
+      "distorted": false,
+      "weight": "Hard"
+    },
+    {
+      "origin": 76,
+      "dir": "NW",
+      "dest": 80,
+      "distorted": false,
+      "weight": "Hard"
+    },
+    {
+      "origin": 80,
+      "dir": "NE",
+      "dest": 79,
+      "distorted": false,
+      "weight": "Hard"
+    },
+    {
+      "origin": 80,
+      "dir": "S",
+      "dest": 76,
+      "distorted": true,
+      "weight": "Hard"
+    },
+    {
+      "origin": 180,
+      "dir": "W",
+      "dest": 78,
+      "distorted": true,
+      "weight": "Hard"
+    },
+    {
+      "origin": 143,
+      "dir": "E",
+      "dest": 77,
+      "distorted": true,
+      "weight": "Hard"
+    },
+    {
+      "origin": 79,
+      "dir": "E",
+      "dest": 74,
+      "distorted": false,
+      "weight": "Hard"
+    },
+    {
+      "origin": 74,
+      "dir": "W",
+      "dest": 79,
+      "distorted": false,
+      "weight": "Hard"
+    },
+    {
+      "origin": 193,
+      "dir": "Down",
+      "dest": 72,
+      "distorted": false,
+      "weight": "Hard"
+    },
+    {
+      "origin": 72,
+      "dir": "N",
+      "dest": 102,
+      "distorted": false,
+      "weight": "Hard"
+    },
+    {
+      "origin": 102,
+      "dir": "S",
+      "dest": 72,
+      "distorted": false,
+      "weight": "Hard"
+    },
+    {
+      "origin": 102,
+      "dir": "E",
+      "dest": 41,
+      "distorted": false,
+      "weight": "Hard"
+    },
+    {
+      "origin": 41,
+      "dir": "W",
+      "dest": 102,
+      "distorted": false,
+      "weight": "Hard"
+    },
+    {
+      "origin": 72,
+      "dir": "S",
+      "dest": 71,
+      "distorted": false,
+      "weight": "Hard"
+    },
+    {
+      "origin": 71,
+      "dir": "N",
+      "dest": 72,
+      "distorted": false,
+      "weight": "Hard"
+    },
+    {
+      "origin": 71,
+      "dir": "E",
+      "dest": 148,
+      "distorted": false,
+      "weight": "Hard"
+    },
+    {
+      "origin": 148,
+      "dir": "W",
+      "dest": 71,
+      "distorted": false,
+      "weight": "Hard"
+    },
+    {
+      "origin": 148,
+      "dir": "N",
+      "dest": 94,
+      "distorted": false,
+      "weight": "Hard"
+    },
+    {
+      "origin": 94,
+      "dir": "S",
+      "dest": 148,
+      "distorted": false,
+      "weight": "Hard"
+    },
+    {
+      "origin": 94,
+      "dir": "Up",
+      "dest": 203,
+      "distorted": false,
+      "weight": "Hard"
+    }
+  ],
+  "current": 203,
+  "layers": {
+    "0": {
+      "name": "Main",
+      "parent": null,
+      "maze": false,
+      "view": "Drawn"
+    },
+    "1": {
+      "name": "East of Chasm",
+      "parent": 0,
+      "maze": false,
+      "view": null
+    }
+  },
+  "next_layer_id": 2,
+  "last_visited": {
+    "0": 203,
+    "1": 94
+  },
+  "next_seq": 25,
+  "seams": [],
+  "suggestions_disabled": false,
+  "items": {
+    "87": {
+      "name": "jewel-encrusted egg",
+      "origin_room": 88,
+      "origin_turn": 26,
+      "last_seen": {
+        "Room": {
+          "room": 94,
+          "direct": true,
+          "container": null
+        }
+      },
+      "last_seen_turn": 98,
+      "fixed_in_place": false,
+      "carried_since_turn": null
+    },
+    "89": {
+      "name": "bird's nest",
+      "origin_room": 88,
+      "origin_turn": 26,
+      "last_seen": {
+        "Room": {
+          "room": 88,
+          "direct": true,
+          "container": null
+        }
+      },
+      "last_seen_turn": 27,
+      "fixed_in_place": false,
+      "carried_since_turn": null
+    },
+    "95": {
+      "name": "ZORK owner's manual",
+      "origin_room": 94,
+      "origin_turn": 86,
+      "last_seen": {
+        "Room": {
+          "room": 94,
+          "direct": true,
+          "container": null
+        }
+      },
+      "last_seen_turn": 98,
+      "fixed_in_place": false,
+      "carried_since_turn": null
+    },
+    "110": {
+      "name": "sword",
+      "origin_room": 193,
+      "origin_turn": 8,
+      "last_seen": {
+        "Room": {
+          "room": 102,
+          "direct": true,
+          "container": null
+        }
+      },
+      "last_seen_turn": 79,
+      "fixed_in_place": false,
+      "carried_since_turn": null
+    },
+    "111": {
+      "name": "wooden door",
+      "origin_room": 193,
+      "origin_turn": 8,
+      "last_seen": {
+        "Room": {
+          "room": 193,
+          "direct": true,
+          "container": null
+        }
+      },
+      "last_seen_turn": 70,
+      "fixed_in_place": false,
+      "carried_since_turn": null
+    },
+    "129": {
+      "name": "rope",
+      "origin_room": 201,
+      "origin_turn": 13,
+      "last_seen": {
+        "Room": {
+          "room": 94,
+          "direct": true,
+          "container": null
+        }
+      },
+      "last_seen_turn": 98,
+      "fixed_in_place": false,
+      "carried_since_turn": null
+    },
+    "137": {
+      "name": "pot of gold",
+      "origin_room": 136,
+      "origin_turn": 43,
+      "last_seen": {
+        "Room": {
+          "room": 136,
+          "direct": true,
+          "container": null
+        }
+      },
+      "last_seen_turn": 43,
+      "fixed_in_place": false,
+      "carried_since_turn": null
+    },
+    "144": {
+      "name": "pile of leaves",
+      "origin_room": 143,
+      "origin_turn": 23,
+      "last_seen": {
+        "Room": {
+          "room": 143,
+          "direct": true,
+          "container": null
+        }
+      },
+      "last_seen_turn": 54,
+      "fixed_in_place": false,
+      "carried_since_turn": null
+    },
+    "149": {
+      "name": "painting",
+      "origin_room": 148,
+      "origin_turn": 85,
+      "last_seen": {
+        "Room": {
+          "room": 148,
+          "direct": true,
+          "container": null
+        }
+      },
+      "last_seen_turn": 85,
+      "fixed_in_place": false,
+      "carried_since_turn": null
+    },
+    "160": {
+      "name": "small mailbox",
+      "origin_room": 180,
+      "origin_turn": 1,
+      "last_seen": {
+        "Room": {
+          "room": 180,
+          "direct": true,
+          "container": null
+        }
+      },
+      "last_seen_turn": 51,
+      "fixed_in_place": false,
+      "carried_since_turn": null
+    },
+    "161": {
+      "name": "leaflet",
+      "origin_room": 180,
+      "origin_turn": 1,
+      "last_seen": "Carried",
+      "last_seen_turn": 99,
+      "fixed_in_place": false,
+      "carried_since_turn": 2
+    },
+    "164": {
+      "name": "brass lantern",
+      "origin_room": 193,
+      "origin_turn": 8,
+      "last_seen": "Carried",
+      "last_seen_turn": 99,
+      "fixed_in_place": false,
+      "carried_since_turn": 9
+    },
+    "169": {
+      "name": "nasty knife",
+      "origin_room": 201,
+      "origin_turn": 13,
+      "last_seen": {
+        "Room": {
+          "room": 94,
+          "direct": true,
+          "container": null
+        }
+      },
+      "last_seen_turn": 98,
+      "fixed_in_place": false,
+      "carried_since_turn": null
+    },
+    "181": {
+      "name": "door",
+      "origin_room": 180,
+      "origin_turn": 1,
+      "last_seen": {
+        "Room": {
+          "room": 180,
+          "direct": true,
+          "container": null
+        }
+      },
+      "last_seen_turn": 51,
+      "fixed_in_place": false,
+      "carried_since_turn": null
+    },
+    "183": {
+      "name": "trap door",
+      "origin_room": 193,
+      "origin_turn": 8,
+      "last_seen": {
+        "Room": {
+          "room": 193,
+          "direct": true,
+          "container": null
+        }
+      },
+      "last_seen_turn": 70,
+      "fixed_in_place": false,
+      "carried_since_turn": null
+    },
+    "192": {
+      "name": "carpet",
+      "origin_room": 193,
+      "origin_turn": 8,
+      "last_seen": {
+        "Room": {
+          "room": 193,
+          "direct": true,
+          "container": null
+        }
+      },
+      "last_seen_turn": 70,
+      "fixed_in_place": false,
+      "carried_since_turn": null
+    },
+    "194": {
+      "name": "trophy case",
+      "origin_room": 193,
+      "origin_turn": 8,
+      "last_seen": {
+        "Room": {
+          "room": 193,
+          "direct": true,
+          "container": null
+        }
+      },
+      "last_seen_turn": 70,
+      "fixed_in_place": false,
+      "carried_since_turn": null
+    },
+    "202": {
+      "name": "table",
+      "origin_room": 201,
+      "origin_turn": 13,
+      "last_seen": {
+        "Room": {
+          "room": 201,
+          "direct": true,
+          "container": null
+        }
+      },
+      "last_seen_turn": 14,
+      "fixed_in_place": false,
+      "carried_since_turn": null
+    },
+    "204": {
+      "name": "kitchen table",
+      "origin_room": 203,
+      "origin_turn": 6,
+      "last_seen": {
+        "Room": {
+          "room": 203,
+          "direct": true,
+          "container": null
+        }
+      },
+      "last_seen_turn": 99,
+      "fixed_in_place": false,
+      "carried_since_turn": null
+    },
+    "217": {
+      "name": "troll",
+      "origin_room": 102,
+      "origin_turn": 72,
+      "last_seen": {
+        "Vanished": {
+          "room": 102,
+          "turn": 75
+        }
+      },
+      "last_seen_turn": 75,
+      "fixed_in_place": false,
+      "carried_since_turn": null
+    },
+    "218": {
+      "name": "bloody axe",
+      "origin_room": 102,
+      "origin_turn": 72,
+      "last_seen": {
+        "Room": {
+          "room": 94,
+          "direct": true,
+          "container": null
+        }
+      },
+      "last_seen_turn": 98,
+      "fixed_in_place": false,
+      "carried_since_turn": null
+    },
+    "224": {
+      "name": "brown sack",
+      "origin_room": 203,
+      "origin_turn": 6,
+      "last_seen": {
+        "Room": {
+          "room": 94,
+          "direct": true,
+          "container": null
+        }
+      },
+      "last_seen_turn": 98,
+      "fixed_in_place": false,
+      "carried_since_turn": null
+    },
+    "236": {
+      "name": "glass bottle",
+      "origin_room": 203,
+      "origin_turn": 6,
+      "last_seen": {
+        "Room": {
+          "room": 94,
+          "direct": true,
+          "container": null
+        }
+      },
+      "last_seen_turn": 98,
+      "fixed_in_place": false,
+      "carried_since_turn": null
+    },
+    "240": {
+      "name": "mountain range",
+      "origin_room": 239,
+      "origin_turn": 37,
+      "last_seen": {
+        "Room": {
+          "room": 239,
+          "direct": true,
+          "container": null
+        }
+      },
+      "last_seen_turn": 37,
+      "fixed_in_place": false,
+      "carried_since_turn": null
+    }
+  }
+}
