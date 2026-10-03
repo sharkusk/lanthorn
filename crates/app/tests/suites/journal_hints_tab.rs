@@ -267,8 +267,13 @@ fn a_linked_game_s_no_hint_body_names_its_documents_folder() {
     assert!(hints_tab::ensure_started_in(&mut st, &story, "NOPE", Some(&docs)));
     assert_eq!(st.hints_tab.phase, Phase::NoHint);
     let (buf, body) = draw_tab(&st);
-    // Collapse whitespace: where the path wraps depends on the platform's temp-dir length.
-    let shown = text_in(&buf, body).split_whitespace().collect::<Vec<_>>().join(" ");
+    // Collapse whitespace (and drop the frame's side borders): where the path wraps depends on
+    // the platform's temp-dir length, and each wrap puts a `│` pair between the pieces.
+    let shown = text_in(&buf, body)
+        .split_whitespace()
+        .filter(|t| *t != "│")
+        .collect::<Vec<_>>()
+        .join(" ");
     assert!(shown.contains("documents folder"), "{shown}");
     assert!(shown.contains("Lonely [tuid]"), "the path is shown: {shown}");
     assert!(!shown.contains("link this game to IFDB"), "{shown}");
