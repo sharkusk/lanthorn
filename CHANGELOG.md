@@ -29,6 +29,10 @@ while any such tag, or this Unreleased section, still exists.*
 
 ### Added
 
+- **The Guiding Light spells out modern shorthands on older games.** Type `x lamp` in a
+  game that has never heard of `x` and it suggests `examine` (keeping `lamp`); likewise
+  `z` for `wait`, `g` for `again`, `l` for `look` and `i` for `inventory`, whenever
+  that game really knows the full word.
 - **Click a dotted "to/from" room on the map to jump there**: the map switches to
   that room's layer with the room selected.
 - **Hint files can live in the game's documents folder.** Drop an *InvisiClues* file

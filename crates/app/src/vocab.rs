@@ -737,6 +737,17 @@ pub struct Pick {
     pub requires_vetting: bool,
 }
 
+/// Shorthands modern interactive fiction taught players, and the verb an older
+/// story spells out (SQ-1705). Deliberately small, and `q` is not in it: quitting
+/// is not a thing to suggest on a slip of the finger.
+const SHORTHANDS: [(&str, &str); 5] =
+    [("x", "examine"), ("z", "wait"), ("g", "again"), ("l", "look"), ("i", "inventory")];
+
+/// The spelled-out verb for a typed shorthand, if it is one.
+fn shorthand_expansion(typed: &str) -> Option<&'static str> {
+    SHORTHANDS.iter().find(|(s, _)| *s == typed).map(|&(_, full)| full)
+}
+
 /// The most an offer may name. Three, and it is a limit rather than a target:
 /// the whole verb list is useless (Zork I knows hundreds) and a list long enough
 /// to scan is a list the player reads instead of playing.
@@ -1429,6 +1440,20 @@ impl StoryVocabulary {
         // ever reasoning about; see [`MIN_LEN`].
         if self.is_empty() {
             return Vec::new();
+        }
+        // Modern shorthands (SQ-1705): `x` for `examine` and its kin. Ranked
+        // FIRST and alone, ahead of every synonym/meaning source below,
+        // because it is an exact expansion of what the player typed rather
+        // than a guess at what they meant — a near miss or a meaning-table
+        // neighbour for `x` is noise beside `examine`. Held to the same
+        // invariant as every other source: only a word THIS story's
+        // dictionary holds is offered, otherwise it falls through to the
+        // ordinary sources. `proposed` is false — the player reached for this
+        // word — so the adult-word filter is irrelevant to it.
+        if position == Position::Opening {
+            if let Some(full) = shorthand_expansion(&typed).filter(|f| self.knows(f)) {
+                return vec![Pick { word: full.to_string(), proposed: false, requires_vetting: false }];
+            }
         }
         // The sentence the player typed. `SyntaxLine::accepts` matches on the
         // NUMBER of noun phrases and the literal prepositions, never on which
@@ -3821,5 +3846,32 @@ mod tests {
             "`pick`'s own grammar spells no literal word at all, so no split may name one"
         );
         assert!(v.offer("pickup", Position::Opening, &["toolcase"], &[]).is_empty());
+    }
+    /// SQ-1705: a shorthand the story rejects is expanded to the spelled-out verb,
+    /// and only that — the exact expansion outranks everything else.
+    /// Falsify by emptying `SHORTHANDS`: the offer disappears.
+    #[test]
+    fn a_shorthand_expands_to_the_verb_the_story_holds() {
+        let v = pocket_zork();
+        assert_eq!(v.offer("x", Position::Opening, &["lamp"], &[]), vec!["examine"]);
+        assert_eq!(v.offer("X", Position::Opening, &[], &[]), vec!["examine"]);
+    }
+
+    /// The expansion is offered only when this dictionary holds the verb, and
+    /// only in the verb position; `q` is deliberately unmapped.
+    #[test]
+    fn a_shorthand_is_offered_only_when_the_story_holds_the_verb() {
+        let v = pocket_zork();
+        // This pocket story has no `wait`, `again`, `look`, `inventory`.
+        for s in ["z", "g", "l", "i"] {
+            assert!(v.offer(s, Position::Opening, &[], &[]).is_empty(), "{s}");
+        }
+        assert!(v.offer("x", Position::Inside, &[], &[]).is_empty());
+        assert_eq!(shorthand_expansion("q"), None);
+        let all: Vec<_> = SHORTHANDS.iter().map(|(s, f)| (*s, *f)).collect();
+        assert_eq!(
+            all,
+            vec![("x", "examine"), ("z", "wait"), ("g", "again"), ("l", "look"), ("i", "inventory")]
+        );
     }
 }

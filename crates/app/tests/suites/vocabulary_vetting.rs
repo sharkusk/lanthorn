@@ -1485,3 +1485,35 @@ fn without_a_probe_a_bare_shape_match_is_silent_not_unvetted() {
         "a tier-4-only offer must never fall back to the unvetted claim"
     );
 }
+
+// ── SQ-1705: modern shorthands on older stories ─────────────────────────────
+
+/// Zork I r88 (Version 3) has never heard of `x`: it answers `I don't know the
+/// word "x".` and the light offers the spelled-out verb, keeping the rest of
+/// the command. In the Living Room the lamp is here, so the vetted wording.
+///
+/// Falsify by emptying `vocab::SHORTHANDS`: the assist line disappears.
+#[test]
+fn x_on_an_older_story_offers_examine_and_keeps_the_rest() {
+    let Some(mut p) = Play::zork1() else { return };
+    p.walk(TO_THE_LAMP);
+    p.turn("x lamp");
+    eprintln!("--- Zork I r88, turn 6, Living Room ---\n{}\n", p.screen());
+    assert!(p.state.transcript.iter().any(|l| l.contains("know the word")));
+    assert_eq!(p.assists(), vec!["try instead — examine"]);
+    let offer = p.state.assist_offer.as_ref().expect("a structured offer");
+    assert_eq!(offer.picks.len(), 1);
+    assert_eq!(offer.picks[0].command, "examine lamp");
+}
+
+/// A story that already understands `x` never reports it unknown, so nothing
+/// is said: *Spider and Web* is Inform 6 and holds `x`.
+#[test]
+fn x_on_a_story_that_knows_it_is_left_alone() {
+    let Some(mut p) = Play::tangle() else { return };
+    p.drain_char_gate();
+    p.turn("x me");
+    p.drain_char_gate();
+    eprintln!("--- Tangle ---\n{}\n", p.screen());
+    assert_eq!(p.assists(), Vec::<String>::new());
+}
