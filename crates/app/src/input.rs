@@ -2243,8 +2243,16 @@ fn end_map_click(
     let last = state.last_map_room_click.take();
     match click {
         Some(MapClick::Room(id)) => {
+            // SQ-1692: a cross-layer GHOST's rect carries the REAL room's id, so a room whose
+            // layer is not the one on screen can only be a ghost. Follow it: show its layer,
+            // pin the real room, centre on it. The pin below then runs as for any room.
+            let jumped = follow_to_room_layer(state, &mapper.graph, id);
             let double = matches!(last, Some((r, t)) if r == id && now.duration_since(t) < MAP_DOUBLE_CLICK);
-            if double {
+            if jumped {
+                state.last_map_room_click = Some((id, now));
+                let view = state.room_dock_view;
+                pin_room_dock(state, mapper, id, view);
+            } else if double {
                 let view = state.room_dock_view;
                 pin_room_dock(state, mapper, id, view);
                 state.set_journal_tab(crate::journal::JournalTab::Room);
@@ -2264,6 +2272,32 @@ fn end_map_click(
         }
         None => {}
     }
+}
+
+/// SQ-1692: when `id` lives on a layer other than the one being drawn (so the click that
+/// reached it landed on a cross-layer ghost), switch the view to that layer and centre on the
+/// room, reusing the layer-switch recentre. Returns whether a jump happened.
+fn follow_to_room_layer(
+    state: &mut AppState,
+    graph: &mapper::graph::MapGraph,
+    id: mapper::graph::RoomId,
+) -> bool {
+    if graph.room(id).is_none() {
+        return false;
+    }
+    let layer = graph.layer_of(id);
+    if layer == state.active_layer(graph) {
+        return false;
+    }
+    state.set_viewed_layer(Some(layer));
+    recenter_for_active_layer(state, graph);
+    if graph.layer_view(layer) != mapper::layer::MapView::Matrix {
+        if let Some(pos) = graph.room(id).and_then(|r| r.pos) {
+            let (pw, ph) = state.map_pane_size.get().unwrap_or((80, 24));
+            state.recenter_on(pos, pw, ph);
+        }
+    }
+    true
 }
 
 /// Pin the Room tab on `id` in `view`, the shared body
@@ -7685,6 +7719,54 @@ mod tests {
         end_map_click(&mut s, &m, Some(MapClick::Empty), t0 + Duration::from_millis(100));
         end_map_click(&mut s, &m, Some(MapClick::Room(1)), t0 + Duration::from_millis(200));
         assert_eq!(s.journal_tab, JournalTab::Map);
+    }
+
+    /// SQ-1692: clicking a cross-layer ghost (its rect carries the REAL room's id) switches the
+    /// map to that room's layer and pins the real room; double-click lands on the Room tab; Esc
+    /// unpins; a click on a room of the viewed layer is unchanged.
+    #[test]
+    fn clicking_a_ghost_jumps_to_the_real_rooms_layer() {
+        use crate::journal::JournalTab;
+        use crate::state::MapClick;
+        use std::time::{Duration, Instant};
+        let mut m = Mapper::default();
+        m.observe(1, "Hall", None);
+        m.observe(2, "Cellar", Some(Direction::Down));
+        let mut s = AppState::default();
+        apply_action(Action::MoveRegion("new".into()), &mut s, &mut m); // Cellar -> L1
+        let cellar = m.graph.layer_of(2);
+        m.observe(1, "Hall", Some(Direction::Up));
+        assert_ne!(cellar, mapper::layer::MAIN_LAYER);
+        let t0 = Instant::now();
+
+        // Premise: Main draws a ghost for room 2 (the thing the click lands on).
+        let rm = mapper::render::render_layer(&m.graph, mapper::layer::MAIN_LAYER);
+        assert!(rm.rooms.iter().any(|r| r.id == 2 && r.ghost.as_ref().is_some_and(|g| g.layer == cellar)));
+        s.set_viewed_layer(None); // MoveRegion left the view on the new layer
+        assert_eq!(s.active_layer(&m.graph), mapper::layer::MAIN_LAYER);
+
+        // Single click on the ghost.
+        end_map_click(&mut s, &m, Some(MapClick::Room(2)), t0);
+        assert_eq!(s.active_layer(&m.graph), cellar, "the view followed the room's layer");
+        assert_eq!(s.selected_room, Some(2), "the REAL room is pinned");
+        assert_eq!(s.journal_tab, JournalTab::Map);
+
+        // Esc unpins as usual.
+        apply_action(Action::UnpinRoomDock, &mut s, &mut m);
+        assert_eq!(s.selected_room, None);
+
+        // Double-click on a ghost (second click lands on the now-real room).
+        let mut s = AppState::default();
+        end_map_click(&mut s, &m, Some(MapClick::Room(2)), t0);
+        end_map_click(&mut s, &m, Some(MapClick::Room(2)), t0 + Duration::from_millis(200));
+        assert_eq!((s.active_layer(&m.graph), s.selected_room, s.journal_tab), (cellar, Some(2), JournalTab::Room));
+
+        // A real room on the viewed layer: no layer change, pins as before.
+        let mut s = AppState::default();
+        end_map_click(&mut s, &m, Some(MapClick::Room(1)), t0);
+        assert_eq!(s.active_layer(&m.graph), mapper::layer::MAIN_LAYER);
+        assert_eq!(s.selected_room, Some(1));
+        assert_eq!(s.viewed_layer, None, "no override set by an ordinary click");
     }
 
     /// SQ-0692: a left-click on a room used to open a floating Room Info popup.
