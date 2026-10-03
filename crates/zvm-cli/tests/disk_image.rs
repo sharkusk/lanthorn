@@ -1040,10 +1040,16 @@ fn every_build_on_the_compilation_discs_has_a_canonical_title() {
 fn a_real_compilation_disc_names_its_games_from_the_table() {
     let Some(image) = disc_path("treasures/ISOs", "LostTreasures1.iso") else { return };
     let err = stderr_of(&run(&image, &[], ""));
-    // Sixty: `LostTreasures1.iso` and `LostTreasures2.iso` are two volumes of one
-    // release, and since SQ-0961 naming either offers both. Disc 1's own forty
-    // lead, so every index below is disc 1's own.
-    assert!(err.contains("holds 60 stories"), "both discs are offered:\n{err}");
+    // `LostTreasures1.iso` and `LostTreasures2.iso` are two volumes of one
+    // release, and since SQ-0961 naming either offers both, so the count is the
+    // two volumes' `COMPILATION_DISCS` counts summed, not a literal. Disc 1's own
+    // forty lead, so every index below is disc 1's own.
+    let n: usize = COMPILATION_DISCS
+        .iter()
+        .filter(|(d, name, _)| *d == "treasures/ISOs" && name.starts_with("LostTreasures"))
+        .map(|(_, _, c)| c)
+        .sum();
+    assert!(err.contains(&format!("holds {n} stories")), "both discs are offered:\n{err}");
     for line in [
         "1) Ballyhoo  (v3 r97 s851218)  MAC/BALLYHOO",
         "2) Beyond Zork: The Coconut of Quendor  (v5 r57 s871221)  MAC/BEYOND ZORK",
