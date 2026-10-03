@@ -2621,7 +2621,13 @@ impl Model {
     /// call the same way: the model has no standing coupling to
     /// `dyn GlkBackend`, so the caller (`Machine::step`, which owns both) reads
     /// [`GlkBackend::borderless`] and passes the answer through (SQ-1402).
-    pub fn relayout(&mut self, screen: &GlkScreen, borderless: bool) -> Vec<(u32, WinType, Rect, Option<bool>)> {
+    pub fn relayout(&mut self, width: u32, height: u32, char_px: (u32, u32), borderless: bool) -> Vec<(u32, WinType, Rect, Option<bool>)> {
+        self.relayout_screen(&GlkScreen::cells((width, height), char_px), borderless)
+    }
+
+    /// [`relayout`](Self::relayout) taking the whole screen as one
+    /// [`GlkScreen`] (cell or design mode) instead of cell-mode positional facts.
+    pub fn relayout_screen(&mut self, screen: &GlkScreen, borderless: bool) -> Vec<(u32, WinType, Rect, Option<bool>)> {
         self.screen = *screen;
         let (width, height) = screen.size;
         self.borderless = borderless;
@@ -2819,7 +2825,7 @@ impl Model {
         // to a whole cell (SQ-1565). Nothing to carry for a text first child.
         let split_px = match &first {
             WinTree::Leaf { id, wintype: WinType::Graphics, .. } => {
-                self.window_pixel_size(*id).map(|(pw, ph)| if vertical { ph } else { pw })
+                self.window_pixel_size_in_screen(*id).map(|(pw, ph)| if vertical { ph } else { pw })
             }
             _ => None,
         };
@@ -2862,8 +2868,18 @@ impl Model {
     ///   game measures its own artwork against.
     ///
     /// `None` if invalid or not a graphics window.
-    pub fn window_pixel_size(&self, win: u32) -> Option<(u32, u32)> {
-        let char_px = self.screen.unit_px;
+    pub fn window_pixel_size(&self, win: u32, char_px: (u32, u32)) -> Option<(u32, u32)> {
+        self.pixel_size_at(win, char_px)
+    }
+
+    /// [`window_pixel_size`](Self::window_pixel_size) measured against the screen
+    /// of the last relayout (its `unit_px`), so design mode needs no caller-side
+    /// cell size.
+    pub fn window_pixel_size_in_screen(&self, win: u32) -> Option<(u32, u32)> {
+        self.pixel_size_at(win, self.screen.unit_px)
+    }
+
+    fn pixel_size_at(&self, win: u32, char_px: (u32, u32)) -> Option<(u32, u32)> {
         let w = self.win(win)?;
         if w.wintype != WinType::Graphics {
             return None;
@@ -4427,7 +4443,7 @@ mod layout_snap_tests {
             let mut m = Model::new();
             let buf = m.window_open(0, 0, 0, 3, 0).unwrap(); // TextBuffer root
             let gfx = m.window_open(buf, WINMETHOD_LEFT | WINMETHOD_PROPORTIONAL, 50, 5, 0).unwrap();
-            let leaves = m.relayout(&GlkScreen::cells((width, 41), (9, 19)), false);
+            let leaves = m.relayout(width, 41, (9, 19), false);
             let gw = m.window_size(gfx).unwrap().0;
             let bw = m.window_size(buf).unwrap().0;
             assert_eq!(gw, bw, "50% of {width} must be equal halves (gfx={gw}, buf={bw})");
@@ -4453,7 +4469,7 @@ mod layout_snap_tests {
         let gfx = m
             .window_open(buf, WINMETHOD_LEFT | WINMETHOD_PROPORTIONAL | WINMETHOD_NOBORDER, 50, 5, 0)
             .unwrap();
-        m.relayout(&GlkScreen::cells((80, 40), (9, 19)), false);
+        m.relayout(80, 40, (9, 19), false);
         assert_eq!(m.window_size(gfx).unwrap().0, 40);
         assert_eq!(m.window_size(buf).unwrap().0, 40);
     }
@@ -4467,7 +4483,7 @@ mod layout_snap_tests {
     fn window_tree_reflects_stylehint_set_after_open() {
         let mut m = Model::new();
         let _buf = m.window_open(0, 0, 0, 3, 0).unwrap(); // TextBuffer root
-        m.relayout(&GlkScreen::cells((80, 24), (1, 1)), false);
+        m.relayout(80, 24, (1, 1), false);
         // Normal (style 0) BackColor (hint 8) for buffer windows (wintype 3),
         // set AFTER the window already opened.
         m.set_style_hint(3, 0, 8, 0x00EE_EEEE);
@@ -4488,7 +4504,7 @@ mod layout_snap_tests {
             let mut m = Model::new();
             let buf = m.window_open(0, 0, 0, 3, 0).unwrap();
             let top = m.window_open(buf, WINMETHOD_ABOVE | WINMETHOD_PROPORTIONAL, 50, 5, 0).unwrap();
-            m.relayout(&GlkScreen::cells((80, height), (9, 19)), false);
+            m.relayout(80, height, (9, 19), false);
             let (th, bh) = (m.window_size(top).unwrap().1, m.window_size(buf).unwrap().1);
             assert_eq!(th, bh, "50% of {height} rows must be equal halves ({th} vs {bh})");
             assert!((height - 1) - (th + bh) <= 1, "at {height}: more than one row unpadded");
@@ -4507,9 +4523,9 @@ mod layout_snap_tests {
         let buf = m.window_open(0, 0, 0, 3, 0).unwrap();
         // Fixed Left 722px sidebar; 722/9 = 80.2 → 81-cell footprint (729px).
         let gfx = m.window_open(buf, WINMETHOD_LEFT | WINMETHOD_FIXED, 722, 5, 0).unwrap();
-        m.relayout(&GlkScreen::cells((200, 48), (9, 19)), false);
+        m.relayout(200, 48, (9, 19), false);
         assert_eq!(m.window_size(gfx).unwrap().0, 81, "footprint rounds up to whole cells");
-        let (pw, ph) = m.window_pixel_size(gfx).unwrap();
+        let (pw, ph) = m.window_pixel_size(gfx, (9, 19)).unwrap();
         assert_eq!(pw, 722, "reports the exact requested width, not 81×9=729");
         // The non-fixed axis stays cells × char_px.
         assert_eq!(ph, m.window_size(gfx).unwrap().1 * 19, "height still cells × char_px");
@@ -4525,10 +4541,10 @@ mod layout_snap_tests {
         let mut m = Model::new();
         let buf = m.window_open(0, 0, 0, 3, 0).unwrap();
         let gfx = m.window_open(buf, WINMETHOD_LEFT | WINMETHOD_PROPORTIONAL, 50, 5, 0).unwrap();
-        m.relayout(&GlkScreen::cells((80, 41), (9, 19)), false);
+        m.relayout(80, 41, (9, 19), false);
         // Content 79 cells = 711 px; half is 355 px (floor), leaving 356 px.
         assert_eq!(m.window_size(gfx).unwrap().0, 355 / 9, "footprint floors to whole cells");
-        assert_eq!(m.window_pixel_size(gfx).unwrap().0, 355, "reports its exact share, not 39×9");
+        assert_eq!(m.window_pixel_size(gfx, (9, 19)).unwrap().0, 355, "reports its exact share, not 39×9");
         // The sibling is a text window, so it is measured in cells and gets the
         // floor of the remaining share — equal to the key child's, at 39 each.
         assert_eq!(m.window_size(buf).unwrap().0, 356 / 9, "the sibling floors its own share");
@@ -4548,7 +4564,7 @@ mod layout_snap_tests {
         // WINMETHOD_ABOVE puts the KEY (new, graphics) window on top, so it is
         // the tree's FIRST child — Kerkerkruip's actual shape.
         let gfx = m.window_open(buf, WINMETHOD_ABOVE | WINMETHOD_FIXED, 2, 5, 0).unwrap();
-        m.relayout(&GlkScreen::cells((80, 41), (9, 19)), false);
+        m.relayout(80, 41, (9, 19), false);
         match m.window_tree().expect("root window exists") {
             WinTree::Pair { vertical, split, split_px, first, .. } => {
                 assert!(vertical, "ABOVE/BELOW is a vertical split");
@@ -4573,8 +4589,8 @@ mod layout_snap_tests {
         let mut m = Model::new();
         let buf = m.window_open(0, 0, 0, 3, 0).unwrap();
         let gfx = m.window_open(buf, WINMETHOD_ABOVE | WINMETHOD_PROPORTIONAL, 50, 5, 0).unwrap();
-        m.relayout(&GlkScreen::cells((80, 41), (9, 19)), false);
-        let expect_px = m.window_pixel_size(gfx).unwrap().1;
+        m.relayout(80, 41, (9, 19), false);
+        let expect_px = m.window_pixel_size(gfx, (9, 19)).unwrap().1;
         match m.window_tree().expect("root window exists") {
             WinTree::Pair { split_px, .. } => {
                 assert_eq!(split_px, Some(expect_px), "matches window_pixel_size's own share");
@@ -4592,7 +4608,7 @@ mod layout_snap_tests {
         // WINMETHOD_BELOW puts the new (graphics) window on the bottom, so the
         // OLD text buffer is positioned first this time.
         let _gfx = m.window_open(buf, WINMETHOD_BELOW | WINMETHOD_FIXED, 2, 5, 0).unwrap();
-        m.relayout(&GlkScreen::cells((80, 41), (9, 19)), false);
+        m.relayout(80, 41, (9, 19), false);
         match m.window_tree().expect("root window exists") {
             WinTree::Pair { split_px, first, .. } => {
                 assert!(matches!(first.as_ref(), WinTree::Leaf { wintype: WinType::TextBuffer, .. }));
@@ -4614,7 +4630,7 @@ mod layout_snap_tests {
         let mut m = Model::new();
         let buf = m.window_open(0, 0, 0, 3, 0).unwrap();
         let gfx = m.window_open(buf, WINMETHOD_LEFT | WINMETHOD_PROPORTIONAL, 33, 5, 0).unwrap();
-        let leaves = m.relayout(&GlkScreen::cells((95, 57), (9, 19)), false);
+        let leaves = m.relayout(95, 57, (9, 19), false);
         let right = leaves.iter().map(|(_, _, r, _)| r.left + r.width).max().unwrap();
         let bottom = leaves.iter().map(|(_, _, r, _)| r.top + r.height).max().unwrap();
         assert_eq!(right, 95, "an awkward proportional split must not collapse the width");
@@ -4637,7 +4653,7 @@ mod layout_snap_tests {
         let b = m.window_open(a, WINMETHOD_LEFT | WINMETHOD_PROPORTIONAL, 40, 3, 0).unwrap();
         let c = m.window_open(b, WINMETHOD_LEFT | WINMETHOD_PROPORTIONAL, 40, 3, 0).unwrap();
         let d = m.window_open(c, WINMETHOD_LEFT | WINMETHOD_PROPORTIONAL, 40, 3, 0).unwrap();
-        let leaves = m.relayout(&GlkScreen::cells((97, 30), (9, 19)), false);
+        let leaves = m.relayout(97, 30, (9, 19), false);
         let right = leaves.iter().map(|(_, _, r, _)| r.left + r.width).max().unwrap();
         assert_eq!(right, 97, "the tree still reaches the right edge");
         // Walk each pair and check its two children against its own content.
@@ -4663,7 +4679,7 @@ mod layout_snap_tests {
         let mut m = Model::new();
         let buf = m.window_open(0, 0, 0, 3, 0).unwrap();
         let _grid = m.window_open(buf, WINMETHOD_ABOVE | WINMETHOD_FIXED, 1, 4, 0).unwrap();
-        let leaves = m.relayout(&GlkScreen::cells((81, 41), (9, 19)), false);
+        let leaves = m.relayout(81, 41, (9, 19), false);
         let right = leaves.iter().map(|(_, _, r, _)| r.left + r.width).max().unwrap();
         let bottom = leaves.iter().map(|(_, _, r, _)| r.top + r.height).max().unwrap();
         assert_eq!(right, 81, "no proportional split → full width used");
@@ -4679,14 +4695,14 @@ mod layout_snap_tests {
         let mut m = Model::new();
         let buf = m.window_open(0, 0, 0, 3, 0).unwrap(); // TextBuffer root
         let grid = m.window_open(buf, WINMETHOD_ABOVE | WINMETHOD_FIXED, 1, 4, 0).unwrap();
-        let leaves = m.relayout(&GlkScreen::cells((80, 24), (9, 19)), false);
+        let leaves = m.relayout(80, 24, (9, 19), false);
         let grid_border = leaves.iter().find(|(id, ..)| *id == grid).map(|&(.., b)| b);
         assert_eq!(grid_border, Some(Some(true)), "default split (Border) hints a framed grid leaf");
 
         // A lone, unsplit root has no parent pair → no border preference (None).
         let mut m = Model::new();
         let root = m.window_open(0, 0, 0, 3, 0).unwrap(); // TextBuffer root, never split
-        let leaves = m.relayout(&GlkScreen::cells((80, 24), (9, 19)), false);
+        let leaves = m.relayout(80, 24, (9, 19), false);
         let root_border = leaves.iter().find(|(id, ..)| *id == root).map(|&(.., b)| b);
         assert_eq!(root_border, Some(None), "a parentless root expresses no border preference");
 
@@ -4696,7 +4712,7 @@ mod layout_snap_tests {
         let grid = m
             .window_open(buf, WINMETHOD_ABOVE | WINMETHOD_FIXED | WINMETHOD_NOBORDER, 1, 4, 0)
             .unwrap();
-        let leaves = m.relayout(&GlkScreen::cells((80, 24), (9, 19)), false);
+        let leaves = m.relayout(80, 24, (9, 19), false);
         let grid_border = leaves.iter().find(|(id, ..)| *id == grid).map(|&(.., b)| b);
         assert_eq!(grid_border, Some(Some(false)), "NoBorder split hints an unframed grid leaf");
     }
@@ -4986,7 +5002,7 @@ mod layout_snap_tests {
         let mut m = Model::new();
         let buf = m.window_open(0, 0, 0, 3, 0).unwrap(); // TextBuffer root
         let grid = m.window_open(buf, WINMETHOD_ABOVE | WINMETHOD_FIXED, 1, 4, 0).unwrap();
-        m.relayout(&GlkScreen::cells((80, 40), (9, 19)), false);
+        m.relayout(80, 40, (9, 19), false);
         assert!(m.mouse_windows().is_empty(), "nothing armed → empty");
         m.set_mouse_request(grid);
         let armed = m.mouse_windows();
@@ -5004,7 +5020,7 @@ mod layout_snap_tests {
         let mut m = Model::new();
         let buf = m.window_open(0, 0, 0, 3, 0).unwrap(); // TextBuffer root
         let grid = m.window_open(buf, WINMETHOD_LEFT | WINMETHOD_FIXED, 20, 4, 0).unwrap();
-        m.relayout(&GlkScreen::cells((80, 24), (1, 1)), false);
+        m.relayout(80, 24, (1, 1), false);
         assert_eq!(m.window_size(grid).unwrap().0, 20, "fixed key keeps its exact 20 cols");
         assert_eq!(m.window_size(buf).unwrap().0, 59, "sibling = 80 − 20 − 1 border");
     }
@@ -5018,7 +5034,7 @@ mod layout_snap_tests {
         let grid = m
             .window_open(buf, WINMETHOD_LEFT | WINMETHOD_FIXED | WINMETHOD_NOBORDER, 20, 4, 0)
             .unwrap();
-        m.relayout(&GlkScreen::cells((80, 24), (1, 1)), false);
+        m.relayout(80, 24, (1, 1), false);
         assert_eq!(m.window_size(grid).unwrap().0, 20);
         assert_eq!(m.window_size(buf).unwrap().0, 60, "no border reserved → 80 − 20");
     }
@@ -5031,7 +5047,7 @@ mod layout_snap_tests {
         let mut m = Model::new();
         let buf = m.window_open(0, 0, 0, 3, 0).unwrap();
         let grid = m.window_open(buf, WINMETHOD_LEFT | WINMETHOD_FIXED, 20, 4, 0).unwrap(); // default border
-        m.relayout(&GlkScreen::cells((80, 24), (1, 1)), true); // backend's borderless preference, on
+        m.relayout(80, 24, (1, 1), true); // backend's borderless preference, on
         assert_eq!(m.window_size(grid).unwrap().0, 20, "fixed key keeps its 20 cols");
         assert_eq!(m.window_size(buf).unwrap().0, 60, "borderless → sibling gets 80 − 20 (no gutter)");
         match m.window_tree().expect("a root pair") {
@@ -5046,7 +5062,7 @@ mod layout_snap_tests {
         let mut m = Model::new();
         let buf = m.window_open(0, 0, 0, 3, 0).unwrap();
         let grid = m.window_open(buf, WINMETHOD_BELOW | WINMETHOD_FIXED, 3, 4, 0).unwrap();
-        m.relayout(&GlkScreen::cells((80, 24), (1, 1)), false);
+        m.relayout(80, 24, (1, 1), false);
         assert_eq!(m.window_size(grid).unwrap().1, 3, "fixed key keeps its 3 rows");
         assert_eq!(m.window_size(buf).unwrap().1, 20, "sibling = 24 − 3 − 1 border");
     }
@@ -5058,7 +5074,7 @@ mod layout_snap_tests {
         let mut m = Model::new();
         let buf = m.window_open(0, 0, 0, 3, 0).unwrap();
         let grid = m.window_open(buf, WINMETHOD_LEFT | WINMETHOD_PROPORTIONAL, 50, 4, 0).unwrap();
-        m.relayout(&GlkScreen::cells((81, 24), (1, 1)), false); // content 80 is even → equal halves
+        m.relayout(81, 24, (1, 1), false); // content 80 is even → equal halves
         let gw = m.window_size(grid).unwrap().0;
         let bw = m.window_size(buf).unwrap().0;
         let total = m.window_size(m.root()).unwrap().0;
@@ -5075,7 +5091,7 @@ mod layout_snap_tests {
         let mut m = Model::new();
         let buf = m.window_open(0, 0, 0, 3, 0).unwrap();
         let grid = m.window_open(buf, WINMETHOD_ABOVE | WINMETHOD_FIXED, 1, 4, 0).unwrap();
-        m.relayout(&GlkScreen::cells((80, 24), (1, 1)), false);
+        m.relayout(80, 24, (1, 1), false);
         match m.window_tree().unwrap() {
             WinTree::Pair { vertical, border, split, first, second, .. } => {
                 assert!(vertical, "Above → vertical split");
@@ -5101,7 +5117,7 @@ mod layout_snap_tests {
         let mut m = Model::new();
         let buf = m.window_open(0, 0, 0, 3, 0).unwrap();
         let grid = m.window_open(buf, WINMETHOD_LEFT | WINMETHOD_FIXED, 20, 4, 0).unwrap();
-        m.relayout(&GlkScreen::cells((80, 24), (1, 1)), false);
+        m.relayout(80, 24, (1, 1), false);
         match m.window_tree().unwrap() {
             WinTree::Pair { vertical, border, split, first, second, .. } => {
                 assert!(!vertical, "Left → horizontal split");
@@ -5123,7 +5139,7 @@ mod layout_snap_tests {
         let _grid = m
             .window_open(buf, WINMETHOD_ABOVE | WINMETHOD_FIXED | WINMETHOD_NOBORDER, 1, 4, 0)
             .unwrap();
-        m.relayout(&GlkScreen::cells((80, 24), (1, 1)), false);
+        m.relayout(80, 24, (1, 1), false);
         match m.window_tree().unwrap() {
             WinTree::Pair { border, .. } => assert!(!border, "NoBorder → border == false"),
             _ => panic!("root should be a pair"),
@@ -5139,7 +5155,7 @@ mod layout_snap_tests {
         let buf = m.window_open(0, 0, 0, 3, 0).unwrap();
         let _grid = m.window_open(buf, WINMETHOD_ABOVE | WINMETHOD_FIXED, 1, 4, 0).unwrap();
         let buf2 = m.window_open(buf, WINMETHOD_LEFT | WINMETHOD_PROPORTIONAL, 50, 3, 0).unwrap();
-        m.relayout(&GlkScreen::cells((81, 24), (1, 1)), false);
+        m.relayout(81, 24, (1, 1), false);
         match m.window_tree().unwrap() {
             WinTree::Pair { vertical, first, second, .. } => {
                 assert!(vertical, "outer split is Above → vertical");
@@ -5238,7 +5254,7 @@ mod layout_snap_tests {
         let a = m.window_open(0, 0, 0, 3, 0).unwrap();
         m.set_style_hint(3, 0, 8, 0x0022_2222);
         let b = m.window_open(a, WINMETHOD_BELOW | WINMETHOD_PROPORTIONAL, 50, 3, 0).unwrap();
-        m.relayout(&GlkScreen::cells((80, 24), (1, 1)), false);
+        m.relayout(80, 24, (1, 1), false);
         // Collect leaf bgs by id.
         fn leaf_bg(t: &WinTree, want: u32) -> Option<Option<u32>> {
             match t {
@@ -5260,7 +5276,7 @@ mod layout_snap_tests {
         let buf = m.window_open(0, 0, 0, 3, 0).unwrap(); // buffer: no hint → None
         m.set_style_hint(4, 0, 8, 0x0033_4455); // TextGrid Normal BackColor
         let grid = m.window_open(buf, WINMETHOD_ABOVE | WINMETHOD_FIXED, 1, 4, 0).unwrap(); // key = grid
-        m.relayout(&GlkScreen::cells((80, 24), (1, 1)), false);
+        m.relayout(80, 24, (1, 1), false);
         match m.window_tree().unwrap() {
             WinTree::Pair { key_bg, key_fg, .. } => {
                 assert_eq!(key_bg, Some(0x0033_4455), "border colour is the key grid's bg");
@@ -6379,20 +6395,20 @@ mod fault_hardening_tests {
         let a = m.window_open(0, 0, 0, 3, 0).unwrap(); // root: TextBuffer A
         let b = m.window_open(a, WINMETHOD_RIGHT | WINMETHOD_PROPORTIONAL, 50, 3, 0).unwrap(); // split -> pair(A, B)
         let c = m.window_open(b, WINMETHOD_BELOW | WINMETHOD_PROPORTIONAL, 50, 3, 0).unwrap(); // split B -> pair(B, C)
-        m.relayout(&GlkScreen::cells((80, 24), (9, 19)), false);
+        m.relayout(80, 24, (9, 19), false);
         assert!(m.window_tree().is_some(), "three live windows, a real tree");
 
         // Close B: parent is the inner pair, grandparent is the root pair
         // (nonzero) — exercises `win_mut(grandparent)`.
         m.window_close(b);
-        m.relayout(&GlkScreen::cells((80, 24), (9, 19)), false);
+        m.relayout(80, 24, (9, 19), false);
         assert!(m.win(c).is_some(), "C survives its sibling's close");
         assert!(m.win(a).is_some(), "A (outside the closed split) is untouched");
 
         // Close C: parent is now the root pair, grandparent is 0 — exercises
         // the `self.root = sibling` branch instead.
         m.window_close(c);
-        m.relayout(&GlkScreen::cells((80, 24), (9, 19)), false);
+        m.relayout(80, 24, (9, 19), false);
         assert_eq!(m.root(), a, "A is promoted straight to root");
 
         // Close A: parent == 0, the "closing the root" branch.
@@ -6446,8 +6462,8 @@ mod fault_hardening_tests {
         let mut m = Model::new();
         let buf = m.window_open(0, 0, 0, 3, 0).unwrap();
         let gfx = m.window_open(buf, WINMETHOD_ABOVE | WINMETHOD_PROPORTIONAL, 100, 5, 0).unwrap();
-        m.relayout(&GlkScreen::design((640, 480), (6.5, 13.0)), true);
-        assert_eq!(m.window_pixel_size(gfx), Some((640, 480)));
+        m.relayout_screen(&GlkScreen::design((640, 480), (6.5, 13.0)), true);
+        assert_eq!(m.window_pixel_size_in_screen(gfx), Some((640, 480)));
         assert_eq!(m.window_size(buf).unwrap().1, 0, "the old child keeps 0 rows");
         assert_eq!(m.window_rect_px(buf), Some((640, 0)), "and 0 px of height");
     }
@@ -6459,9 +6475,9 @@ mod fault_hardening_tests {
         let mut m = Model::new();
         let buf = m.window_open(0, 0, 0, 3, 0).unwrap();
         let gfx = m.window_open(buf, WINMETHOD_LEFT | WINMETHOD_PROPORTIONAL, 25, 5, 0).unwrap();
-        m.relayout(&GlkScreen::design((641, 480), (6.5, 13.0)), true);
-        assert_eq!(m.window_pixel_size(gfx), Some((160, 480)), "25% of 641 px, floored");
-        assert!(m.window_pixel_size(buf).is_none());
+        m.relayout_screen(&GlkScreen::design((641, 480), (6.5, 13.0)), true);
+        assert_eq!(m.window_pixel_size_in_screen(gfx), Some((160, 480)), "25% of 641 px, floored");
+        assert!(m.window_pixel_size_in_screen(buf).is_none());
         let t = m.window_tree().unwrap();
         let (a, b) = match &t {
             WinTree::Pair { first, second, .. } => (first.rect(), second.rect()),
@@ -6480,7 +6496,7 @@ mod fault_hardening_tests {
         let mut m = Model::new();
         let buf = m.window_open(0, 0, 0, 3, 0).unwrap();
         let grid = m.window_open(buf, WINMETHOD_ABOVE | WINMETHOD_FIXED, 3, 4, 0).unwrap();
-        m.relayout(&GlkScreen::design((640, 480), (6.5, 13.3)), true);
+        m.relayout_screen(&GlkScreen::design((640, 480), (6.5, 13.3)), true);
         // 3 rows * 13.3 = 39.9 -> 40 px; reports floor(40/13.3) = 3 rows.
         assert_eq!(m.window_size(grid), Some((98, 3)), "floor(640/6.5) = 98 cols, 3 rows");
         let (cw, ch) = (m.window_size(buf).unwrap().0, m.window_size(buf).unwrap().1);
@@ -6495,9 +6511,9 @@ mod fault_hardening_tests {
     fn design_mode_relayout_on_cell_change_keeps_rects() {
         let mut m = Model::new();
         let buf = m.window_open(0, 0, 0, 3, 0).unwrap();
-        m.relayout(&GlkScreen::design((640, 480), (8.0, 16.0)), true);
+        m.relayout_screen(&GlkScreen::design((640, 480), (8.0, 16.0)), true);
         assert_eq!(m.window_size(buf), Some((80, 30)));
-        m.relayout(&GlkScreen::design((640, 480), (6.4, 12.0)), true);
+        m.relayout_screen(&GlkScreen::design((640, 480), (6.4, 12.0)), true);
         assert_eq!(m.window_size(buf), Some((100, 40)));
         assert_eq!(m.window_rect_px(buf), Some((640, 480)));
     }
