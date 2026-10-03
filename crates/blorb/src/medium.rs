@@ -3312,16 +3312,30 @@ mod tests {
     /// Every regular file under `dir`, recursing into subdirectories — the
     /// discs live one level down now (`treasures/Amiga/`, `treasures/Mac/`,
     /// `treasures/ISOs/`), and a future reorg might nest further still.
+    ///
+    /// Symlinked directories are followed, but each canonical directory is
+    /// walked once, so a link back to an ancestor cannot loop (SQ-1708).
     fn files_under(dir: &std::path::Path, out: &mut Vec<std::path::PathBuf>) {
-        let Ok(entries) = std::fs::read_dir(dir) else { return };
-        for entry in entries.flatten() {
-            let path = entry.path();
-            if path.is_dir() {
-                files_under(&path, out);
-            } else if path.is_file() {
-                out.push(path);
+        fn walk(
+            dir: &std::path::Path,
+            out: &mut Vec<std::path::PathBuf>,
+            seen: &mut std::collections::HashSet<std::path::PathBuf>,
+        ) {
+            let Ok(canon) = std::fs::canonicalize(dir) else { return };
+            if !seen.insert(canon) {
+                return;
+            }
+            let Ok(entries) = std::fs::read_dir(dir) else { return };
+            for entry in entries.flatten() {
+                let path = entry.path();
+                if path.is_dir() {
+                    walk(&path, out, seen);
+                } else if path.is_file() {
+                    out.push(path);
+                }
             }
         }
+        walk(dir, out, &mut std::collections::HashSet::new());
     }
 
     /// **Every disc the user drops in `treasures/` mounts AND would be offered

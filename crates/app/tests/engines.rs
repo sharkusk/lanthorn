@@ -52,6 +52,8 @@ mod apple_disk_set_release;
 mod art_build_pairing;
 #[path = "suites/colour_regime_media.rs"]
 mod colour_regime_media;
+#[path = "suites/corpus_walk_guard.rs"]
+mod corpus_walk_guard;
 #[path = "suites/cover_frontispiece.rs"]
 mod cover_frontispiece;
 #[path = "suites/disk_set_rows.rs"]

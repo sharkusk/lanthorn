@@ -106,3 +106,47 @@ pub fn fixture_path(name: &str) -> PathBuf {
     // back to the tracked directory instead moves that parent and the sidecars vanish.
     local
 }
+
+/// Every regular file under `dir`, at any depth, each reached ONCE (SQ-1708).
+///
+/// The one recursive corpus walker the suites share. Symlinked directories ARE
+/// followed (parts of the corpus live behind links), but a hand-rolled
+/// `if path.is_dir() { recurse }` with no memory looped on a `stories/stories ->
+/// stories` self-link (a bare `ln -s` re-run in a worktree makes one), recursing
+/// ~32 levels to ELOOP and reporting 1,408 blorbs for a 44-blorb corpus, so every
+/// suite that mounted the corpus paid 32x.
+///
+/// Directories AND files are tracked by canonical path, the way
+/// `picker::library_dirs` keeps a visited set: a link back to an ancestor, or a
+/// second link to something already walked, is skipped.
+pub fn files_under(dir: &Path, out: &mut Vec<PathBuf>) {
+    let mut seen_dirs = std::collections::HashSet::new();
+    let mut seen_files = std::collections::HashSet::new();
+    walk_files(dir, out, &mut seen_dirs, &mut seen_files);
+}
+
+fn walk_files(
+    dir: &Path,
+    out: &mut Vec<PathBuf>,
+    seen_dirs: &mut std::collections::HashSet<PathBuf>,
+    seen_files: &mut std::collections::HashSet<PathBuf>,
+) {
+    let Ok(canon) = std::fs::canonicalize(dir) else { return };
+    if !seen_dirs.insert(canon) {
+        return;
+    }
+    let Ok(entries) = std::fs::read_dir(dir) else { return };
+    for entry in entries.flatten() {
+        let path = entry.path();
+        if path.is_dir() {
+            walk_files(&path, out, seen_dirs, seen_files);
+        } else if path.is_file() {
+            if let Ok(canon) = std::fs::canonicalize(&path) {
+                if !seen_files.insert(canon) {
+                    continue;
+                }
+            }
+            out.push(path);
+        }
+    }
+}

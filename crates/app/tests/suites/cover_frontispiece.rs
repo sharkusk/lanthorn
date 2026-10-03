@@ -1,4 +1,4 @@
-//! **The shelf does carry frontispieces — twenty-six of them** (SQ-0985).
+//! **The shelf does carry frontispieces — forty-four of them** (SQ-0985).
 //!
 //! The quest arrived believing the opposite. A scan run while assembling the
 //! SQ-0979 cover-art corpus reported zero Blorb frontispieces, and concluded
@@ -8,9 +8,11 @@
 //! twenty-one `.blb` files here are Infocom and Scott Adams art containers, and
 //! it is quite true that not one declares an `Fspc` — but no modern Blorb is
 //! spelled `.blb`. Re-run over every file in `stories/`, `treasures/` and
-//! `masterpieces/`, the count is **26 blorbs carrying an `Fspc`**: all in
+//! `masterpieces/`, the count is **44 blorbs carrying an `Fspc`** (re-measured SQ-1708 once the
+//! walker stopped looping on a `stories/stories` self-link; the earlier 26 predates
+//! corpus growth): all in
 //! `stories/`, all `.gblorb`/`.zblorb`/`.blorb`, all naming Pict resource 1,
-//! nineteen JPEG and seven PNG. `treasures/` and `masterpieces/` carry none —
+//! (at 26: nineteen JPEG and seven PNG). `treasures/` and `masterpieces/` carry none —
 //! their `.adf`/`.dc42`/`.iso`/`.bin` media hold no Blorb at all, so the
 //! picker's assumption that a disk-image row has no frontispiece to lose
 //! (`StoryEntry::cover_key`) holds on this corpus.
@@ -38,20 +40,9 @@ fn corpus_dirs() -> Vec<PathBuf> {
     ["stories", "masterpieces", "treasures"].iter().map(|d| root.join(d)).collect()
 }
 
-/// Every regular file under `dir`, recursing into subdirectories — `treasures/`
-/// now nests its discs one level down (`Amiga/`, `Mac/`, `ISOs/`), and a future
-/// reorg might nest further still.
-fn files_under(dir: &Path, out: &mut Vec<PathBuf>) {
-    let Ok(entries) = std::fs::read_dir(dir) else { return };
-    for entry in entries.flatten() {
-        let path = entry.path();
-        if path.is_dir() {
-            files_under(&path, out);
-        } else if path.is_file() {
-            out.push(path);
-        }
-    }
-}
+// `files_under` is the shared loop-safe walker (SQ-1708): `treasures/` nests its
+// discs a level down, and a symlink back to an ancestor must not recurse forever.
+use crate::fixture_paths::files_under;
 
 /// Every regular file in the three corpora, sorted.
 fn corpus_files() -> Vec<PathBuf> {
@@ -107,7 +98,7 @@ fn declared_frontispieces() -> Vec<(PathBuf, u32)> {
 /// could fall inside a JPEG by chance on a shelf that keeps growing, and a case
 /// that fails on the user's next download is worse than one that merely answers
 /// "is the corpus here?" without asking the parser. Measured when this landed:
-/// 26 blorbs contain the bytes, 26 declare an `Fspc`, the two sets identical.
+/// 44 blorbs contain the bytes, 44 declare an `Fspc`, the two sets identical.
 #[test]
 fn shelf_declares_frontispieces() {
     let raw: Vec<PathBuf> = shelf_blorbs()
@@ -135,7 +126,7 @@ fn shelf_declares_frontispieces() {
 /// executable and fails here at once.
 ///
 /// What it does **not** catch, and this shelf cannot: a lookup that kept the
-/// `Pict` usage but ignored the number. All 26 of these name resource 1 and 1
+/// `Pict` usage but ignored the number. All of these name resource 1 and 1
 /// is the first picture in every one of their indexes, so a number-blind
 /// lookup returns the right picture on every specimen. That gap is why the
 /// dangling-`Fspc` cases in `cover.rs` are synthesised — a container whose

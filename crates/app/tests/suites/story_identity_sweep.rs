@@ -46,20 +46,9 @@ fn corpus_dirs() -> Vec<PathBuf> {
     ["stories", "masterpieces", "treasures"].iter().map(|d| root.join(d)).collect()
 }
 
-/// Every regular file under `dir`, recursing into subdirectories — `treasures/`
-/// now nests its discs one level down (`Amiga/`, `Mac/`, `ISOs/`), and a future
-/// reorg might nest further still.
-fn files_under(dir: &Path, out: &mut Vec<PathBuf>) {
-    let Ok(entries) = std::fs::read_dir(dir) else { return };
-    for entry in entries.flatten() {
-        let path = entry.path();
-        if path.is_dir() {
-            files_under(&path, out);
-        } else if path.is_file() {
-            out.push(path);
-        }
-    }
-}
+// `files_under` is the shared loop-safe walker (SQ-1708): `treasures/` nests its
+// discs a level down, and a symlink back to an ancestor must not recurse forever.
+use crate::fixture_paths::files_under;
 
 /// Every regular file in the three corpora, sorted, with the huge disc images
 /// included — a 650 MB `.bin` is exactly the sort of container that used to

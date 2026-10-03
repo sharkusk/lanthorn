@@ -31,7 +31,8 @@ pub fn decode(bytes: &[u8]) -> Option<image::DynamicImage> {
 /// Pict's original encoded bytes and format (verifying they decode). `None`
 /// when the file isn't a blorb, has no frontispiece, the referenced Pict is
 /// missing, or the image doesn't decode.
-fn frontispiece_cover_bytes(path: &Path) -> Option<(Vec<u8>, image::ImageFormat)> {
+/// The verifying decode is returned too, so [`load_cover`] need not decode again.
+fn frontispiece_cover(path: &Path) -> Option<(Vec<u8>, image::ImageFormat, image::DynamicImage)> {
     let bytes = std::fs::read(path).ok()?;
     if !blorb::Blorb::is_blorb(&bytes) {
         return None;
@@ -39,9 +40,9 @@ fn frontispiece_cover_bytes(path: &Path) -> Option<(Vec<u8>, image::ImageFormat)
     let b = blorb::Blorb::parse(bytes).ok()?;
     let n = b.frontispiece()?;
     let (_ty, data) = b.resource(b"Pict", n)?;
-    decode(data)?;
+    let img = decode(data)?;
     let format = image::guess_format(data).ok()?;
-    Some((data.to_vec(), format))
+    Some((data.to_vec(), format, img))
 }
 
 /// `path`'s cover, by precedence: the story's own `Fspc` frontispiece always
@@ -56,12 +57,22 @@ fn frontispiece_cover_bytes(path: &Path) -> Option<(Vec<u8>, image::ImageFormat)
 /// caller that decodes with its own image stack) without paying to decode and
 /// re-encode it. [`load_cover`] is built on top of this.
 pub fn cover_bytes(path: &Path, game_dir: Option<&Path>) -> Option<(Vec<u8>, image::ImageFormat)> {
-    if let Some(found) = frontispiece_cover_bytes(path) {
-        return Some(found);
+    cover_parts(path, game_dir).map(|(bytes, format, _)| (bytes, format))
+}
+
+/// [`cover_bytes`] plus the decoded image when the frontispiece branch already
+/// decoded it to verify it (`None` for the `cover.png` fallback, which is not
+/// verified until someone decodes it).
+fn cover_parts(
+    path: &Path,
+    game_dir: Option<&Path>,
+) -> Option<(Vec<u8>, image::ImageFormat, Option<image::DynamicImage>)> {
+    if let Some((bytes, format, img)) = frontispiece_cover(path) {
+        return Some((bytes, format, Some(img)));
     }
     let bytes = std::fs::read(game_dir?.join("cover.png")).ok()?;
     let format = image::guess_format(&bytes).ok()?;
-    Some((bytes, format))
+    Some((bytes, format, None))
 }
 
 /// `path`'s cover, by precedence: the story's own `Fspc` frontispiece always
@@ -71,8 +82,11 @@ pub fn cover_bytes(path: &Path, game_dir: Option<&Path>) -> Option<(Vec<u8>, ima
 /// `fetch_worker`, which only cares whether a story already has its own
 /// cover). `None` when neither source yields a decodable image.
 pub fn load_cover(path: &Path, game_dir: Option<&Path>) -> Option<image::DynamicImage> {
-    let (bytes, _format) = cover_bytes(path, game_dir)?;
-    decode(&bytes)
+    let (bytes, _format, decoded) = cover_parts(path, game_dir)?;
+    match decoded {
+        Some(img) => Some(img),
+        None => decode(&bytes),
+    }
 }
 
 /// Byte budget for `CoverState::decoded`: the sum of every cached decoded
