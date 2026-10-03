@@ -1416,9 +1416,16 @@ pub struct EncodeTimings {
     pub window_shm: PhaseStat,
 }
 
+/// One [`GraphicsRender::stretch_cache`] row.
+type StretchEntry = (u64, (u16, u16), (u16, u16), std::sync::Arc<image::RgbaImage>);
+
 #[derive(Default)]
 pub struct GraphicsRender {
     cache: std::collections::HashMap<u32, (u64, u16, u16, Protocol)>,
+    /// Stretch design mode (SQ-1703): each graphics window's canvas resampled to
+    /// its cell box's device-pixel size, keyed `(version, cell area, font size)`
+    /// so the resample runs once per change, not once per frame.
+    stretch_cache: std::collections::HashMap<u32, StretchEntry>,
     /// Per-window memo of [`classify_graphics_as_cells`] (SQ-1200): the
     /// blank/uniform/rule_like scans and their region-averaging `cell_color`
     /// walk the whole canvas, so a redraw of an unchanged window — the common
@@ -1772,25 +1779,42 @@ impl GraphicsRender {
 
     /// [`Self::render`] for a Glulx design-mode canvas (SQ-1703 P3): the canvas
     /// is STRETCHED to exactly `area` per axis, aspect not honoured — the
-    /// whole design frame fills the pane. Kitty already scales its explicit
-    /// r x c grid that way; the other backends fit by aspect, so the canvas is
-    /// first resampled to the area's device-pixel box (one resample, only when
-    /// the cached protocol is stale) and then fitted, which at that size fills
-    /// the area exactly.
+    /// whole design frame fills the pane.
+    ///
+    /// EVERY backend gets a canvas already resampled to the area's device-pixel
+    /// box, kitty included. Kitty's `r`/`c` on a unicode-placeholder placement
+    /// does not stretch: the protocol says "The image will eventually be fit to
+    /// the specified rectangle, its aspect ratio preserved"
+    /// (<https://sw.kovidgoyal.net/kitty/graphics-protocol/>, Unicode
+    /// placeholders), so a raw 640x58 canvas in a 160x2-cell box is drawn
+    /// aspect-fit and centred, short of its window. Handing the terminal a canvas
+    /// whose aspect already equals the box's makes that fit a no-op. The other
+    /// backends fit by aspect too, so they need the same pre-stretch. The
+    /// resample is cached per window ([`Self::stretch_cache`]).
     pub fn render_stretched(&mut self, picker: &Picker, gw: &GraphicsWindow, area: Rect, letterbox: Style, buf: &mut Buffer) {
         let kitty = picker.protocol_type() == ratatui_image::picker::ProtocolType::Kitty;
-        let fresh = matches!(self.cache.get(&gw.win),
-            Some((v, w, h, _)) if *v == gw.version && *w == area.width && *h == area.height);
-        if area.width == 0 || area.height == 0 || kitty || fresh {
+        let fresh = !kitty
+            && matches!(self.cache.get(&gw.win),
+                Some((v, w, h, _)) if *v == gw.version && *w == area.width && *h == area.height);
+        if area.width == 0 || area.height == 0 || fresh {
             return self.render(picker, gw, area, letterbox, buf);
         }
         let fs = picker.font_size();
-        let (bw, bh) = (area.width as u32 * fs.width.max(1) as u32, area.height as u32 * fs.height.max(1) as u32);
-        let stretched = GraphicsWindow {
-            canvas: std::sync::Arc::new(resize_directional(&gw.canvas, bw, bh)),
-            upscale: true,
-            ..gw.clone()
+        let (fw, fh) = (fs.width.max(1), fs.height.max(1));
+        let key = ((area.width, area.height), (fw, fh));
+        let canvas = match self.stretch_cache.get(&gw.win) {
+            Some((v, a, f, c)) if *v == gw.version && (*a, *f) == key => c.clone(),
+            _ => {
+                let c = std::sync::Arc::new(resize_directional(
+                    &gw.canvas,
+                    area.width as u32 * fw as u32,
+                    area.height as u32 * fh as u32,
+                ));
+                self.stretch_cache.insert(gw.win, (gw.version, key.0, key.1, c.clone()));
+                c
+            }
         };
+        let stretched = GraphicsWindow { canvas, upscale: true, ..gw.clone() };
         self.render(picker, &stretched, area, letterbox, buf)
     }
 
@@ -1851,6 +1875,7 @@ impl GraphicsRender {
     /// forgotten (SQ-0637) — see [`GraphicsRender::queue_kitty_deletes`].
     pub fn retain_live(&mut self, live: &std::collections::HashSet<u32>) {
         self.cache.retain(|win, _| live.contains(win));
+        self.stretch_cache.retain(|win, _| live.contains(win));
         self.cell_memo.retain(|win, _| live.contains(win));
         let dead: Vec<u32> = self.kitty_wins.keys().copied().filter(|w| !live.contains(w)).collect();
         for win in dead {

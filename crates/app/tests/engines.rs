@@ -210,6 +210,8 @@ mod sq1598_glk_cell_px;
 mod sq1703_glk_design_screen;
 #[path = "suites/sq1703_glk_stretch.rs"]
 mod sq1703_glk_stretch;
+#[path = "suites/sq1703_glk_stretch_pixels.rs"]
+mod sq1703_glk_stretch_pixels;
 #[path = "suites/sq1703_glk_mask.rs"]
 mod sq1703_glk_mask;
 #[path = "suites/walkthroughs.rs"]
