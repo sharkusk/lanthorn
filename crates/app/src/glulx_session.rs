@@ -998,6 +998,30 @@ impl GlulxSession {
             return;
         }
         self.appglk().set_screen_override(screen);
+        if screen.is_none() {
+            // `None` is cell mode, full stop — stretch mode
+            // ([`Self::set_glk_design`]) is left too, or it would simply take
+            // over from the override that was just removed.
+            self.appglk().set_design(None);
+        }
+        self.machine.rearrange();
+        self.settle_after_event();
+        self.refresh_screen();
+    }
+
+    /// Turn STRETCH design mode on (`Some(design size px)`) or off (`None`)
+    /// (SQ-1703 P3). Unlike [`Self::set_glk_screen`] it is a standing
+    /// instruction: the design screen is re-derived from the current pane and
+    /// cell size on every relayout ([`crate::glk_cfg::glk_design_screen`]), so
+    /// [`Self::resize`] and [`Self::set_char_px`] keep it right with nothing to
+    /// re-apply. A new session (`@restart`) starts in cell mode and must be
+    /// told again. Relayouts and redraws as [`Self::set_char_px`] does; a no-op
+    /// once the game has quit.
+    pub fn set_glk_design(&mut self, design: Option<(u32, u32)>) {
+        if self.quit {
+            return;
+        }
+        self.appglk().set_design(design);
         self.machine.rearrange();
         self.settle_after_event();
         self.refresh_screen();

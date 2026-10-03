@@ -208,6 +208,8 @@ mod sq1565_kerkerkruip_title_rule_pixel_height;
 mod sq1598_glk_cell_px;
 #[path = "suites/sq1703_glk_design_screen.rs"]
 mod sq1703_glk_design_screen;
+#[path = "suites/sq1703_glk_stretch.rs"]
+mod sq1703_glk_stretch;
 #[path = "suites/walkthroughs.rs"]
 mod walkthroughs;
 #[path = "suites/walkthrough_adventureland.rs"]

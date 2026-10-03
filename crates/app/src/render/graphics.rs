@@ -1770,6 +1770,30 @@ impl GraphicsRender {
         paint_cell_plan(plan, area, buf)
     }
 
+    /// [`Self::render`] for a Glulx design-mode canvas (SQ-1703 P3): the canvas
+    /// is STRETCHED to exactly `area` per axis, aspect not honoured — the
+    /// whole design frame fills the pane. Kitty already scales its explicit
+    /// r x c grid that way; the other backends fit by aspect, so the canvas is
+    /// first resampled to the area's device-pixel box (one resample, only when
+    /// the cached protocol is stale) and then fitted, which at that size fills
+    /// the area exactly.
+    pub fn render_stretched(&mut self, picker: &Picker, gw: &GraphicsWindow, area: Rect, letterbox: Style, buf: &mut Buffer) {
+        let kitty = picker.protocol_type() == ratatui_image::picker::ProtocolType::Kitty;
+        let fresh = matches!(self.cache.get(&gw.win),
+            Some((v, w, h, _)) if *v == gw.version && *w == area.width && *h == area.height);
+        if area.width == 0 || area.height == 0 || kitty || fresh {
+            return self.render(picker, gw, area, letterbox, buf);
+        }
+        let fs = picker.font_size();
+        let (bw, bh) = (area.width as u32 * fs.width.max(1) as u32, area.height as u32 * fs.height.max(1) as u32);
+        let stretched = GraphicsWindow {
+            canvas: std::sync::Arc::new(resize_directional(&gw.canvas, bw, bh)),
+            upscale: true,
+            ..gw.clone()
+        };
+        self.render(picker, &stretched, area, letterbox, buf)
+    }
+
     pub fn render(&mut self, picker: &Picker, gw: &GraphicsWindow, area: Rect, letterbox: Style, buf: &mut Buffer) {
         if area.width == 0 || area.height == 0 {
             return;

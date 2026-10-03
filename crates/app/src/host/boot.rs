@@ -1551,6 +1551,9 @@ pub fn boot_story(req: BootRequest<'_>, hooks: &mut dyn BootHooks) -> Result<Boo
     state.game_picker = game_picker;
     state.game_picker_query_answered = game_picker_query_answered;
     state.glk_cell_px = glk_cell_px;
+    // SQ-1703 P3: a story with a `.cfg` design size lays out at it and is
+    // stretched over the pane, unless the per-game `glk_design = false`.
+    crate::host::screen::apply_glk_design(&mut *session, &mut state, &game_dir);
     state.min_story_screen = min_story_screen;
     state.term_default_colors = term_default_colors;
     state.query_sweep = query_sweep;

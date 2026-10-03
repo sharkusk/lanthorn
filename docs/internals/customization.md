@@ -480,7 +480,43 @@ the font keys and `FullScreen`. Key meanings come from Windows Glulxe's own
 preference resolves per-game `config.toml` → garglk.ini `wborder` → the `.cfg`
 (`WindowBorders=no` → borderless) → bordered, in the one function
 `glk_cfg::resolve_borderless` that boot, `@restart` and the settings screen
-share. The design size and mask are parsed and exposed, not yet rendered.
+share.
+
+**Stretch design mode (SQ-1703 P3).** A story whose `.cfg` states a design size
+(and whose per-game `config.toml` does not say `glk_design = false`; the
+sidecar key is deliberately not templated) is laid out at that size and the
+whole frame is stretched over the story pane. No letterbox; aspect is not
+honoured. `host::screen::apply_glk_design` turns it on at boot and again after
+`@restart` (a fresh session starts in cell mode) and sets
+`AppState::glk_stretch` for the renderer. The mode is a standing instruction on
+`AppGlk`, not a snapshot: the Glk screen is re-derived from the current pane
+and cell size on every relayout by `glk_cfg::glk_design_screen(design_px,
+pane_px, char_px)`, so a resize or a cell-size change needs no hook. Its text
+cell is the terminal cell divided by the per-axis stretch (fractional,
+non-square); the cell size cancels, leaving `design / cells` design pixels per
+terminal cell.
+
+The edge rule is ONE function, `glk_cfg::design_px_to_cell_edge(px, design,
+cells)` (round half up, exact integers), applied to BOTH edges of every window
+(`design_rect_to_cells`), so neighbours share an edge exactly, `edge(0) = 0` and
+`edge(design) = cells`, and the windows tile the pane. `AppGlk::
+convert_design_tree` turns gvm's design-pixel window tree into the cell tree
+the renderer already draws: exact cell counts per pair, never a border.
+Graphics windows draw their design-pixel canvas stretched to exactly their cell
+rect (`GraphicsRender::render_stretched`: kitty scales its r x c grid itself,
+the other backends get a one-off resample first). Text windows draw as terminal
+text.
+
+**Characters told == cells drawn.** The story is told `chars_in(px) =
+floor(px / text_cell)`; the edge rule can give a text window one cell more
+(rounding is not flooring; drawn is never fewer, an integer in `(d-1, d+1)` is
+at least `floor(d)`). A text window is therefore drawn with exactly the told
+count and the at-most-one surplus column/row (far side) is a filler painted in
+the window's own background; `glk_cfg`'s sweep test and `sq1703_glk_stretch`
+pin it. The text margin is not carved out of a stretched text window. Not yet
+done: the window mask (`WindowMask`, P4: coverage-classify these same cell
+rects) and raster mode; a click in a graphics window still reports cell-times-
+`char_px` coordinates rather than design pixels.
 
 **And we answer for it.** A game can ask the interpreter what colour it actually
 paints a given style — and at least one game asks in order to find out whether

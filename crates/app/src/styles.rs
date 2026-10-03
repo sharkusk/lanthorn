@@ -53,6 +53,10 @@ pub fn per_game_config_path(game_dir: &Path) -> PathBuf {
 pub struct PerGameConfig {
     pub honor_game_colours: Option<bool>,
     pub borderless_windows: Option<bool>,
+    /// `false` keeps today's cell-measured Glulx layout for a story that
+    /// ships a Windows Glk `.cfg` design size (SQ-1703 P3); absent/`true` lets
+    /// the design size lay the story out and stretch it over the pane.
+    pub glk_design: Option<bool>,
     pub show_map: Option<bool>,
     pub pictures: Option<String>,
     pub interpreter_number: Option<u8>,
@@ -127,6 +131,7 @@ impl PerGameConfig {
     pub const KEYS: &'static [&'static str] = &[
         "honor_game_colours",
         "borderless_windows",
+        "glk_design",
         "show_map",
         "v6_pixel_lock",
         "guidance",
@@ -167,6 +172,7 @@ impl PerGameConfig {
         PerGameConfig {
             honor_game_colours: b("honor_game_colours"),
             borderless_windows: b("borderless_windows"),
+            glk_design: b("glk_design"),
             show_map: b("show_map"),
             pictures: s("pictures"),
             interpreter_number: v
@@ -204,6 +210,7 @@ impl PerGameConfig {
         edit_raw(game_dir, |doc| {
             put_bool(doc, "honor_game_colours", self.honor_game_colours);
             put_bool(doc, "borderless_windows", self.borderless_windows);
+            put_bool(doc, "glk_design", self.glk_design);
             put_bool(doc, "show_map", self.show_map);
             put_bool(doc, "v6_pixel_lock", self.v6_pixel_lock);
             put_bool(doc, "guidance", self.guidance);
@@ -345,6 +352,13 @@ pub fn read_per_game_honor(game_dir: &Path) -> Option<bool> {
 /// `Some(true)`, all window splits abut with no reserved gutter (SQ-0341).
 pub fn read_per_game_borderless(game_dir: &Path) -> Option<bool> {
     PerGameConfig::read(game_dir).borderless_windows
+}
+
+/// Read the per-game `glk_design` override (SQ-1703 P3). `Some(false)` keeps
+/// the cell-measured Glulx layout for a story with a `.cfg` design size; `None`
+/// (the default) and `Some(true)` lay the story out at its design size.
+pub fn read_per_game_glk_design(game_dir: &Path) -> Option<bool> {
+    PerGameConfig::read(game_dir).glk_design
 }
 
 /// Read the per-game `show_map` override, if the user set one. `None` = no
@@ -725,6 +739,7 @@ mod tests {
         let every = PerGameConfig {
             honor_game_colours: Some(true),
             borderless_windows: Some(true),
+            glk_design: Some(true),
             show_map: Some(true),
             pictures: Some("Pic.data".into()),
             interpreter_number: Some(6),

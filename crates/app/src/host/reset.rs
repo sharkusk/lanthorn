@@ -357,6 +357,9 @@ pub fn reset_game(
                     .as_any_mut()
                     .downcast_mut::<GlulxSession>()
                     .expect("restart re-runs the same Glulx story") = new_session;
+                // SQ-1703 P3: the fresh session boots in cell mode; stretch
+                // design mode is told again, as at launch.
+                crate::host::screen::apply_glk_design(session, state, game_dir);
             })
         }
         Ok(crate::hints::LoadedStory::Scott(bytes)) => {

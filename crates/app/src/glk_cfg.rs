@@ -140,6 +140,56 @@ pub fn resolve_borderless(
         .unwrap_or(false)
 }
 
+// ── Stretch ("hybrid") design mode — SQ-1703 phase P3 ───────────────────────
+//
+// A story with a design size lays out at that size in design pixels and the
+// whole frame is STRETCHED over the story pane: no letterbox, aspect not
+// honoured. Everything a host needs for that lives here so the TUI and the web
+// host share one set of arithmetic.
+
+/// The Glk screen a story is laid out on in stretch mode: `design_px` design
+/// pixels, with a text cell of the terminal's own cell divided by the per-axis
+/// stretch (`sx = pane_px.0 / design_px.0`, `sy = pane_px.1 / design_px.1`),
+/// so it is fractional and non-square. `pane_px` is the story pane in device
+/// pixels (cells x `char_px`); `char_px` is one terminal cell in device pixels.
+/// Re-derive it on every boot, pane resize, `char_px` change and `@restart`.
+pub fn glk_design_screen(
+    design_px: (u32, u32),
+    pane_px: (f64, f64),
+    char_px: (f64, f64),
+) -> gvm::glk::GlkScreen {
+    let sx = (pane_px.0 / design_px.0.max(1) as f64).max(1e-9);
+    let sy = (pane_px.1 / design_px.1.max(1) as f64).max(1e-9);
+    gvm::glk::GlkScreen::design(design_px, (char_px.0 / sx, char_px.1 / sy))
+}
+
+/// Map one design-pixel EDGE (`0..=design`) on an axis to a terminal-cell edge
+/// (`0..=cells`), rounding half up in exact integer arithmetic. THE one rule:
+/// apply it to BOTH edges of every window and neighbouring windows share an
+/// edge exactly (no gap, no overlap), `edge(0) == 0` and `edge(design) ==
+/// cells`, so the windows cover the pane. A window's cell extent is
+/// `edge(far) - edge(near)`, never `round(width)` (the v6 ceil-vs-round trap).
+pub fn design_px_to_cell_edge(px: u32, design: u32, cells: u32) -> u32 {
+    let design = design.max(1) as u64;
+    let px = (px as u64).min(design);
+    ((px * cells as u64 * 2 + design) / (design * 2)) as u32
+}
+
+/// A design-pixel rect `(left, top, width, height)` as the terminal-cell rect
+/// `(left, top, width, height)` it covers, via [`design_px_to_cell_edge`] on
+/// both edges of each axis. `cells` is the pane `(cols, rows)`.
+pub fn design_rect_to_cells(
+    rect: (u32, u32, u32, u32),
+    design: (u32, u32),
+    cells: (u32, u32),
+) -> (u32, u32, u32, u32) {
+    let x0 = design_px_to_cell_edge(rect.0, design.0, cells.0);
+    let x1 = design_px_to_cell_edge(rect.0 + rect.2, design.0, cells.0);
+    let y0 = design_px_to_cell_edge(rect.1, design.1, cells.1);
+    let y1 = design_px_to_cell_edge(rect.1 + rect.3, design.1, cells.1);
+    (x0, y0, x1 - x0, y1 - y0)
+}
+
 #[cfg(all(test, feature = "t-persist"))]
 mod tests {
     use super::*;
@@ -236,5 +286,50 @@ mod tests {
         assert!(resolve_borderless(Some(true), None, None));
         // nothing says anything: bordered.
         assert!(!resolve_borderless(None, None, None));
+    }
+
+    #[test]
+    fn design_screen_is_the_cell_over_the_stretch() {
+        // 100x37 cells of 8x16: pane 800x592 over a 640x480 design.
+        let s = glk_design_screen((640, 480), (800.0, 592.0), (8.0, 16.0));
+        assert_eq!((s.size, s.unit_px), ((640, 480), (1, 1)));
+        assert!((s.text_cell.0 - 6.4).abs() < 1e-9, "{:?}", s.text_cell);
+        assert!((s.text_cell.1 - 480.0 / 37.0).abs() < 1e-9, "{:?}", s.text_cell);
+        // A wide, short pane stretches x and y by very different factors.
+        let w = glk_design_screen((640, 480), (1600.0, 320.0), (8.0, 16.0));
+        assert!((w.text_cell.0 - 3.2).abs() < 1e-9 && (w.text_cell.1 - 24.0).abs() < 1e-9, "{:?}", w.text_cell);
+        // The cell size cancels: only cells per design extent matters.
+        let d = glk_design_screen((640, 480), (1600.0, 1184.0), (16.0, 32.0));
+        assert!((d.text_cell.0 - 6.4).abs() < 1e-9);
+    }
+
+    #[test]
+    fn edges_share_cover_and_never_disagree_with_what_the_story_is_told() {
+        for &(w, h, splits_x, splits_y) in &[
+            (640u32, 480u32, [14u32, 626], [58u32, 401]),
+            (800, 600, [400, 480], [60, 438]),
+        ] {
+            for cols in 10u32..=250 {
+                for rows in 5u32..=80 {
+                    assert_eq!(design_px_to_cell_edge(0, w, cols), 0);
+                    assert_eq!(design_px_to_cell_edge(w, w, cols), cols);
+                    let screen = glk_design_screen((w, h), (cols as f64 * 8.0, rows as f64 * 16.0), (8.0, 16.0));
+                    // Three abutting columns/rows tile the pane exactly.
+                    let xs = [0, splits_x[0], splits_x[1], w];
+                    let ys = [0, splits_y[0], splits_y[1], h];
+                    let mut next = (0, 0);
+                    for i in 0..3 {
+                        let r = design_rect_to_cells((xs[i], ys[i], xs[i + 1] - xs[i], ys[i + 1] - ys[i]), (w, h), (cols, rows));
+                        assert_eq!((r.0, r.1), next, "abut at {cols}x{rows}");
+                        next = (r.0 + r.2, r.1 + r.3);
+                        // chars told never exceed cells drawn, and fall short by at most one.
+                        let told = (screen.chars_in(xs[i + 1] - xs[i], false), screen.chars_in(ys[i + 1] - ys[i], true));
+                        assert!(told.0 <= r.2 && r.2 <= told.0 + 1, "x told {} drawn {} at {cols}", told.0, r.2);
+                        assert!(told.1 <= r.3 && r.3 <= told.1 + 1, "y told {} drawn {} at {rows}", told.1, r.3);
+                    }
+                    assert_eq!(next, (cols, rows), "the windows cover the pane");
+                }
+            }
+        }
     }
 }

@@ -796,7 +796,13 @@ fn render_node(
         }
         WinNode::Buffer(b) => {
             if b.primary {
-                let area = reserve_text_margin(area, state, state.colors.theme.get("transcript").style, buf);
+                // Stretch design mode (SQ-1703 P3): the text window is exactly
+                // the cells the story was told, so no margin is carved out of it.
+                let area = if state.glk_stretch {
+                    area
+                } else {
+                    reserve_text_margin(area, state, state.colors.theme.get("transcript").style, buf)
+                };
                 if b.win != 0 {
                     win_rects.push((b.win, WinKind::Buffer, area));
                 }
@@ -832,7 +838,13 @@ fn render_node(
             if state.graphics_render.borrow_mut().render_as_cells(gw, area, buf, false) {
                 // painted as cells
             } else if let Some(picker) = state.game_picker.as_ref() {
-                state.graphics_render.borrow_mut().render(picker, gw, area, state.colors.theme.get("graphics").style, buf);
+                let letterbox = state.colors.theme.get("graphics").style;
+                if state.glk_stretch {
+                    // Design mode: fill exactly the window's cell rect (SQ-1703 P3).
+                    state.graphics_render.borrow_mut().render_stretched(picker, gw, area, letterbox, buf);
+                } else {
+                    state.graphics_render.borrow_mut().render(picker, gw, area, letterbox, buf);
+                }
             } else {
                 // No image protocol: approximate the detailed canvas as colour
                 // cells rather than blanking it (SQ-0520).

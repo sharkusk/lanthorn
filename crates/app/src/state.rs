@@ -3209,6 +3209,12 @@ pub struct AppState {
     /// story at boot: design size, borders, mask Pict, fonts. `None` when no
     /// `.cfg` was found. The one place every host reads the design from.
     pub glk_design: Option<crate::glk_cfg::GlkDesign>,
+    /// SQ-1703 P3: the Glulx story is in stretch design mode (see
+    /// `host::screen::apply_glk_design`) — the window tree in the screen model
+    /// is already in terminal cells, graphics windows are stretched to exactly
+    /// their cell rect (aspect not honoured) and no text margin is carved out
+    /// of a text window. Set by `apply_glk_design`; `false` in cell mode.
+    pub glk_stretch: bool,
 
     /// The global `honor_game_colours` default (from config.toml/CLI, before any
     /// garglk.ini or per-game override), captured at boot. `reload_style` recomputes
@@ -3918,6 +3924,7 @@ impl Default for AppState {
             transcript_filter: TranscriptFilter::Both,
             garglk_overlay: None,
             glk_design: None,
+            glk_stretch: false,
             honor_game_colours_base: true,
             v6_pixel_lock_base: false,
             guidance_base: false,

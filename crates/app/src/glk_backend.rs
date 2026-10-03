@@ -311,6 +311,13 @@ pub struct AppGlk {
     /// `cols`/`rows`/`char_px`, and a graphics canvas is the window's exact
     /// rect in pixels.
     screen_override: Option<gvm::glk::GlkScreen>,
+    /// The story's `.cfg` design size in pixels while STRETCH mode is on
+    /// (SQ-1703 P3), else `None`. Unlike `screen_override` this is a standing
+    /// instruction, not a snapshot: the screen is re-derived from the CURRENT
+    /// `cols`/`rows`/`char_px` every time it is asked for
+    /// ([`crate::glk_cfg::glk_design_screen`]), so a pane resize or a cell-size
+    /// change relayouts with no host hook to forget. `screen_override` wins.
+    design: Option<(u32, u32)>,
     /// Resolves + caches Blorb `Pict` resources for `graphics_draw_image`.
     picts: crate::graphics::PictSource,
     /// Live sound channels, keyed by Glk channel ref (BTree for stable iterate).
@@ -535,6 +542,7 @@ impl AppGlk {
             graphics: BTreeMap::new(),
             char_px,
             screen_override: None,
+            design: None,
             picts,
             schannels: BTreeMap::new(),
             next_schannel: 0,
@@ -548,6 +556,26 @@ impl AppGlk {
     /// [`gvm::glk::GlkScreen::design`]. Takes effect at the next relayout.
     pub fn set_screen_override(&mut self, screen: Option<gvm::glk::GlkScreen>) {
         self.screen_override = screen;
+    }
+
+    /// Turn stretch mode on (`Some(design size px)`) or off (`None`) — see the
+    /// `design` field. Takes effect at the next relayout.
+    pub fn set_design(&mut self, design: Option<(u32, u32)>) {
+        self.design = design;
+    }
+
+    /// The design-pixel screen in force (an explicit override, else the
+    /// stretch mode's), or `None` in cell mode.
+    fn design_screen(&self) -> Option<gvm::glk::GlkScreen> {
+        self.screen_override.or_else(|| {
+            self.design.map(|d| {
+                crate::glk_cfg::glk_design_screen(
+                    d,
+                    (self.cols as f64 * self.char_px.0, self.rows as f64 * self.char_px.1),
+                    self.char_px,
+                )
+            })
+        })
     }
 
     /// The screen the layout is measured against right now.
@@ -607,7 +635,7 @@ impl AppGlk {
             .find(|&&(id, _, _, _)| id == win)
             .map(|&(_, _, r, _)| (r.width, r.height))
             .unwrap_or((1, 1));
-        if let Some(s) = &self.screen_override {
+        if let Some(s) = self.design_screen() {
             // Design mode: the layout unit is the pixel (or a whole multiple).
             return (cells.0 * s.unit_px.0, cells.1 * s.unit_px.1);
         }
@@ -1442,8 +1470,21 @@ impl AppGlk {
                 // to avoid one — so the composite clamp below (SQ-0303) no longer
                 // has a margin to withhold, and is kept as the bound it always was.
                 let r = tree.rect();
-                let size = (r.width.min(u16::MAX as u32) as u16, r.height.min(u16::MAX as u32) as u16);
-                (self.convert_tree(tree), size)
+                match self.design_screen() {
+                    // Design mode: the tree is in design pixels; map it onto
+                    // the pane's terminal cells (see `convert_design_tree`).
+                    Some(screen) => {
+                        let cells = (self.cols, self.rows);
+                        (
+                            self.convert_design_tree(tree, &screen, cells),
+                            (cells.0.min(u16::MAX as u32) as u16, cells.1.min(u16::MAX as u32) as u16),
+                        )
+                    }
+                    None => {
+                        let size = (r.width.min(u16::MAX as u32) as u16, r.height.min(u16::MAX as u32) as u16);
+                        (self.convert_tree(tree), size)
+                    }
+                }
             }
         };
         // The page colour is the PRIMARY buffer window's own colour (the app
@@ -1467,6 +1508,89 @@ impl AppGlk {
             bg: pack(pbg),
             fg: pack(pfg),
             content_size,
+        }
+    }
+
+    /// SQ-1703 P3: convert a design-PIXEL window tree to the neutral cell-unit
+    /// [`WinNode`] tree the renderer lays out, stretching the whole design frame
+    /// over the `cells` pane (no letterbox, aspect not honoured).
+    ///
+    /// Every window's cell rect is `edge(far) - edge(near)` through the ONE
+    /// rule [`crate::glk_cfg::design_px_to_cell_edge`], so neighbours share
+    /// edges exactly and the windows cover the pane. Pairs carry exact cell
+    /// counts and never a border (the design frame draws its own art; a
+    /// reserved gutter cell would be a gap).
+    ///
+    /// **Characters told == cells drawn.** The story is told
+    /// `chars_in(px)` = floor(px / text_cell) characters for a text window, and
+    /// the window is drawn with EXACTLY that many cells on each axis. The edge
+    /// rule can give a window up to one cell more (rounding is not flooring);
+    /// that surplus (at most one column/row, on the far side) is a filler
+    /// painted in the window's own background, so text never sits in cells the
+    /// story did not know it had. Drawn is never fewer than told: an integer in
+    /// `(d - 1, d + 1)` is at least `floor(d)`.
+    ///
+    /// P4 hook: the window mask (`GlkDesign::mask_pict`) will classify these
+    /// same cell rects by pixel coverage; nothing here consults it yet.
+    fn convert_design_tree(&self, tree: &WinTree, screen: &gvm::glk::GlkScreen, cells: (u32, u32)) -> WinNode {
+        let cell_rect = |r: GlkRect| {
+            let (l, t, w, h) = crate::glk_cfg::design_rect_to_cells(
+                (r.left, r.top, r.width, r.height),
+                screen.size,
+                cells,
+            );
+            GlkRect { left: l, top: t, width: w, height: h }
+        };
+        match tree {
+            WinTree::Leaf { id, wintype, rect, bg, fg, reverse } => {
+                let full = cell_rect(*rect);
+                let text = !matches!(wintype, WinType::Graphics);
+                let (w, h) = if text {
+                    (
+                        full.width.min(screen.chars_in(rect.width, false)),
+                        full.height.min(screen.chars_in(rect.height, true)),
+                    )
+                } else {
+                    (full.width, full.height)
+                };
+                let leaf = WinTree::Leaf {
+                    id: *id,
+                    wintype: *wintype,
+                    rect: GlkRect { left: full.left, top: full.top, width: w, height: h },
+                    bg: *bg,
+                    fg: *fg,
+                    reverse: *reverse,
+                };
+                let inner = self.convert_tree(&leaf);
+                let filler = || {
+                    WinNode::Buffer(BufferWindow { win: 0, bg: *bg, fg: *fg, ..Default::default() })
+                };
+                let pair = |vertical: bool, fixed: u32, rest: u32, first: WinNode, second: WinNode| WinNode::Pair {
+                    vertical,
+                    split: Split { fixed: fixed as u16, fixed_px: None, rest: Some(rest as u16) },
+                    border: false,
+                    key_bg: None,
+                    key_fg: None,
+                    first: Box::new(first),
+                    second: Box::new(second),
+                };
+                let row = if w < full.width { pair(false, w, full.width - w, inner, filler()) } else { inner };
+                if h < full.height { pair(true, h, full.height - h, row, filler()) } else { row }
+            }
+            WinTree::Pair { vertical, first, second, .. } => {
+                let (f, s) = (cell_rect(first.rect()), cell_rect(second.rect()));
+                let (fixed, rest) =
+                    if *vertical { (f.height, s.height) } else { (f.width, s.width) };
+                WinNode::Pair {
+                    vertical: *vertical,
+                    split: Split { fixed: fixed as u16, fixed_px: None, rest: Some(rest as u16) },
+                    border: false,
+                    key_bg: None,
+                    key_fg: None,
+                    first: Box::new(self.convert_design_tree(first, screen, cells)),
+                    second: Box::new(self.convert_design_tree(second, screen, cells)),
+                }
+            }
         }
     }
 
@@ -1674,7 +1798,7 @@ impl GlkBackend for AppGlk {
     }
 
     fn screen(&self) -> gvm::glk::GlkScreen {
-        self.screen_override
+        self.design_screen()
             .unwrap_or_else(|| gvm::glk::GlkScreen::cells(self.screen_size(), self.char_pixels()))
     }
 

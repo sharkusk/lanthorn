@@ -33,6 +33,11 @@ while any such tag, or this Unreleased section, still exists.*
   game that has never heard of `x` and it suggests `examine` (keeping `lamp`); likewise
   `z` for `wait`, `g` for `again`, `l` for `look` and `i` for `inventory`, whenever
   that game really knows the full word.
+- **Games with a Windows Glk `.cfg` fill your screen with their designed frame.**
+  Photopia 2.01 and Narcolepsy now lay out at the window size their author
+  designed and stretch it over the story pane, so the border art meets the text
+  with no gaps. Put `glk_design = false` in the story's `config.toml` to keep the
+  old layout.
 - **Click a dotted "to/from" room on the map to jump there**: the map switches to
   that room's layer with the room selected.
 - **Hint files can live in the game's documents folder.** Drop an *InvisiClues* file

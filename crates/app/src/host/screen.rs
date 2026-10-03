@@ -132,6 +132,25 @@ pub fn set_glk_design_screen(session: &mut dyn Engine, screen: Option<GlkScreen>
     }
 }
 
+/// Turn on STRETCH design mode for a Glulx story whose `.cfg` states a design
+/// size, unless the per-game `glk_design = false` switch is off (SQ-1703 P3):
+/// the story lays out at the design size and the whole frame is stretched over
+/// the pane. Sets `state.glk_stretch` for the renderer. Called at boot and
+/// again after `@restart` (a fresh session starts in cell mode); the pane
+/// resizing needs nothing further — see [`GlulxSession::set_glk_design`].
+/// Returns whether stretch mode is now on. A non-Glulx engine, a story with
+/// no design size, or a per-game `false` leaves (or returns) cell mode.
+pub fn apply_glk_design(session: &mut dyn Engine, state: &mut AppState, game_dir: &std::path::Path) -> bool {
+    let design = match state.glk_design.as_ref().and_then(|d| d.size()) {
+        Some(size) if crate::styles::read_per_game_glk_design(game_dir) != Some(false) => Some(size),
+        _ => None,
+    };
+    let on = design.is_some()
+        && session.as_any_mut().downcast_mut::<GlulxSession>().map(|gs| gs.set_glk_design(design)).is_some();
+    state.glk_stretch = on;
+    on
+}
+
 /// The Glk screen and the leaf windows' rects (in its layout units) for a
 /// Glulx story; `None` for any other engine.
 pub fn glk_layout(session: &mut dyn Engine) -> Option<GlkLayout> {
