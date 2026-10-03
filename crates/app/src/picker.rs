@@ -1975,14 +1975,15 @@ fn associate_hint_sidecars(out: &mut Vec<StoryEntry>) {
             .to_string();
         let title = out[g].title.clone();
         let ifid = out[g].meta.ifid.clone();
-        let chosen = sidecar_idxs.iter().copied().find(|&s| {
-            // Identity first (SQ-0767): a story mounted out of a disk image is
-            // named for the box, so neither its stem nor its title can say
-            // which clues file is its own.
-            hints::hint_matches_identity(&names[s], &ifid)
-                || hints::hint_matches_story(&names[s], &stem)
-                || hints::hint_matches_story(&names[s], &title)
-        });
+        // The one shared matcher (SQ-1689); identity first (SQ-0767): a story
+        // mounted out of a disk image is named for the box, so neither its stem
+        // nor its title can say which clues file is its own.
+        let cand: Vec<&str> = sidecar_idxs.iter().map(|&s| names[s].as_str()).collect();
+        let target = hints::HintTarget { stem: &stem, title: &title, ifid: &ifid };
+        let chosen = match hints::match_hint_sidecar(target, &cand) {
+            hints::HintPick::One(k) => Some(sidecar_idxs[k]),
+            _ => None,
+        };
         if let Some(s) = chosen {
             out[g].hint_sidecar = Some(out[s].path.clone());
             matched.insert(out[s].path.clone());

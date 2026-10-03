@@ -4237,8 +4237,9 @@ fn run_event_loop(boot: startup::BootResult, launched_from_library: bool) -> Run
             Action::OpenHints => {
                 let sp = story_path.clone();
                 let id = ifid.clone();
+                let title = state.title.clone();
                 let ud = state.config.user_dir.clone();
-                open_hints(&mut state, &sp, &id, &ud);
+                open_hints(&mut state, &sp, &id, &title, &ud);
             }
 
             // Page the transcript by one screenful. Resolved here because it needs
@@ -4458,6 +4459,7 @@ fn open_hints(
     state: &mut AppState,
     story_path: &std::path::Path,
     ifid: &str,
+    title: &str,
     user_dir: &std::path::Path,
 ) {
     if state.overlays.hints.is_some() {
@@ -4465,7 +4467,7 @@ fn open_hints(
     }
 
     let index = hints::load_hint_index(user_dir);
-    match app::host::hints::open(story_path, ifid, &index, &state.dict_words, &state.config) {
+    match app::host::hints::open(story_path, ifid, title, &index, &state.dict_words, &state.config) {
         Ok(Some(session)) => {
             state.overlays.hints = Some(session);
         }

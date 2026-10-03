@@ -63,13 +63,13 @@ fn available_and_open_agree_on_zork1_izm_and_skip_its_banner() {
     let index = empty_index();
 
     assert_eq!(
-        available(&story_path, &ifid, &index),
+        available(&story_path, &ifid, "", &index),
         HintAvailability::Available,
         "zork1izm.z5 sits beside zork1-r88-s840726.z3, so a hint source resolves"
     );
 
     let cfg = Config::default();
-    let session = open(&story_path, &ifid, &index, &[], &cfg)
+    let session = open(&story_path, &ifid, "", &index, &[], &cfg)
         .expect("a resolved hint source boots")
         .expect("available() said yes, so open() must find the same source");
 
@@ -116,13 +116,13 @@ fn available_and_open_agree_on_zork2_inv_slag_naming() {
     let index = empty_index();
 
     assert_eq!(
-        available(&story_path, &ifid, &index),
+        available(&story_path, &ifid, "", &index),
         HintAvailability::Available,
         "zork2inv.z5 sits beside zork2-r48-s840904.z3, so a hint source resolves"
     );
 
     let cfg = Config::default();
-    let session = open(&story_path, &ifid, &index, &[], &cfg)
+    let session = open(&story_path, &ifid, "", &index, &[], &cfg)
         .expect("a resolved hint source boots")
         .expect("available() said yes, so open() must find the same source");
 
@@ -150,13 +150,13 @@ fn a_story_with_no_hint_sidecar_says_no_and_returns_ok_none() {
     let index = empty_index();
 
     assert_eq!(
-        available(&story_path, &ifid, &index),
+        available(&story_path, &ifid, "", &index),
         HintAvailability::None,
         "Tangle.z5 has no hint sidecar anywhere lanthorn looks"
     );
 
     let cfg = Config::default();
-    let result = open(&story_path, &ifid, &index, &[], &cfg).expect("no hint source is not an error");
+    let result = open(&story_path, &ifid, "", &index, &[], &cfg).expect("no hint source is not an error");
     assert!(result.is_none(), "open() finds nothing, exactly as available() said");
     // The TUI shows exactly this text on `Ok(None)` (main.rs's `open_hints`).
     assert_eq!(NO_HINT_MESSAGE, "no hint file found — place <story>.hints.z5 next to the story, or use /hints <path>");
@@ -194,14 +194,38 @@ fn solid_gold_release_is_not_treated_as_a_hint_sidecar() {
     let ifid = compute_ifid(&story_bytes);
     let index = empty_index();
     assert_eq!(
-        available(&plain_story, &ifid, &index),
+        available(&plain_story, &ifid, "", &index),
         HintAvailability::None,
         "a Solid Gold release beside the story must not be picked up as its hint sidecar"
     );
     let cfg = Config::default();
     let result =
-        open(&plain_story, &ifid, &index, &[], &cfg).expect("no hint source is not an error");
+        open(&plain_story, &ifid, "", &index, &[], &cfg).expect("no hint source is not an error");
     assert!(result.is_none(), "open() must not open the Solid Gold release as a hint VM");
 
     let _ = std::fs::remove_dir_all(&home);
+}
+
+/// SQ-1689: a story played from a disk image is named for the box, so only its
+/// MOUNTED identity can find its own hint file among many in the folder.
+/// Specimen: `stories/Zork I - The Great Underground Empire.adf` (Zork I r88,
+/// IFID ZCODE-88-840726) beside `zork1izm.z5`, `bzorkizm.z5`, `zork3inv.z5`.
+#[test]
+fn zork1_adf_finds_its_own_hint_file_in_game() {
+    let adf = stories_dir().join("Zork I - The Great Underground Empire.adf");
+    if !adf.is_file() || !stories_dir().join("zork1izm.z5").is_file() {
+        eprintln!("SKIP: Zork I ADF specimen or zork1izm.z5 absent");
+        return;
+    }
+    let (loaded, _disk) = hints::load_mounted_story_from(&adf, None).expect("the ADF mounts");
+    let ifid = compute_ifid(loaded.bytes());
+    assert_eq!(ifid, "ZCODE-88-840726-A129", "mounted story IFID, not the filename");
+    let index = empty_index();
+
+    assert_eq!(available(&adf, &ifid, "", &index), HintAvailability::Available);
+    let session = open(&adf, &ifid, "", &index, &[], &Config::default())
+        .expect("a resolved hint source boots")
+        .expect("available() said yes, so open() must find the same source");
+    assert_eq!(session.label, "zork1izm.z5");
+    eprintln!("RAN: zork1 ADF -> {}", session.label);
 }

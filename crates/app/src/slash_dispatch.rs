@@ -563,7 +563,8 @@ pub(crate) fn dispatch_slash_outcome(
         }
         SlashOutcome::OpenHints => {
             let ud = state.config.user_dir.clone();
-            open_hints(state, story_path, ifid, &ud);
+            let title = state.title.clone();
+            open_hints(state, story_path, ifid, &title, &ud);
         }
         SlashOutcome::HelpCommand(name) => {
             for line in slash::help_for_command(state.config.command_prefix, &name) {

@@ -107,6 +107,9 @@ while any such tag, or this Unreleased section, still exists.*
 
 ### Fixed
 
+- **Hints are found in game for a story played from a disk image.** Zork I from
+  an Amiga disk showed its hint file in the story list but the in-game hints said
+  none was available; the game and the story list now pick the same file.
 - Walkthroughs, hints and solution files are now marked as spoilers in the
   document downloader even when IFDB files them somewhere else, and so are files
   inside a zip that are named that way.

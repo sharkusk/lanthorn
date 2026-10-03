@@ -408,28 +408,74 @@ fn stem_matches_story(story_stem: &str, candidate_name: &str) -> bool {
     }
 }
 
-/// Rank hint candidate names by story-stem preference and return the chosen one.
+/// The facts that say which story a hint sidecar belongs to, travelling
+/// together (SQ-1689). For a story mounted from a disk image the IFID and title
+/// are the MOUNTED story's: the file stem names the box, not the game.
+#[derive(Debug, Clone, Copy)]
+pub struct HintTarget<'a> {
+    /// The story file's stem.
+    pub stem: &'a str,
+    /// The story's title (may be empty).
+    pub title: &'a str,
+    /// The story's IFID (may be empty).
+    pub ifid: &'a str,
+}
+
+/// What [`match_hint_sidecar`] concluded.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum HintPick {
+    /// The candidate at this index of the list that was passed in.
+    One(usize),
+    /// Several candidates tie at the best identity tier: do not guess.
+    Ambiguous,
+    /// Nothing is story-specific.
+    NoMatch,
+}
+
+/// THE matcher between a story and its hint sidecars, shared by the story list
+/// ([`crate::picker`]) and [`resolve_hint_source`] so they cannot drift (SQ-1689).
 ///
-/// Tiers:
-/// 1. any candidate the story owns — its stem starts with `story_stem`
-///    ([`stem_matches_story`]) or its curated/derived game key matches the story
-///    ([`hint_matches_story`]) → the first such after a stable name sort
-///    (deterministic regardless of readdir order);
-/// 2. else if exactly one candidate exists → that lone (generic) candidate;
-/// 3. else (multiple candidates, none story-specific) → `None` (ambiguous).
-///
-/// Returns `None` for an empty list too; callers distinguish empty from
-/// ambiguous by checking whether the input was empty.
-fn pick_hint_candidate(story_stem: &str, mut names: Vec<String>) -> Option<String> {
+/// Tiers, best first: identity ([`hint_matches_identity`] with the IFID), stem
+/// ([`stem_matches_story`] / [`hint_matches_story`] on the stem), title
+/// ([`hint_matches_story`] on the title). Identity is exact, so two identity
+/// matches are [`HintPick::Ambiguous`]; the looser stem/title tiers take the
+/// first match in the order `names` is given (callers pass a stable order).
+pub fn match_hint_sidecar<S: AsRef<str>>(target: HintTarget<'_>, names: &[S]) -> HintPick {
+    let ident: Vec<usize> = (0..names.len())
+        .filter(|&i| !target.ifid.is_empty() && hint_matches_identity(names[i].as_ref(), target.ifid))
+        .collect();
+    match ident.len() {
+        1 => return HintPick::One(ident[0]),
+        n if n > 1 => return HintPick::Ambiguous,
+        _ => {}
+    }
+    let by_stem = names.iter().position(|n| {
+        let n = n.as_ref();
+        stem_matches_story(target.stem, n) || hint_matches_story(n, target.stem)
+    });
+    if let Some(i) = by_stem {
+        return HintPick::One(i);
+    }
+    if !target.title.is_empty() {
+        if let Some(i) = names.iter().position(|n| hint_matches_story(n.as_ref(), target.title)) {
+            return HintPick::One(i);
+        }
+    }
+    HintPick::NoMatch
+}
+
+/// Rank hint candidate names with [`match_hint_sidecar`] and return the chosen
+/// one; else a lone (generic) candidate; else `None` (ambiguous or empty).
+/// Callers distinguish empty from ambiguous by checking the input.
+fn pick_hint_candidate(target: HintTarget<'_>, mut names: Vec<String>) -> Option<String> {
     if names.is_empty() {
         return None;
     }
     names.sort();
-    if let Some(m) = names
-        .iter()
-        .find(|n| stem_matches_story(story_stem, n) || hint_matches_story(n, story_stem))
-    {
-        return Some(m.clone());
+    match match_hint_sidecar(target, &names) {
+        HintPick::One(i) => return Some(names.swap_remove(i)),
+        HintPick::Ambiguous => return None,
+        HintPick::NoMatch => {}
     }
     if names.len() == 1 {
         return names.into_iter().next();
@@ -530,6 +576,9 @@ pub enum HintResolution {
 /// Resolve a hint source for the given story.
 ///
 /// Discovery order:
+/// `ifid` and `title` are the story's own (for a disk image, the MOUNTED
+/// story's); the sibling ranking is [`match_hint_sidecar`].
+///
 /// 1. Remembered: the per-IFID association from `index`.
 /// 2. The story's OWN container: when `story_path` is itself a ZIP, a
 ///    hint-sidecar entry inside it (SQ-1085).
@@ -541,7 +590,12 @@ pub enum HintResolution {
 ///    entry; returns `ZipEntry` so the caller can extract the bytes with
 ///    `read_zip_entry`.
 /// 5. Else: `AskUser` (caller should open the file browser).
-pub fn resolve_hint_source(story_path: &Path, ifid: &str, index: &HintIndex) -> HintResolution {
+pub fn resolve_hint_source(
+    story_path: &Path,
+    ifid: &str,
+    title: &str,
+    index: &HintIndex,
+) -> HintResolution {
     // Step 1: remembered association.
     if let Some(remembered) = index.get(ifid) {
         if remembered.exists() {
@@ -560,7 +614,7 @@ pub fn resolve_hint_source(story_path: &Path, ifid: &str, index: &HintIndex) -> 
             .and_then(|s| s.to_str())
             .unwrap_or("")
             .to_ascii_lowercase();
-        if let Ok(Some(entry)) = find_hint_entry_in_zip(story_path, &stem) {
+        if let Ok(Some(entry)) = find_hint_entry_in_zip(story_path, HintTarget { stem: &stem, title, ifid }) {
             return HintResolution::ZipEntry { zip_path: story_path.to_path_buf(), entry };
         }
     }
@@ -605,7 +659,7 @@ pub fn resolve_hint_source(story_path: &Path, ifid: &str, index: &HintIndex) -> 
                     .iter()
                     .filter_map(|p| p.file_name().and_then(|n| n.to_str()).map(String::from))
                     .collect();
-                if let Some(chosen) = pick_hint_candidate(&story_stem, names) {
+                if let Some(chosen) = pick_hint_candidate(HintTarget { stem: &story_stem, title, ifid }, names) {
                     for path in &hint_files {
                         if path.file_name().and_then(|n| n.to_str()) == Some(chosen.as_str()) {
                             return HintResolution::File(path.clone());
@@ -620,7 +674,7 @@ pub fn resolve_hint_source(story_path: &Path, ifid: &str, index: &HintIndex) -> 
             // Step 4: look inside sibling ZIPs for a hint entry, story-aware.
             zips.sort();
             for zip_path in zips {
-                if let Ok(Some(entry_name)) = find_hint_entry_in_zip(&zip_path, &story_stem) {
+                if let Ok(Some(entry_name)) = find_hint_entry_in_zip(&zip_path, HintTarget { stem: &story_stem, title, ifid }) {
                     return HintResolution::ZipEntry { zip_path, entry: entry_name };
                 }
             }
@@ -636,7 +690,7 @@ pub fn resolve_hint_source(story_path: &Path, ifid: &str, index: &HintIndex) -> 
 /// Applies the same tiers as [`pick_hint_candidate`]: a story-stem match wins;
 /// a lone generic entry is used; multiple generics with no story match are
 /// ambiguous and yield `None`.
-fn find_hint_entry_in_zip(zip_path: &Path, story_stem: &str) -> io::Result<Option<String>> {
+fn find_hint_entry_in_zip(zip_path: &Path, target: HintTarget<'_>) -> io::Result<Option<String>> {
     let file = std::fs::File::open(zip_path)?;
     let mut zip = zip::ZipArchive::new(file)
         .map_err(|e| io::Error::new(io::ErrorKind::InvalidData, e))?;
@@ -655,7 +709,7 @@ fn find_hint_entry_in_zip(zip_path: &Path, story_stem: &str) -> io::Result<Optio
     // Rank by the bare filename, but return the full entry path.
     let basename_of = |n: &str| n.rsplit('/').next().unwrap_or(n).to_string();
     let basenames: Vec<String> = matches.iter().map(|n| basename_of(n)).collect();
-    match pick_hint_candidate(story_stem, basenames) {
+    match pick_hint_candidate(target, basenames) {
         Some(chosen) => Ok(matches.into_iter().find(|n| basename_of(n) == chosen)),
         None => Ok(None),
     }
@@ -2566,7 +2620,7 @@ mod tests {
             &zip_path,
             &[("deadline.z3", sample_zcode(3)), ("deadlineinv.z5", sample_zcode(5))],
         );
-        let got = resolve_hint_source(&zip_path, "ZCODE-NOTHING", &load_hint_index(&base));
+        let got = resolve_hint_source(&zip_path, "ZCODE-NOTHING", "", &load_hint_index(&base));
         assert_eq!(
             got,
             HintResolution::ZipEntry {
@@ -2893,7 +2947,7 @@ mod tests {
         let empty_index = HintIndex { map: HashMap::new() };
 
         // With sibling hints file present: should return File(hints).
-        let result = resolve_hint_source(&story, "ZCODE-TEST", &empty_index);
+        let result = resolve_hint_source(&story, "ZCODE-TEST", "", &empty_index);
         assert_eq!(result, HintResolution::File(hints));
 
         // Without any hint sibling: should return AskUser.
@@ -2901,7 +2955,7 @@ mod tests {
         let story2 = no_hints_dir.join("story.z5");
         std::fs::write(&story2, b"fake story").unwrap();
 
-        let result2 = resolve_hint_source(&story2, "ZCODE-TEST", &empty_index);
+        let result2 = resolve_hint_source(&story2, "ZCODE-TEST", "", &empty_index);
         assert_eq!(result2, HintResolution::AskUser);
 
         let _ = std::fs::remove_dir_all(&dir);
@@ -2918,6 +2972,78 @@ mod tests {
     }
 
     #[test]
+    fn sq1689_identity_beats_stem_and_ties_ask_the_user() {
+        let target = |stem: &'static str, ifid: &'static str| HintTarget { stem, title: "", ifid };
+        // Disk-image stem names no game: identity picks zork1izm among many.
+        let names = ["bzorkizm.z5", "zork1izm.z5", "zork3inv.z5"];
+        assert_eq!(
+            match_hint_sidecar(target("zork i - the great underground empire", "ZCODE-88-840726-A129"), &names),
+            HintPick::One(1)
+        );
+        // Identity beats a stem match that points elsewhere.
+        let names = ["zork2inv.z5", "zork1izm.z5"];
+        assert_eq!(match_hint_sidecar(target("zork2", "ZCODE-88-840726-A129"), &names), HintPick::One(1));
+        // Two identity matches: genuinely ambiguous.
+        let names = ["zork1izm.z5", "zork1inv.z5"];
+        assert_eq!(match_hint_sidecar(target("box", "ZCODE-88-840726-A129"), &names), HintPick::Ambiguous);
+        // Title tier last.
+        let names = ["zork3inv.z5"];
+        let t = HintTarget { stem: "box", title: "zork3 the dungeon master", ifid: "" };
+        assert_eq!(match_hint_sidecar(t, &names), HintPick::One(0));
+        assert_eq!(match_hint_sidecar(target("box", ""), &names), HintPick::NoMatch);
+    }
+
+    #[test]
+    fn sq1689_resolve_uses_identity_and_still_picks_by_stem() {
+        let empty = HintIndex { map: HashMap::new() };
+        // Disk-image-like story name; several hint files; identity decides.
+        let dir = scratch_dir("sq1689-id", &["box.adf", "zork1izm.z5", "bzorkizm.z5", "zork3inv.z5"]);
+        let r = resolve_hint_source(&dir.join("box.adf"), "ZCODE-88-840726-A129", "", &empty);
+        assert_eq!(r, HintResolution::File(dir.join("zork1izm.z5")));
+        // Without identity, ambiguous.
+        let r = resolve_hint_source(&dir.join("box.adf"), "", "", &empty);
+        assert_eq!(r, HintResolution::AskUser);
+        // Two identity matches: ask.
+        let dir2 = scratch_dir("sq1689-tie", &["box.adf", "zork1izm.z5", "zork1inv.z5"]);
+        let r = resolve_hint_source(&dir2.join("box.adf"), "ZCODE-88-840726-A129", "", &empty);
+        assert_eq!(r, HintResolution::AskUser);
+        // Stem story among two Zork hint files still picks by stem.
+        let dir3 = scratch_dir("sq1689-stem", &["zork1.z5", "zork1izm.z5", "zork3inv.z5"]);
+        let r = resolve_hint_source(&dir3.join("zork1.z5"), "IFID", "", &empty);
+        assert_eq!(r, HintResolution::File(dir3.join("zork1izm.z5")));
+    }
+
+    #[test]
+    fn sq1689_picker_and_resolver_agree_on_a_table() {
+        let empty = HintIndex { map: HashMap::new() };
+        let all = ["bzorkizm.z5", "zork1izm.z5", "zork3inv.z5"];
+        let cases: [(&str, &str, &str, Option<&str>); 4] = [
+            ("box.adf", "ZCODE-88-840726-A129", "", Some("zork1izm.z5")),
+            ("zork3.z3", "IFID", "", Some("zork3inv.z5")),
+            ("box.adf", "IFID", "Beyond Zork", Some("bzorkizm.z5")),
+            ("box.adf", "IFID", "", None),
+        ];
+        for (story, ifid, title, want) in cases {
+            let mut files = vec![story];
+            files.extend(all);
+            let dir = scratch_dir("sq1689-agree", &files);
+            let stem = Path::new(story).file_stem().unwrap().to_str().unwrap();
+            let pick = match_hint_sidecar(HintTarget { stem, title, ifid }, &all);
+            let resolved = resolve_hint_source(&dir.join(story), ifid, title, &empty);
+            match want {
+                Some(w) => {
+                    assert_eq!(pick, HintPick::One(all.iter().position(|n| *n == w).unwrap()));
+                    assert_eq!(resolved, HintResolution::File(dir.join(w)));
+                }
+                None => {
+                    assert_eq!(pick, HintPick::NoMatch);
+                    assert_eq!(resolved, HintResolution::AskUser);
+                }
+            }
+        }
+    }
+
+    #[test]
     fn resolve_is_story_aware_in_multi_story_dir() {
         let dir = scratch_dir(
             "resolve-multistory",
@@ -2925,10 +3051,10 @@ mod tests {
         );
         let empty = HintIndex { map: HashMap::new() };
 
-        let r1 = resolve_hint_source(&dir.join("zork1.z5"), "IFID-1", &empty);
+        let r1 = resolve_hint_source(&dir.join("zork1.z5"), "IFID-1", "", &empty);
         assert_eq!(r1, HintResolution::File(dir.join("zork1_hints.z5")));
 
-        let r2 = resolve_hint_source(&dir.join("zork2.z5"), "IFID-2", &empty);
+        let r2 = resolve_hint_source(&dir.join("zork2.z5"), "IFID-2", "", &empty);
         assert_eq!(r2, HintResolution::File(dir.join("zork2-invisiclues.z5")));
 
         let _ = std::fs::remove_dir_all(&dir);
@@ -2939,7 +3065,7 @@ mod tests {
         let dir = scratch_dir("resolve-lonegeneric", &["story.z5", "invisiclues.z5"]);
         let empty = HintIndex { map: HashMap::new() };
 
-        let r = resolve_hint_source(&dir.join("story.z5"), "IFID", &empty);
+        let r = resolve_hint_source(&dir.join("story.z5"), "IFID", "", &empty);
         assert_eq!(r, HintResolution::File(dir.join("invisiclues.z5")));
 
         let _ = std::fs::remove_dir_all(&dir);
@@ -2950,7 +3076,7 @@ mod tests {
         let dir = scratch_dir("resolve-ambiguous", &["story.z5", "hintsA.z5", "hintsB.z5"]);
         let empty = HintIndex { map: HashMap::new() };
 
-        let r = resolve_hint_source(&dir.join("story.z5"), "IFID", &empty);
+        let r = resolve_hint_source(&dir.join("story.z5"), "IFID", "", &empty);
         assert_eq!(r, HintResolution::AskUser);
 
         let _ = std::fs::remove_dir_all(&dir);
@@ -2964,7 +3090,7 @@ mod tests {
         );
         let empty = HintIndex { map: HashMap::new() };
 
-        let r = resolve_hint_source(&dir.join("zork1.z5"), "IFID", &empty);
+        let r = resolve_hint_source(&dir.join("zork1.z5"), "IFID", "", &empty);
         assert_eq!(r, HintResolution::File(dir.join("zork1_hints.z5")));
 
         let _ = std::fs::remove_dir_all(&dir);
@@ -2980,7 +3106,7 @@ mod tests {
 
         let expected = HintResolution::File(dir.join("zork1_hints.z5"));
         for _ in 0..8 {
-            let r = resolve_hint_source(&dir.join("zork1.z5"), "IFID-1", &empty);
+            let r = resolve_hint_source(&dir.join("zork1.z5"), "IFID-1", "", &empty);
             assert_eq!(r, expected);
         }
 
@@ -2996,7 +3122,7 @@ mod tests {
         );
         let empty = HintIndex { map: HashMap::new() };
 
-        let r = resolve_hint_source(&dir.join("deadline-r27-s851006.z3"), "IFID", &empty);
+        let r = resolve_hint_source(&dir.join("deadline-r27-s851006.z3"), "IFID", "", &empty);
         assert_eq!(r, HintResolution::File(dir.join("deadlineinv.z5")));
 
         let _ = std::fs::remove_dir_all(&dir);
@@ -3012,7 +3138,7 @@ mod tests {
         );
         let empty = HintIndex { map: HashMap::new() };
 
-        let r = resolve_hint_source(&dir.join("story.z5"), "IFID", &empty);
+        let r = resolve_hint_source(&dir.join("story.z5"), "IFID", "", &empty);
         assert_eq!(r, HintResolution::AskUser);
 
         let _ = std::fs::remove_dir_all(&dir);

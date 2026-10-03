@@ -37,8 +37,8 @@ pub enum HintAvailability {
 ///
 /// Cheap: resolution reads the index and the filesystem (directory listing,
 /// maybe a zip's entry table) but never boots a VM.
-pub fn available(story_path: &Path, ifid: &str, index: &HintIndex) -> HintAvailability {
-    match hints::resolve_hint_source(story_path, ifid, index) {
+pub fn available(story_path: &Path, ifid: &str, title: &str, index: &HintIndex) -> HintAvailability {
+    match hints::resolve_hint_source(story_path, ifid, title, index) {
         HintResolution::File(_) | HintResolution::ZipEntry { .. } => HintAvailability::Available,
         HintResolution::AskUser | HintResolution::None => HintAvailability::None,
     }
@@ -80,6 +80,7 @@ pub const NO_HINT_MESSAGE: &str =
 
 /// Resolve and boot `story_path`'s hint session.
 ///
+/// `ifid`/`title` are the story's own (the mounted story's, for a disk image).
 /// `index` is the loaded per-IFID association table ([`hints::load_hint_index`]);
 /// `dict_words` is the STORY's OWN dictionary (not the hint file's) — it drives
 /// [`hints::story_supports_hint`], which decides `HintSession::builtin_hint`
@@ -95,12 +96,13 @@ pub const NO_HINT_MESSAGE: &str =
 pub fn open(
     story_path: &Path,
     ifid: &str,
+    title: &str,
     index: &HintIndex,
     dict_words: &[String],
     cfg: &Config,
 ) -> Result<Option<HintSession>, HintOpenError> {
     let builtin_hint = hints::story_supports_hint(dict_words.iter().cloned());
-    let resolution = hints::resolve_hint_source(story_path, ifid, index);
+    let resolution = hints::resolve_hint_source(story_path, ifid, title, index);
 
     let (bytes, label) = match resolution {
         HintResolution::File(p) => {

@@ -343,9 +343,9 @@ fn check_hints_machinery_agrees(story_path: &Path, story_bytes: &[u8]) {
     let home = app::scratch_dir("sq1600-lurkinghorror-hint-index");
     let index = hints::load_hint_index(&home);
 
-    let avail = available(story_path, &ifid, &index);
+    let avail = available(story_path, &ifid, "", &index);
     let cfg = Config::default();
-    let opened = open(story_path, &ifid, &index, &[], &cfg);
+    let opened = open(story_path, &ifid, "", &index, &[], &cfg);
     match avail {
         HintAvailability::None => {
             let result = opened.expect("no hint source is not an error");
