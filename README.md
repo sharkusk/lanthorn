@@ -217,6 +217,12 @@ itself.**
   back, the Hints tab runs a game's *InvisiClues* file beside the story instead of
   over it, and the Documents tab reads a game's manuals and maps in place: text in a
   pager, pictures drawn in the pane, PDFs in your viewer.
+  *Next release:* every IFDB-linked game gets a documents folder
+  (`~/.lanthorn/documents/<Title> [<IFDB id>]`) for its manual, feelies and maps,
+  and you can fetch them without leaving lanthorn: pick from the files IFDB lists
+  for the game (zips can be peeked inside, walkthroughs are flagged as spoilers,
+  files you already have are marked), and they land in the folder. The Documents
+  tab and the story info panel list what is there and open it.
 - **The original disks, as the original machines** — hand it an Amiga, Macintosh,
   Apple II, Atari ST, PC or Commodore floppy and it plays the build on that disk,
   with that machine's artwork, sound, palette and status line. Nine machines,
@@ -231,6 +237,12 @@ itself.**
   letterboxing it — a tall terminal gets more rows to read, with the side art
   tiled out of its own artwork at the artist's spacing. `/set-v6-render` cycles
   them. → [graphics and terminals](docs/guide/graphics-and-terminals.md)
+- **Glulx games in the frame their author drew** — *Next release:* a game that
+  ships a Windows Glk `.cfg` (*Photopia* 2.01 and *Narcolepsy* among them) is laid
+  out at the size its author designed and fills your pane, window masks included.
+  `/set-glk-fit aspect` keeps the design's proportions instead of stretching, and
+  `glk_design = false` in the game's `config.toml` turns it off.
+  → [graphics and terminals](docs/guide/graphics-and-terminals.md#games-that-ship-their-own-frame)
 - **Saves that remember the whole session** — map, screen and scrollback, not
   just the game's own state, whether you press Ctrl+S or the story does its own
   `SAVE`. Plus Quetzal import/export and per-turn rewind.
@@ -391,6 +403,12 @@ live under `~/.lanthorn/saves/<story-filename>.save/` by default; `--data-dir
 [every setting](docs/reference/config.md) and
 [saves and rewind](docs/guide/saves-and-rewind.md).
 
+*Next release:* one install can serve several people. `--player <name>` (or
+`LANTHORN_PLAYER`) gives each player their own saves and settings, layered on top
+of the shared config; with no name, everything works exactly as before. Lanthorn
+does no authentication of its own — see
+[sharing one install](docs/guide/command-line.md#sharing-one-install-between-players).
+
 An **exported transcript** is not quite what is on screen:
 lanthorn's own guidance is marked in the margin while you play, and written out
 with the word `Lanthorn:` in front of it, because a file has no margin and no
@@ -451,6 +469,11 @@ tab, lose the Wi-Fi, let a tablet sleep, and coming back to the same address
 puts you in the same room mid-sentence, sound and all, for up to six hours.
 After that the game is put down with its progress saved, and the next visit
 picks it up.
+
+*Next release:* the image can take the player's name from the request header an
+authenticating proxy in front of it sets (ttyd's auth header), so each signed-in
+person gets their own saves and settings. The proxy does the login; lanthorn only
+reads the name it hands over.
 
 → [**play in a browser**](docs/guide/play-in-a-browser.md)
 
