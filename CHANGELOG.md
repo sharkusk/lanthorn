@@ -6,7 +6,7 @@ All notable changes to lanthorn are recorded here.
 [`.github/workflows/release.yml`](.github/workflows/release.yml)). A tag whose
 name contains a hyphen — `v0.1.0-beta.1`, `v0.2.0-rc.1` — is published as a
 **pre-release**; a bare `vMAJOR.MINOR.PATCH` is a full release. The workspace
-version in `Cargo.toml` (currently `0.8.3`) versions every crate and every
+version in `Cargo.toml` (currently `0.9.0`) versions every crate and every
 binary's `--version` at once, and carries any pre-release suffix so a build
 identifies itself without reading its git hash.
 
@@ -19,161 +19,130 @@ Absolute URLs or no link.
 
 ---
 
-## Unreleased
-
-*This section is drained when a version is cut. README.md describes the
-RELEASED build; prose for a feature that is in `main` but not yet released
-goes into the README in place, at its normal destination, marked with the
-visible tag `*Next release:*`. `release.yml` refuses to cut a release
-while any such tag, or this Unreleased section, still exists.*
+## v0.9.0 — 2026-10-03
 
 ### Added
 
-- **The Guiding Light spells out modern shorthands on older games.** Type `x lamp` in a
-  game that has never heard of `x` and it suggests `examine` (keeping `lamp`); likewise
-  `z` for `wait`, `g` for `again`, `l` for `look` and `i` for `inventory`, whenever
-  that game really knows the full word.
-- **Games with a Windows Glk `.cfg` fill your screen with their designed frame.**
-  Photopia 2.01 and Narcolepsy now lay out at the window size their author
-  designed and stretch it over the story pane, so the border art meets the text
-  with no gaps. Narcolepsy's thought-bubble shape and Photopia's rounded corners
-  (the games' window masks) are honoured too: cells outside the shape are left
-  blank (style it with `glk_mask_outside`). Put `glk_design = false` in the story's `config.toml` to keep the
-  old layout (or in `config.toml` itself to turn it off for every game).
-- **Keep a designed frame's proportions with `/set-glk-fit aspect`.** For games with
-  a Windows Glk `.cfg` the frame stretches to fill the pane by default; `aspect`
-  instead fits the largest whole-cell frame at the design's proportions, centred,
-  with the spare area painted like outside the window mask. A bare `/set-glk-fit`
-  (or a click on the render icon on the story pane's top border, shown only for
-  these games) toggles; it is remembered per game, and `glk_design_fit` in
-  `config.toml` sets the default.
-- **Click a dotted "to/from" room on the map to jump there**: the map switches to
-  that room's layer with the room selected.
-- **Hint files can live in the game's documents folder.** Drop an *InvisiClues* file
-  there and the Hints tab uses it for that game whatever it is called, across every
-  release and disk image; the old places (beside the story, zips, your remembered
-  choice) still work and nothing is moved. **Download hints** now saves into the
-  documents folder for a game linked to IFDB (beside the story otherwise). In the
-  Documents tab a hint file shows as "hint program — opens in Hints tab".
-- When **several hint files could be the game's**, the Hints tab now lists them so you
-  can pick one (click, or Tab / Up / Down / Enter) and remembers your choice, instead
-  of claiming there is no hint file. The "no hint file" message no longer points at
-  a command that does not exist: it names the game's documents folder, or tells you
-  to link the game to IFDB first.
-- Downloaded documents **keep IFDB's description**: each file in the Documents tab
-  shows what IFDB said about it ("Walkthrough — Competition version") on a second
-  line under its name, and files pulled out of a zip say which zip they came from.
-- Click a room on the Map tab and a **room card** appears under the map with its
-  name, layer, the description the game last printed there, when you saw it, and
-  **Rename…**, **Notes…**, **Move to another layer…** and **Details** buttons. Esc or a
-  click on empty map space puts it away; styleable as `journal.map.card*`.
-- The Journal has a **Documents** tab: the game's documents folder listed with
-  each file's kind and size, a link to the folder, and **Download documents…** and
-  **Create documents folder** buttons. Text opens in a pager that wraps to the pane,
-  reads old Mac (CR) and DOS (code page 437) files, and re-wraps when you resize;
-  pictures are shown in place; PDFs open in your system viewer. Files named like a
-  walkthrough or hint sheet are marked as spoilers and ask before they open. Reach
-  it with a click, `Alt+5` or `/journal-tab documents`; Shift+Up/Down and
-  Shift+Right/Left move through it from the keyboard without touching the command
-  line. `/create-documents-folder` now works in a running game too.
-
-- You can now fetch a game's manuals, feelies and maps straight from IFDB into its
-  documents folder. Press `Shift+D` on a story (or use the story menu's **Download
-  documents from IFDB…**, the **Download documents…** button in the info panel, or
-  `/download-documents` in a running game) and pick from the files IFDB lists:
-  PDFs, scans, text files and zips. Solutions and hints are tagged *spoiler*. A
-  zip opens to show what is inside without being downloaded, so you can take just
-  the one entry you want from a bundle of fifty games, and a text file can be
-  previewed first. Nothing is fetched until you ask, files over 100 MB are refused,
-  and a game that is not linked to IFDB says so.
-
-- Every game linked to IFDB can have a documents folder for its manual, feelies
-  and maps, named `<Title> [<IFDB id>]` under `~/.lanthorn/documents/` and shared
-  by every release of the game and every player. The story info panel shows its
-  path (a clickable link), or where it would go with a **Create documents folder**
-  button (also `m`, or the story menu); an unlinked game says to link it to IFDB.
-  `create_documents_folders = true` makes them automatically as games are found
-  or linked, and `documents_dir` moves them; both are read from the shared
-  `config.toml` only. Embedders get the library's `documents` module to list, import and
-  remove the files in a game's folder.
-
-- Downloading or importing a document you already have no longer makes a copy.
-  If the game's documents folder holds a file with exactly the same contents (under
-  any name), nothing is written and the document chooser says
-  `Already in your documents: manual.pdf`. A different file with the same name still
-  gets a `(2)` suffix.
-
-- A document's kind is now judged by what is in the file rather than by its name,
-  so a transcript called `zorkI.step1` or a manual with no extension shows as text,
-  and a `.txt` that is really a PDF or a zip no longer pretends to be text.
-
-- Several players can now share one lanthorn install. `--player <name>` (or the
+- **The Journal.** The panel beside the story is now a tabbed Journal: **Map**,
+  **Room**, **Inventory**, **Hints** and **Documents**. Click a tab, press
+  `Alt+1` to `Alt+5`, or use `/journal-tab` (`/journal-next-tab` and
+  `/journal-prev-tab` step through them). The story pane keeps the rows the
+  inventory strip used to take, and the tab you were on comes back the next time
+  you open that story. Clicking a room on the map still selects it without
+  leaving the map.
+- **Room card on the map.** Click a room and a card appears under the map with
+  its name, layer, the description the game last printed there, when you saw it,
+  and **Rename…**, **Notes…**, **Move to another layer…** and **Details**
+  buttons. Esc or a click on empty map space puts it away. Click a dotted
+  "to/from" room to jump to that room's layer with it selected.
+- **Documents folders.** Every game linked to IFDB can have a documents folder
+  for its manual, feelies and maps, named `<Title> [<IFDB id>]` under
+  `~/.lanthorn/documents/` and shared by every release of the game and every
+  player. The story info panel shows its path or offers **Create documents
+  folder** (also `m`, the story menu, or `/create-documents-folder`, which now
+  works in a running game too). The story list's info panel also lists
+  the folder's files, each with its kind, size and a spoiler mark, and a click
+  opens one the way the Documents tab does: text and pictures in a preview, PDFs
+  in your system viewer, spoilers asking first. `create_documents_folders = true` makes them
+  automatically, and `documents_dir` moves them; both are read from the shared
+  `config.toml` only.
+- **Documents tab.** Lists the folder with each file's kind and size. Text opens
+  in a pager that wraps to the pane, reads old Mac and DOS text files and
+  re-wraps on resize; pictures are shown in place; PDFs open in your system
+  viewer. Files named like a walkthrough or hint sheet are marked as spoilers
+  and ask before they open. Reach it with a click, `Alt+5` or
+  `/journal-tab documents`; Shift+Up/Down and Shift+Left/Right move through it
+  without touching the command line. A file's kind is judged by what is in it,
+  not its name, so a transcript called `zorkI.step1` shows as text.
+- **Fetch documents from IFDB.** Press `Shift+D` on a story (or use the story
+  menu's **Download documents from IFDB…**, the **Download documents…** button in
+  the info panel, or `/download-documents` in a running game) and pick from the
+  files IFDB lists: PDFs, scans, text files and zips. A zip opens to show what is
+  inside without being downloaded, so you can take one entry from a bundle, and
+  a text file can be previewed first. Each file keeps IFDB's description and says
+  which zip it came from. Nothing is fetched until you ask; files over 100 MB are
+  refused, and a game that is not linked to IFDB says so. A document you already
+  have (same contents, any name) is not copied again; a different file with the
+  same name gets a `(2)` suffix. The chooser marks what you
+  already have: a file in the folder at the same size shows "In your documents"
+  and cannot be ticked or downloaded again, while one whose size has changed
+  since you downloaded it shows "In your documents — different size" and stays
+  tickable.
+- **Hint files in the documents folder.** Drop an *InvisiClues* file there and
+  the Hints tab uses it for that game whatever it is called, across every release
+  and disk image; the old places still work and nothing is moved. **Download
+  hints** saves into the documents folder for a game linked to IFDB. When several
+  hint files could be the game's, the Hints tab lists them so you can pick one
+  (click, or Tab / Up / Down / Enter) and remembers your choice.
+- **Glulx games in the frame their author drew.** Games that ship a Windows Glk
+  `.cfg` (*Photopia* 2.01 and *Narcolepsy* among them) are laid out at the
+  size their author designed and stretched over the story pane, so the border art
+  meets the text with no gaps. Window masks are honoured too: cells outside the
+  shape are left blank (style it with `glk_mask_outside`). Put
+  `glk_design = false` in a story's `config.toml` to keep the old layout, or in
+  the shared `config.toml` to turn it off for every game.
+- **`/set-glk-fit aspect`** keeps a designed frame's proportions instead of
+  stretching: it fits the largest whole-cell frame at the design's proportions,
+  centred. A bare `/set-glk-fit` (or a click on the render icon on the story
+  pane's top border, shown only for these games) toggles; it is remembered per
+  game, and `glk_design_fit` in `config.toml` sets the default.
+- **The Guiding Light spells out modern shorthands on older games.** Type
+  `x lamp` in a game that has never heard of `x` and it suggests `examine`
+  (keeping `lamp`); likewise `z` for `wait`, `g` for `again`, `l` for `look` and
+  `i` for `inventory`, whenever that game really knows the full word.
+- **Several players on one install.** `--player <name>` (or the
   `LANTHORN_PLAYER` environment variable) gives each player their own saves, map,
   history, settings and look, while story titles, blurbs and covers are fetched
-  once and shared. Leave it out and nothing changes. Lanthorn only takes the name;
-  it does not check who you are.
-
-- The Docker browser mode can now give every signed-in user their own saves, map
-  and settings when it sits behind a login-aware reverse proxy (Authelia,
-  Authentik, Caddy `forward_auth`): set `LANTHORN_WEB_AUTH_HEADER` to the header
-  your proxy fills in with the user's name. Each user's running game is kept
-  separate too. The container does no login of its own, so the proxy must be the
-  only way to reach it. Sound works in this mode too, through a second proxy route.
+  once and shared. Leave it out and nothing changes. Lanthorn only takes the
+  name; it does not check who you are.
+- **Docker browser mode behind a login proxy.** Set `LANTHORN_WEB_AUTH_HEADER` to
+  the header a login-aware reverse proxy (Authelia, Authentik, Caddy
+  `forward_auth`) fills in with the user's name, and each user gets their own
+  saves, map and settings, with their running game kept separate. The container
+  does no login of its own, so the proxy must be the only way to reach it. Sound
+  works in this mode too, through a second proxy route.
 
 ### Changed
 
-- The panel beside the story is now the **Journal**, with tabs along its top:
-  Map, Room and Inventory. The room panel and the inventory panel that used to
-  sit under the map and across the bottom of the screen are now the Room and
-  Inventory tabs, so the story pane keeps the rows the inventory used to take.
-  Click a tab, press Alt+1, Alt+2 or Alt+3, or use `/journal-tab`
-  (`/journal-next-tab` and `/journal-prev-tab` step through them). Clicking a
-  room on the map still selects it without leaving the map; open the Room tab to
-  read about it. The tab you were on comes back the next time you open that
-  story. `/toggle-room-panel` and `/toggle-inventory-panel` are replaced by
+- **Hints moved from a pop-up into the Journal.** `/open-hints` no longer covers
+  the story: the hint file runs in the **Hints** tab (`Alt+4`, or
+  `/journal-tab hints`), starts by itself the first time you show it, and keeps
+  its place in the hint menu while you look at other tabs. The keyboard stays
+  with the story until you click inside the hint window (or press Tab on an empty
+  prompt); Esc, Tab on an empty hint line, or a click on the story or another tab
+  hands it back. With no hint file the tab says so and offers **Download
+  hints…**, and `/download-hints` now works in a running game as well as in the
+  story browser. The "no hint file" message names the game's documents folder, or
+  tells you to link the game to IFDB first.
+- `/toggle-room-panel` and `/toggle-inventory-panel` are replaced by
   `/journal-tab`, the leader keys `k` and `i` now switch to those tabs, and the
-  `inv_dock_pct` and `room_dock_pct` settings are gone. The border control
-  that cycled the command panel and inventory now just opens and closes the
-  command panel.
-
-- **Hints moved from a pop-up into the Journal.** `/open-hints` no longer covers the
-  story: the hint file now runs in the Journal's new **Hints** tab (`Alt+4`, or
-  `/journal-tab hints`), starts by itself the first time you show it, and keeps its
-  place in the hint menu while you look at other tabs. The keyboard stays with the
-  story until you click inside the hint window (or press Tab on an empty prompt); the
-  focused input shows the cursor, the other dims, and the tab label gets a `▸` mark.
-  Esc, Tab on an empty hint line, a click on the story or another tab hand the
-  keyboard back. With no hint file the tab says so and offers **Download hints…**,
-  and `/download-hints` now works in a running game as well as in the story browser.
-  Styleable as `journal.hints.*`.
+  `inv_dock_pct` and `room_dock_pct` settings are gone. The border control that
+  cycled the command panel and inventory now just opens and closes the command
+  panel.
+- Story downloads from IFDB are limited to 100 MB per file, the same as
+  documents (raised from 50 MB); a file over the limit is refused with "Too large
+  to download (over 100 MB)".
 
 ### Fixed
 
 - **Up/down rooms and the dotted links to other map layers no longer cut across
   other paths.** The "to ..." boxes standing for other layers now sit beside the
-  room whose passage leads there, instead of being pushed aside across a
-  neighbouring route, and a room reached by stairs is tucked in where its
-  connector crosses nothing.
+  room whose passage leads there, and a room reached by stairs is tucked in where
+  its connector crosses nothing.
 - **Folders of Commodore 64 disks list much faster.** Crunched disk images with
-  no playable game were unpacked three times each, every time the folder was
-  listed or a library was indexed. They are now unpacked once, and lanthorn
-  remembers which disks held no game (until the file changes), so a folder of
-  C64 disks that took 12.4 seconds to list now takes 4.2 seconds the first time
-  and 0.07 seconds after that.
+  no playable game are now unpacked once, and lanthorn remembers which disks held
+  no game (until the file changes), so a folder of C64 disks that took 12.4
+  seconds to list now takes 4.2 seconds the first time and 0.07 seconds after
+  that.
 - **Hints are found in game for a story played from a disk image.** Zork I from
   an Amiga disk showed its hint file in the story list but the in-game hints said
   none was available; the game and the story list now pick the same file.
-- Walkthroughs, hints and solution files are now marked as spoilers in the
-  document downloader even when IFDB files them somewhere else, and so are files
-  inside a zip that are named that way.
-
-- Story downloads from IFDB are now limited to 100 MB per file, the same as
-  documents, and a file over the limit is refused with "Too large to download
-  (over 100 MB)". The documents limit is raised from 50 MB to 100 MB.
-
-- The room inspector now shows room descriptions in Zork Zero, Shogun and
-  Arthur too, instead of leaving them blank in every graphical (Version 6) game.
-  Journey prints no room names, so it still has none to show.
+- Walkthroughs, hints and solution files are marked as spoilers in the document
+  downloader even when IFDB files them somewhere else, and so are files inside a
+  zip that are named that way.
+- The room inspector now shows room descriptions in Zork Zero, Shogun and Arthur
+  too, instead of leaving them blank in every graphical (Version 6) game. Journey
+  prints no room names, so it still has none to show.
 
 ## v0.8.3 — 2026-10-01
 

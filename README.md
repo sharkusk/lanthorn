@@ -210,14 +210,14 @@ itself.**
   for it, and no room is ever drawn twice because the game spelled its name two
   ways.
   → [the map](docs/guide/the-map.md)
-- **The Journal** — *Next release:* the panel beside the story is a tabbed
+- **The Journal** — the panel beside the story is a tabbed
   Journal: **Map**, **Room**, **Inventory**, **Hints** and **Documents**, one click or
   `Alt+1` to `Alt+5` apart, and it remembers the tab you left on for each story. The
   inventory is no longer a strip across the bottom, so the story gets its rows
   back, the Hints tab runs a game's *InvisiClues* file beside the story instead of
   over it, and the Documents tab reads a game's manuals and maps in place: text in a
   pager, pictures drawn in the pane, PDFs in your viewer.
-  *Next release:* every IFDB-linked game gets a documents folder
+  Every IFDB-linked game gets a documents folder
   (`~/.lanthorn/documents/<Title> [<IFDB id>]`) for its manual, feelies and maps,
   and you can fetch them without leaving lanthorn: pick from the files IFDB lists
   for the game (zips can be peeked inside, walkthroughs are flagged as spoilers,
@@ -237,7 +237,7 @@ itself.**
   letterboxing it — a tall terminal gets more rows to read, with the side art
   tiled out of its own artwork at the artist's spacing. `/set-v6-render` cycles
   them. → [graphics and terminals](docs/guide/graphics-and-terminals.md)
-- **Glulx games in the frame their author drew** — *Next release:* a game that
+- **Glulx games in the frame their author drew** — a game that
   ships a Windows Glk `.cfg` (*Photopia* 2.01 and *Narcolepsy* among them) is laid
   out at the size its author designed and fills your pane, window masks included.
   `/set-glk-fit aspect` keeps the design's proportions instead of stretching, and
@@ -403,7 +403,7 @@ live under `~/.lanthorn/saves/<story-filename>.save/` by default; `--data-dir
 [every setting](docs/reference/config.md) and
 [saves and rewind](docs/guide/saves-and-rewind.md).
 
-*Next release:* one install can serve several people. `--player <name>` (or
+One install can serve several people. `--player <name>` (or
 `LANTHORN_PLAYER`) gives each player their own saves and settings, layered on top
 of the shared config; with no name, everything works exactly as before. Lanthorn
 does no authentication of its own — see
@@ -470,7 +470,7 @@ puts you in the same room mid-sentence, sound and all, for up to six hours.
 After that the game is put down with its progress saved, and the next visit
 picks it up.
 
-*Next release:* the image can take the player's name from the request header an
+The image can take the player's name from the request header an
 authenticating proxy in front of it sets (ttyd's auth header), so each signed-in
 person gets their own saves and settings. The proxy does the login; lanthorn only
 reads the name it hands over.
