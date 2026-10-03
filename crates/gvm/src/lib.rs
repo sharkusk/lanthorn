@@ -143,7 +143,7 @@ pub mod world;
 
 pub use error::GError;
 pub use exec::{Machine, SaveLoadRequest, StepResult};
-pub use glk::{GlkBackend, GlkStyle, Model as GlkModel, TestBackend, WinType};
+pub use glk::{GlkBackend, GlkScreen, GlkStyle, Model as GlkModel, TestBackend, WinType};
 pub use memory::{Memory, WriteFault};
 pub use trace::{StackTrace, TraceFrame};
 pub use veneer::{CrossCheck, VeneerReport};

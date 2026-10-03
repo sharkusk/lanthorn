@@ -305,6 +305,12 @@ pub struct AppGlk {
     /// `char_pixels()` (the `GlkBackend` trait boundary gvm's own layout math
     /// and every game-visible pixel report read through) rounds once.
     char_px: (f64, f64),
+    /// A host-stated design-pixel screen (SQ-1703), or `None` for the usual
+    /// cell mode. When set it IS the screen the layout is measured against
+    /// (`GlkBackend::screen`): its size, unit and text cell replace
+    /// `cols`/`rows`/`char_px`, and a graphics canvas is the window's exact
+    /// rect in pixels.
+    screen_override: Option<gvm::glk::GlkScreen>,
     /// Resolves + caches Blorb `Pict` resources for `graphics_draw_image`.
     picts: crate::graphics::PictSource,
     /// Live sound channels, keyed by Glk channel ref (BTree for stable iterate).
@@ -528,6 +534,7 @@ impl AppGlk {
             scans: BTreeMap::new(),
             graphics: BTreeMap::new(),
             char_px,
+            screen_override: None,
             picts,
             schannels: BTreeMap::new(),
             next_schannel: 0,
@@ -535,6 +542,23 @@ impl AppGlk {
             theme_styles: [[(None, None); 11]; 2],
             borderless: false,
         }
+    }
+
+    /// Select (`Some`) or leave (`None`) design mode — see
+    /// [`gvm::glk::GlkScreen::design`]. Takes effect at the next relayout.
+    pub fn set_screen_override(&mut self, screen: Option<gvm::glk::GlkScreen>) {
+        self.screen_override = screen;
+    }
+
+    /// The screen the layout is measured against right now.
+    pub fn glk_screen(&self) -> gvm::glk::GlkScreen {
+        GlkBackend::screen(self)
+    }
+
+    /// The latest leaf-window layout `(id, type, rect, border)`, rects in the
+    /// units of [`Self::glk_screen`].
+    pub fn leaf_layout(&self) -> &[(u32, WinType, GlkRect, Option<bool>)] {
+        &self.layout
     }
 
     /// Set the per-game borderless-windows preference (see the field doc).
@@ -583,6 +607,10 @@ impl AppGlk {
             .find(|&&(id, _, _, _)| id == win)
             .map(|&(_, _, r, _)| (r.width, r.height))
             .unwrap_or((1, 1));
+        if let Some(s) = &self.screen_override {
+            // Design mode: the layout unit is the pixel (or a whole multiple).
+            return (cells.0 * s.unit_px.0, cells.1 * s.unit_px.1);
+        }
         // SQ-1603: rounds PER WINDOW, at this multiplication, rather than
         // sharing one pre-rounded `char_px` across every window's canvas — a
         // fractional cell size multiplied by different cell counts must be
@@ -1643,6 +1671,11 @@ fn log_to_lines(
 impl GlkBackend for AppGlk {
     fn screen_size(&self) -> (u32, u32) {
         (self.cols, self.rows)
+    }
+
+    fn screen(&self) -> gvm::glk::GlkScreen {
+        self.screen_override
+            .unwrap_or_else(|| gvm::glk::GlkScreen::cells(self.screen_size(), self.char_pixels()))
     }
 
     fn borderless(&self) -> bool {

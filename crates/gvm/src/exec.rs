@@ -4669,8 +4669,7 @@ impl Machine {
             0x0025 => {
                 // glk_window_get_size(win, awidthptr, aheightptr) — PIXELS for a
                 // graphics window, cells (unchanged) for other window types.
-                let cp = self.backend.char_pixels();
-                let size = self.glk.window_pixel_size(a(0), cp).or_else(|| self.glk.window_size(a(0)));
+                let size = self.glk.window_pixel_size(a(0)).or_else(|| self.glk.window_size(a(0)));
                 if let Some((w, h)) = size {
                     self.glk_store_ptr(a(1), w)?;
                     self.glk_store_ptr(a(2), h)?;
@@ -5330,7 +5329,6 @@ impl Machine {
                     0
                 } else {
                     let rule = glk::ImageRule { rule: a(6), width: a(4), height: a(5), maxwidth: a(7) };
-                    let cp = self.backend.char_pixels();
                     let link = self.current_hyperlink();
                     match self.glk.window_type(a(0)) {
                         // Graphics window: ONE-SHOT. Resolve against the
@@ -5338,7 +5336,7 @@ impl Machine {
                         // the result to the same seam `glk_image_draw_scaled`
                         // uses, so a host needs no change to support it.
                         Some(glk::WinType::Graphics) => {
-                            let win_w = self.glk.window_pixel_size(a(0), cp).map(|(w, _)| w).unwrap_or(0);
+                            let win_w = self.glk.window_pixel_size(a(0)).map(|(w, _)| w).unwrap_or(0);
                             match self.backend.image_info(a(1)).and_then(|nat| rule.resolve_in_graphics(nat, win_w)) {
                                 Some(size) => {
                                     self.backend.graphics_draw_image(a(0), a(1), a(2) as i32, a(3) as i32, Some(size), link)
@@ -5354,7 +5352,7 @@ impl Machine {
                         // size, so it can re-resolve on every relayout. `val1`
                         // is the imagealign; `val2` is unused and must be zero.
                         Some(glk::WinType::TextBuffer) => {
-                            let win_w = self.glk.window_size(a(0)).map(|(w, _)| w * cp.0).unwrap_or(0);
+                            let win_w = self.glk.window_rect_px(a(0)).map(|(w, _)| w).unwrap_or(0);
                             self.backend.buffer_draw_image_ext(a(0), a(1), a(2), rule, win_w, link) as u32
                         }
                         // Grid/pair/blank/absent windows do not display images.
@@ -5627,9 +5625,8 @@ impl Machine {
 
     /// Recompute the window layout from the backend's screen size and notify it.
     fn relayout_glk(&mut self) {
-        let (w, h) = self.backend.screen_size();
-        let cp = self.backend.char_pixels();
-        let layout = self.glk.relayout(w, h, cp, self.backend.borderless());
+        let screen = self.backend.screen();
+        let layout = self.glk.relayout(&screen, self.backend.borderless());
         self.backend.window_layout(&layout);
         let tree = self.glk.window_tree();
         self.backend.window_tree(tree);
@@ -7374,7 +7371,7 @@ mod tests {
         /// Test accessor: a graphics window's `(width, height)` in pixels, per
         /// the backend's current `char_pixels()`.
         fn graphics_window_pixels(&self, win: u32) -> Option<(u32, u32)> {
-            self.glk.window_pixel_size(win, self.backend.char_pixels())
+            self.glk.window_pixel_size(win)
         }
     }
 
@@ -10089,7 +10086,7 @@ mod tests {
         // grid stream, and a positioned grid cursor.
         let buf = m.glk.window_open(0, 0, 0, 3, 0xB0).unwrap(); // root TextBuffer
         let grid = m.glk.window_open(buf, 0x12, 3, 4, 0x61).unwrap(); // grid above, fixed 3
-        m.glk.relayout(80, 24, (1, 1), false);
+        m.glk.relayout(&glk::GlkScreen::cells((80, 24), (1, 1)), false);
         let mem_stream = m.glk.stream_open_memory(0x180, 16, false, 3, 0x5E); // ReadWrite: seekable
         m.glk.stream_set_position(mem_stream, 5, 0);
         let grid_stream = m.glk.window_stream(grid).unwrap();
@@ -10128,7 +10125,7 @@ mod tests {
         // Routing after a cross-session restore: a put on the current (grid)
         // stream lands in the grid window at its restored cursor (row 1, col 2+).
         // (The host re-lays the restored tree out to its fresh backend first.)
-        let layout = m2.glk.relayout(80, 24, (1, 1), false);
+        let layout = m2.glk.relayout(&glk::GlkScreen::cells((80, 24), (1, 1)), false);
         m2.backend.window_layout(&layout);
         m2.glk_stream_put(grid_stream, "Hi");
         assert_eq!(backend_of(&m2).grid_line(grid, 1), "  Hi");

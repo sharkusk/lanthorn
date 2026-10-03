@@ -986,6 +986,37 @@ impl GlulxSession {
         self.refresh_screen();
     }
 
+    /// Select (`Some`) or leave (`None`) a design-pixel Glk screen (SQ-1703):
+    /// the host states the screen as `size` layout units of `unit_px` pixels
+    /// and a fractional, possibly non-square `text_cell` in those units, and
+    /// gvm divides splits in exactly those units. `None` returns to the usual
+    /// cell mode ([`Self::resize`] / [`Self::set_char_px`]). Calling it again
+    /// with a new text cell relayouts and redraws exactly as
+    /// [`Self::set_char_px`] does. A no-op once the game has quit.
+    pub fn set_glk_screen(&mut self, screen: Option<gvm::glk::GlkScreen>) {
+        if self.quit {
+            return;
+        }
+        self.appglk().set_screen_override(screen);
+        self.machine.rearrange();
+        self.settle_after_event();
+        self.refresh_screen();
+    }
+
+    /// The Glk screen the layout is currently measured against, with every
+    /// leaf window's rect in that screen's layout units (SQ-1703).
+    pub fn glk_layout(&mut self) -> GlkLayout {
+        let g = self.appglk();
+        GlkLayout {
+            screen: g.glk_screen(),
+            windows: g
+                .leaf_layout()
+                .iter()
+                .map(|&(id, wintype, rect, _)| GlkWindowRect { id, wintype, rect })
+                .collect(),
+        }
+    }
+
     /// Drive one turn's worth of execution, updating `pending`/`quit`/`pending_io`.
     /// On an in-game `@save`/`@restore` the drive stops with `pending_io` set (and
     /// `pending`/`quit` left unchanged, since the game is mid-turn); the run loop
@@ -3001,6 +3032,23 @@ fn inventory_evidence_parent(
 }
 
 /// The empty initial screen snapshot.
+/// One leaf window's rectangle, in the layout units of the [`GlkLayout::screen`]
+/// it was laid out against (SQ-1703).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct GlkWindowRect {
+    pub id: u32,
+    pub wintype: gvm::glk::WinType,
+    pub rect: gvm::glk::Rect,
+}
+
+/// The Glk screen and every leaf window's rect on it: what a host that maps
+/// design-pixel windows onto its own surface reads (SQ-1703).
+#[derive(Debug, Clone, PartialEq)]
+pub struct GlkLayout {
+    pub screen: gvm::glk::GlkScreen,
+    pub windows: Vec<GlkWindowRect>,
+}
+
 fn blank_screen() -> ScreenModel {
     ScreenModel {
         root: WinNode::Blank,

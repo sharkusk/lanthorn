@@ -113,6 +113,31 @@ pub fn set_glk_cell_px(session: &mut dyn Engine, state: &mut AppState, char_px: 
     }
 }
 
+pub use crate::glulx_session::{GlkLayout, GlkWindowRect};
+pub use gvm::glk::GlkScreen;
+
+/// Select (`Some`) or leave (`None`) a design-pixel Glk screen for a Glulx
+/// story (SQ-1703): `GlkScreen::design(size_px, text_cell_px)` lays splits out
+/// in exact pixels with a fractional, possibly non-square text cell. Call it
+/// again with a new text cell to relayout and redraw (the sibling of
+/// [`set_glk_cell_px`]); `None` returns to cell mode. `false` for any other
+/// engine. Does not touch `state.glk_cell_px`.
+pub fn set_glk_design_screen(session: &mut dyn Engine, screen: Option<GlkScreen>) -> bool {
+    match session.as_any_mut().downcast_mut::<GlulxSession>() {
+        Some(gs) => {
+            gs.set_glk_screen(screen);
+            true
+        }
+        None => false,
+    }
+}
+
+/// The Glk screen and the leaf windows' rects (in its layout units) for a
+/// Glulx story; `None` for any other engine.
+pub fn glk_layout(session: &mut dyn Engine) -> Option<GlkLayout> {
+    session.as_any_mut().downcast_mut::<GlulxSession>().map(|gs| gs.glk_layout())
+}
+
 /// Tell the story its pane is `(cols, rows)` cells, whatever the engine: the
 /// Z-machine header (when it changed) or a Glulx resize. Returns `true` when the
 /// story was told something new. A zero-area pane is ignored.
