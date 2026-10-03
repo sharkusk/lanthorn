@@ -1594,6 +1594,35 @@ impl MapGraph {
         }
     }
 
+    /// Graft onto this graph (a [`MapGraph::layer_subgraph`]-shaped frame of `layer`) what the
+    /// subgraph dropped: every `live` connection crossing between `layer` and another layer,
+    /// the foreign room at its far end, and the layer table that names it. After this,
+    /// `render_layer(self, layer)` draws the same cross-layer ghosts the live map does (SQ-1697).
+    ///
+    /// A crossing whose in-layer end is not a room of `self` is skipped — a frame part-way
+    /// through a rebuild has not got that room yet, so there is nothing to seat a ghost against.
+    pub fn graft_crossings_from(&mut self, live: &MapGraph, layer: LayerId) {
+        let mut grafted = false;
+        for c in &live.conns {
+            let (o_in, d_in) = (live.layer_of(c.origin) == layer, live.layer_of(c.dest) == layer);
+            if o_in == d_in {
+                continue;
+            }
+            let (near, far) = if o_in { (c.origin, c.dest) } else { (c.dest, c.origin) };
+            if !self.rooms.contains_key(&near) {
+                continue;
+            }
+            if let Some(room) = live.rooms.get(&far) {
+                self.rooms.entry(far).or_insert_with(|| room.clone());
+            }
+            self.conns.push(c.clone());
+            grafted = true;
+        }
+        if grafted {
+            self.layers = live.layers.clone();
+        }
+    }
+
     /// Change the direction of the edge keyed (origin, old) to (origin, new).
     /// If an edge with key (origin, new) already exists, refuses and returns false.
     /// Returns true if the relabel happened.

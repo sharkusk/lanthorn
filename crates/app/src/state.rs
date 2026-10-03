@@ -1524,6 +1524,24 @@ pub struct TidyFrame {
     pub manifest: Option<Vec<String>>,
 }
 
+impl TidyFrame {
+    /// This frame rendered as `layer`'s map, WITH the cross-layer ghosts the live map draws.
+    /// A frame is a `layer_subgraph`, which drops every connection leaving the layer, so
+    /// rendering it bare shows no ghost rooms (SQ-1697). The crossings are grafted on from
+    /// `live` first; a layer with none renders the frame directly, with no extra clone.
+    pub fn render_with_crossings(&self, live: &MapGraph, layer: LayerId) -> mapper::render::RenderMap {
+        let crosses = live.connections().iter().any(|c| {
+            (live.layer_of(c.origin) == layer) != (live.layer_of(c.dest) == layer)
+        });
+        if !crosses {
+            return mapper::render::render_layer(&self.graph, layer);
+        }
+        let mut g = self.graph.clone();
+        g.graft_crossings_from(live, layer);
+        mapper::render::render_layer(&g, layer)
+    }
+}
+
 /// Transient playback state for the tidy animation. While this is `Some`, the map
 /// pane renders the current frame's graph instead of the live one. Playback holds
 /// on the final frame; `Esc` clears it back to the live map.
@@ -8045,6 +8063,32 @@ mod tests {
         assert!(ghost.ghost.is_some(), "fixture: room 4 is a ghost here");
         assert_eq!(ghost.label, "to Sump", "the refresh must not rename a ghost");
         assert!(!ghost.is_current, "the player is never standing in a placeholder");
+    }
+
+    /// SQ-1697: an animation frame is a `layer_subgraph` with no crossings; rendering it through
+    /// `render_with_crossings` must draw the same ghosts the live map does.
+    #[test]
+    fn tidy_frames_render_the_cross_layer_ghosts_the_live_map_has() {
+        let g = ghost_fixture();
+        let layer = mapper::layer::MAIN_LAYER;
+        let live = mapper::render::render_layer(&g, layer);
+        assert!(live.rooms.iter().any(|r| r.id == 4 && r.ghost.is_some()), "fixture: live has the ghost");
+        let frames = crate::tidy::run_tidy_pipeline(&mut g.clone(), layer, None);
+        assert!(frames.len() > 2, "a real animation");
+        let mid = &frames[frames.len() / 2];
+        let bare = mapper::render::render_layer(&mid.graph, layer);
+        assert!(!bare.rooms.iter().any(|r| r.ghost.is_some()), "the bare frame draws no ghost (the bug)");
+        let last = frames.last().unwrap();
+        for f in [mid, last] {
+            let rm = f.render_with_crossings(&g, layer);
+            let ghost = rm.rooms.iter().find(|r| r.id == 4).expect("frame draws the ghost");
+            assert!(ghost.ghost.is_some());
+            assert_eq!(ghost.label, "to Sump");
+        }
+        // The final frame is the tidied layout: its ghost sits where the live one's does.
+        let lg = live.rooms.iter().find(|r| r.id == 4).unwrap();
+        let fg = last.render_with_crossings(&g, layer);
+        assert_eq!(fg.rooms.iter().find(|r| r.id == 4).unwrap().cell, lg.cell);
     }
 
     /// Replay outranks an animation, matching the map pane's own order.

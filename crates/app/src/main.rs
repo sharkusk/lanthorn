@@ -741,7 +741,7 @@ fn draw_frame(
             FrameRenderMap::Owned(render_layer(g, layer))
         } else {
             match &state.tidy_anim {
-                Some(anim) => FrameRenderMap::Owned(render_layer(&anim.current().graph, layer)),
+                Some(anim) => FrameRenderMap::Owned(anim.current().render_with_crossings(&mapper.graph, layer)),
                 None => match state.live_map_render(layer, &mapper.graph) {
                     Some(cached) => FrameRenderMap::Cached(cached),
                     // The matrix draws from the graph (see `render_map_layered`), so no model is
