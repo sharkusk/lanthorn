@@ -214,6 +214,8 @@ mod sq1703_glk_stretch;
 mod sq1703_glk_stretch_pixels;
 #[path = "suites/sq1703_glk_mask.rs"]
 mod sq1703_glk_mask;
+#[path = "suites/sq1707_glk_fit.rs"]
+mod sq1707_glk_fit;
 #[path = "suites/walkthroughs.rs"]
 mod walkthroughs;
 #[path = "suites/walkthrough_adventureland.rs"]

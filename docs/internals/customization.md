@@ -519,6 +519,46 @@ position inside the window (`glk_cfg::cell_offset_to_design_px`, via
 `glk_mouse_target_design`); grid windows still report cells (drawn == told) and
 cell mode is unchanged. Not yet done: raster mode.
 
+**Fit modes (SQ-1707).** `glk_design_fit = "stretch"` (default) | `"aspect"` is
+a global `config.toml` key (templated) and a per-game sidecar key; per-game wins
+(`glk_cfg::resolve_fit_mode`). The global `glk_design` (default true) joined it
+with the same precedence (`resolve_design_on`). Everything above describes
+stretch, whose behaviour is unchanged. ONE value, `glk_cfg::GlkFit { mode,
+design, pane, unit }`, answers a host in its own units: `GlkFit::pixels(mode,
+design, pane_px)` for a pixel host, `GlkFit::cells(mode, design, pane_cells,
+cell_px)` for the TUI. Methods: `frame()` (size and offset), `letterbox()` (up
+to four rects that tile the pane with the frame), `window_rect(design_rect)`
+(edge rule `design_px_to_cell_edge` over the frame, plus its offset),
+`to_design(x, y)` (click inverse, `None` in the letterbox) and
+`design_screen(char_px)` (the screen the story is told).
+
+*Aspect, and the snapping rule.* The scale is uniform and computed in DEVICE
+pixels (terminal cells are not square): `s = min(pane_px.w / design.w, pane_px.h
+/ design.h)`. In pixels the limiting axis is the pane's extent and the other is
+rounded; in cells each side is `round(design * s / cell)` clamped to the pane,
+so the limiting axis fills the pane exactly and the other is within half a cell
+of the true aspect, and the offset is `floor(leftover / 2)` (the odd leftover
+cell goes right/bottom). Frame plus letterbox tile the pane with no gap or
+overlap. The story is told the text cell the SNAPPED frame implies, so chars
+told == cells drawn still holds. `AppGlk::screen_model` builds the frame's cell
+tree as in stretch and wraps it in filler buffers carrying
+`glk_backend::GLK_LETTERBOX_WIN`; the renderer paints those with
+`glk_mask_outside`, and the mask spans the frame, not the pane. Graphics
+canvases are resampled to their cell box exactly as in stretch. A click needs no
+extra mapping: windows are drawn at their real cell rects, so the letterbox
+holds no window and the existing per-window inverse applies.
+
+*Command, icon.* `/set-glk-fit [stretch|aspect|auto]` (bare toggles; `auto`
+removes the per-game key) runs `host::screen::run_set_glk_fit`, which persists
+and applies live; it refuses with "this game has no design size" when no `.cfg`
+with both dimensions applies. The v6 render border control doubles as the toggle
+while `AppState::glk_stretch` is on (`BorderControl::command_for`; glyph:
+stretch = hybrid's, aspect = raster's); v6 stories are unaffected. Host API
+(additive): `host::screen::{run_set_glk_fit, set_glk_fit, glk_fit,
+glk_design_size, glk_primary_text_window}`, `GlulxSession::{glk_fit,
+primary_text_window, set_glk_fit_mode, set_glk_design_fit}`, and for per-pixel
+mask hosts `GlkMask::{opaque, alpha_image}`.
+
 **The window mask (SQ-1703 P4).** `WindowMask=<n>` names a Blorb Pict; per
 Windows Glulxe's `config.htm` a white pixel makes the window transparent there
 and any other pixel is opaque (alpha 0 also counts as transparent). Verified on

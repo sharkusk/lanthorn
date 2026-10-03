@@ -423,6 +423,31 @@ const INTERPRETER: &[Row] = &[
         ],
     ),
     d(
+        "glk_design",
+        "true",
+        &[
+            "Lay out a Glulx game at the design size its Windows Glk .cfg file asks for.",
+            "A few games (Photopia, Narcolepsy) ship a <story>.cfg beside the story",
+            "with WindowWidth and WindowHeight; lanthorn then lays the game out at",
+            "that pixel size and fits the whole frame to your pane. Set false to keep",
+            "the ordinary cell layout. Games without such a .cfg are unaffected.",
+            "A per-game config.toml beside the story can override this.",
+        ],
+    ),
+    d(
+        "glk_design_fit",
+        "\"stretch\"",
+        &[
+            "How a design-size Glulx game (see glk_design) fills your pane:",
+            "  \"stretch\" — the frame fills the whole pane, each axis scaled on its",
+            "               own, so the art may look slightly wider or taller (default)",
+            "  \"aspect\"  — the frame keeps the design's proportions: the largest",
+            "               whole-cell frame that fits, centred, the spare area",
+            "               painted with the glk_mask_outside style",
+            "/set-glk-fit switches it mid-game and remembers the choice per game.",
+        ],
+    ),
+    d(
         "fuse_art_dither",
         "true",
         &[

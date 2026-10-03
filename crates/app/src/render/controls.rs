@@ -293,6 +293,17 @@ impl BorderControl {
         }
     }
 
+    /// [`Self::command`] as the control stands NOW (SQ-1707): the v6 render
+    /// control is also the design-size Glulx fit toggle, and while a design-size
+    /// story is on screen a click runs `set-glk-fit` rather than
+    /// `set-v6-render`. Every other control answers exactly as `command()` does.
+    pub fn command_for(self, state: &AppState) -> ControlCommand {
+        match self {
+            BorderControl::V6Render if state.glk_stretch => ControlCommand { name: "set-glk-fit", arg: None },
+            _ => self.command(),
+        }
+    }
+
     /// Does this control REMEMBER what it switched, in the per-game sidecar?
     ///
     /// True of every switch here and false of the one trigger, which has nothing
@@ -533,6 +544,25 @@ pub fn controls_for(state: &AppState) -> Vec<ControlView> {
             key_route(state, BorderControl::Reveal.command()),
         ],
     });
+
+    // ── Glulx design-size fit (SQ-1707) ──────────────────────────────────────
+    // The v6 render control doubles as the fit toggle, and only while a
+    // design-size story is laid out at its design size (a `.cfg` with
+    // WindowWidth and WindowHeight, `glk_design` on). Stretch fills the pane
+    // like `hybrid`'s glyph; aspect is the letterboxed look `raster` has.
+    if state.glk_stretch {
+        use crate::glk_cfg::GlkFitMode;
+        let (glyph, name, next) = match state.glk_fit {
+            GlkFitMode::Stretch => (g.render_hybrid, "stretch", "aspect"),
+            GlkFitMode::Aspect => (g.render_raster, "aspect", "stretch"),
+        };
+        out.push(ControlView {
+            id: BorderControl::V6Render,
+            glyph,
+            style: style_for(state, BorderControl::V6Render, state.glk_fit == GlkFitMode::Aspect),
+            hint: vec![format!("Fit: {name} — click for {next}"), "/set-glk-fit".to_string()],
+        });
+    }
 
     if state.story_zversion != Some(6) {
         return out;

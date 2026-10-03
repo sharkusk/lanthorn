@@ -3215,6 +3215,10 @@ pub struct AppState {
     /// their cell rect (aspect not honoured) and no text margin is carved out
     /// of a text window. Set by `apply_glk_design`; `false` in cell mode.
     pub glk_stretch: bool,
+    /// SQ-1707: the fit mode in force while `glk_stretch` is on (stretch, or
+    /// aspect with a centred letterboxed frame). Resolved per-game over global
+    /// by `host::screen::apply_glk_design`; the border icon reads it.
+    pub glk_fit: crate::glk_cfg::GlkFitMode,
     /// The story's window-shape mask (`WindowMask`, SQ-1703 P4) while stretch
     /// mode is on and the Pict loaded; cells it covers under 50% are hidden.
     pub glk_mask: Option<std::sync::Arc<crate::glk_cfg::GlkMask>>,
@@ -3928,6 +3932,7 @@ impl Default for AppState {
             garglk_overlay: None,
             glk_design: None,
             glk_stretch: false,
+            glk_fit: crate::glk_cfg::GlkFitMode::Stretch,
             glk_mask: None,
             honor_game_colours_base: true,
             v6_pixel_lock_base: false,

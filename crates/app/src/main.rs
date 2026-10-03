@@ -3697,7 +3697,7 @@ fn run_event_loop(boot: startup::BootResult, launched_from_library: bool) -> Run
                         // The command's OWN context, looked up in the registry
                         // rather than assumed: a control must parse exactly the
                         // way the palette parses the same command.
-                        let cmd = ctl.command();
+                        let cmd = ctl.command_for(&state);
                         let ctx = slash::COMMANDS
                             .iter()
                             .find(|c| c.name == cmd.name)

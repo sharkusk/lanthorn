@@ -57,6 +57,9 @@ pub struct PerGameConfig {
     /// ships a Windows Glk `.cfg` design size (SQ-1703 P3); absent/`true` lets
     /// the design size lay the story out and stretch it over the pane.
     pub glk_design: Option<bool>,
+    /// How a design-size Glulx story fills the pane (SQ-1707): `stretch` or
+    /// `aspect`. `None` = no override, so the global `glk_design_fit` decides.
+    pub glk_design_fit: Option<crate::glk_cfg::GlkFitMode>,
     pub show_map: Option<bool>,
     pub pictures: Option<String>,
     pub interpreter_number: Option<u8>,
@@ -132,6 +135,7 @@ impl PerGameConfig {
         "honor_game_colours",
         "borderless_windows",
         "glk_design",
+        "glk_design_fit",
         "show_map",
         "v6_pixel_lock",
         "guidance",
@@ -173,6 +177,7 @@ impl PerGameConfig {
             honor_game_colours: b("honor_game_colours"),
             borderless_windows: b("borderless_windows"),
             glk_design: b("glk_design"),
+            glk_design_fit: s("glk_design_fit").as_deref().and_then(crate::glk_cfg::GlkFitMode::from_key),
             show_map: b("show_map"),
             pictures: s("pictures"),
             interpreter_number: v
@@ -211,6 +216,7 @@ impl PerGameConfig {
             put_bool(doc, "honor_game_colours", self.honor_game_colours);
             put_bool(doc, "borderless_windows", self.borderless_windows);
             put_bool(doc, "glk_design", self.glk_design);
+            put_str(doc, "glk_design_fit", self.glk_design_fit.map(|m| m.key()));
             put_bool(doc, "show_map", self.show_map);
             put_bool(doc, "v6_pixel_lock", self.v6_pixel_lock);
             put_bool(doc, "guidance", self.guidance);
@@ -359,6 +365,12 @@ pub fn read_per_game_borderless(game_dir: &Path) -> Option<bool> {
 /// (the default) and `Some(true)` lay the story out at its design size.
 pub fn read_per_game_glk_design(game_dir: &Path) -> Option<bool> {
     PerGameConfig::read(game_dir).glk_design
+}
+
+/// Read the per-game `glk_design_fit` override (SQ-1707). `None` = no override,
+/// so the global `glk_design_fit` decides.
+pub fn read_per_game_glk_design_fit(game_dir: &Path) -> Option<crate::glk_cfg::GlkFitMode> {
+    PerGameConfig::read(game_dir).glk_design_fit
 }
 
 /// Read the per-game `show_map` override, if the user set one. `None` = no
@@ -634,6 +646,13 @@ pub fn write_per_game_guidance(game_dir: &Path, value: Option<bool>) -> std::io:
     edit(game_dir, |c| c.guidance = value)
 }
 
+/// Persist (or clear) the per-game `glk_design_fit` override (SQ-1707),
+/// preserving every sibling key. `None` clears it back to inheriting the global
+/// mode.
+pub fn write_per_game_glk_design_fit(game_dir: &Path, value: Option<crate::glk_cfg::GlkFitMode>) -> std::io::Result<()> {
+    edit(game_dir, |c| c.glk_design_fit = value)
+}
+
 /// Persist (or clear) the per-game `v6_render` override (SQ-1123), preserving
 /// every sibling key. `None` clears it back to inheriting the global mode.
 pub fn write_per_game_v6_render(game_dir: &Path, value: Option<String>) -> std::io::Result<()> {
@@ -740,6 +759,7 @@ mod tests {
             honor_game_colours: Some(true),
             borderless_windows: Some(true),
             glk_design: Some(true),
+            glk_design_fit: Some(crate::glk_cfg::GlkFitMode::Aspect),
             show_map: Some(true),
             pictures: Some("Pic.data".into()),
             interpreter_number: Some(6),

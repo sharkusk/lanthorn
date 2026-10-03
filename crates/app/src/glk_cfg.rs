@@ -203,6 +203,227 @@ pub fn design_rect_to_cells(
     (x0, y0, x1 - x0, y1 - y0)
 }
 
+// ── Fit modes — SQ-1707 step A ─────────────────────────────────────────────
+//
+// A design-size story can fill the pane two ways: STRETCH it (per-axis scale,
+// aspect not honoured — the default, and everything above) or fit it by ASPECT
+// (one uniform scale, the largest frame that fits, centred, the leftover area
+// painted like outside-the-mask). [`GlkFit`] is the ONE value both a terminal
+// host (units are cells) and a pixel host (units are pixels) ask for the
+// frame, each window's rectangle and the click-to-design-pixel inverse, so the
+// two cannot disagree about where the frame is.
+
+/// How a design-size story fills the story pane. `glk_design_fit` in
+/// `config.toml` (global) and the per-game sidecar (per-game wins).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Default)]
+pub enum GlkFitMode {
+    /// The frame fills the pane, each axis scaled on its own (default).
+    #[default]
+    Stretch,
+    /// One uniform scale: the largest frame that fits, centred.
+    Aspect,
+}
+
+impl GlkFitMode {
+    /// The `glk_design_fit` token for this mode — one spelling for the file,
+    /// the sidecar and the command.
+    pub fn key(self) -> &'static str {
+        match self {
+            GlkFitMode::Stretch => "stretch",
+            GlkFitMode::Aspect => "aspect",
+        }
+    }
+
+    /// The mode a `glk_design_fit` token names, or `None` for anything else.
+    pub fn from_key(token: &str) -> Option<GlkFitMode> {
+        match token {
+            "stretch" => Some(GlkFitMode::Stretch),
+            "aspect" => Some(GlkFitMode::Aspect),
+            _ => None,
+        }
+    }
+
+    /// The other mode (what a bare `/set-glk-fit` steps to).
+    pub fn toggled(self) -> GlkFitMode {
+        match self {
+            GlkFitMode::Stretch => GlkFitMode::Aspect,
+            GlkFitMode::Aspect => GlkFitMode::Stretch,
+        }
+    }
+}
+
+/// The fit mode in force: the per-game sidecar's, else the global config's.
+pub fn resolve_fit_mode(per_game: Option<GlkFitMode>, global: GlkFitMode) -> GlkFitMode {
+    per_game.unwrap_or(global)
+}
+
+/// Whether design-size layout is on: the per-game `glk_design`, else the global
+/// one (default on).
+pub fn resolve_design_on(per_game: Option<bool>, global: bool) -> bool {
+    per_game.unwrap_or(global)
+}
+
+/// A whole-unit rectangle in a [`GlkFit`]'s units (cells or pixels).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct FitRect {
+    pub x: u32,
+    pub y: u32,
+    pub w: u32,
+    pub h: u32,
+}
+
+impl FitRect {
+    /// Whether the point `(x, y)` is inside (right/bottom edges exclusive).
+    pub fn contains(&self, x: f64, y: f64) -> bool {
+        x >= self.x as f64 && y >= self.y as f64 && x < (self.x + self.w) as f64 && y < (self.y + self.h) as f64
+    }
+}
+
+/// What a [`GlkFit`]'s pane and results are measured in.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub enum GlkFitUnit {
+    /// Device pixels (a pixel host). Results are exact pixels.
+    Pixels,
+    /// Terminal cells, each `cell_px` device pixels (the TUI). The aspect is
+    /// computed in device pixels (cells are not square) and the frame is then
+    /// snapped to whole cells; see [`GlkFit::frame`].
+    Cells { cell_px: (f64, f64) },
+}
+
+/// Mode + design size + pane + unit: everything needed to place a design-size
+/// story in a pane, for the TUI (cells) and a pixel host (pixels) alike.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct GlkFit {
+    pub mode: GlkFitMode,
+    /// The `.cfg` design size in design pixels.
+    pub design: (u32, u32),
+    /// The pane in this fit's unit.
+    pub pane: (u32, u32),
+    pub unit: GlkFitUnit,
+}
+
+fn round_div(n: u64, d: u64) -> u64 {
+    (n * 2 + d) / (d * 2)
+}
+
+impl GlkFit {
+    /// A fit for a host that draws in device pixels; `pane_px` is its story pane.
+    pub fn pixels(mode: GlkFitMode, design: (u32, u32), pane_px: (u32, u32)) -> GlkFit {
+        GlkFit { mode, design, pane: pane_px, unit: GlkFitUnit::Pixels }
+    }
+
+    /// A fit for a cell host; `pane_cells` is `(cols, rows)`, `cell_px` one cell
+    /// in device pixels.
+    pub fn cells(mode: GlkFitMode, design: (u32, u32), pane_cells: (u32, u32), cell_px: (f64, f64)) -> GlkFit {
+        GlkFit { mode, design, pane: pane_cells, unit: GlkFitUnit::Cells { cell_px } }
+    }
+
+    fn design_nz(&self) -> (u32, u32) {
+        (self.design.0.max(1), self.design.1.max(1))
+    }
+
+    /// The frame's size and offset in this fit's unit.
+    ///
+    /// **Stretch**: the whole pane. **Aspect**: one uniform scale, the largest
+    /// frame of the design's aspect ratio that fits, centred.
+    ///
+    /// In **pixels** the limiting axis is the pane's own extent and the other
+    /// is `round(design * pane / design_limiting)`, clamped to the pane; the
+    /// offset is `floor(leftover / 2)`.
+    ///
+    /// In **cells** the scale is computed in DEVICE pixels first (`s = min(
+    /// pane_px.w / design.w, pane_px.h / design.h)`, cells being non-square),
+    /// then each side is snapped to whole cells: `round(design * s / cell)`,
+    /// clamped to `1..=pane`, so the limiting axis fills the pane exactly and
+    /// the other is within half a cell of the true aspect. The offset is
+    /// `floor(leftover / 2)` cells, so frame plus [`Self::letterbox`] tile the
+    /// pane with no gap or overlap (the odd leftover cell goes right/bottom).
+    pub fn frame(&self) -> FitRect {
+        let (pw, ph) = self.pane;
+        let full = FitRect { x: 0, y: 0, w: pw, h: ph };
+        if self.mode == GlkFitMode::Stretch || pw == 0 || ph == 0 {
+            return full;
+        }
+        let (dw, dh) = self.design_nz();
+        let (w, h) = match self.unit {
+            GlkFitUnit::Pixels => {
+                if pw as u64 * dh as u64 <= ph as u64 * dw as u64 {
+                    (pw, (round_div(dh as u64 * pw as u64, dw as u64) as u32).clamp(1, ph))
+                } else {
+                    ((round_div(dw as u64 * ph as u64, dh as u64) as u32).clamp(1, pw), ph)
+                }
+            }
+            GlkFitUnit::Cells { cell_px } => {
+                let (cw, ch) = (cell_px.0.max(1e-9), cell_px.1.max(1e-9));
+                let s = (pw as f64 * cw / dw as f64).min(ph as f64 * ch / dh as f64);
+                (
+                    ((dw as f64 * s / cw).round() as u32).clamp(1, pw),
+                    ((dh as f64 * s / ch).round() as u32).clamp(1, ph),
+                )
+            }
+        };
+        FitRect { x: (pw - w) / 2, y: (ph - h) / 2, w, h }
+    }
+
+    /// The area outside the frame as up to four non-overlapping rects (top and
+    /// bottom bands full width, left and right bands beside the frame); empty
+    /// when the frame is the pane. Frame + these tile the pane exactly.
+    pub fn letterbox(&self) -> Vec<FitRect> {
+        let f = self.frame();
+        let (pw, ph) = self.pane;
+        [
+            FitRect { x: 0, y: 0, w: pw, h: f.y },
+            FitRect { x: 0, y: f.y + f.h, w: pw, h: ph - (f.y + f.h) },
+            FitRect { x: 0, y: f.y, w: f.x, h: f.h },
+            FitRect { x: f.x + f.w, y: f.y, w: pw - (f.x + f.w), h: f.h },
+        ]
+        .into_iter()
+        .filter(|r| r.w > 0 && r.h > 0)
+        .collect()
+    }
+
+    /// The frame's size in DEVICE pixels (cells times the cell size in a cell
+    /// fit).
+    pub fn frame_px(&self) -> (f64, f64) {
+        let f = self.frame();
+        match self.unit {
+            GlkFitUnit::Pixels => (f.w as f64, f.h as f64),
+            GlkFitUnit::Cells { cell_px } => (f.w as f64 * cell_px.0, f.h as f64 * cell_px.1),
+        }
+    }
+
+    /// The Glk screen the story is told: the design frame with the text cell
+    /// IMPLIED by the actual (snapped) frame, `char_px / (frame_px / design)`
+    /// per axis. `char_px` is one text cell in device pixels (a cell fit's own
+    /// `cell_px`, or the pixel host's font cell).
+    pub fn design_screen(&self, char_px: (f64, f64)) -> gvm::glk::GlkScreen {
+        glk_design_screen(self.design, self.frame_px(), char_px)
+    }
+
+    /// A design-pixel rect `(left, top, width, height)` as the rect it covers
+    /// in this fit's unit (frame offset included), by the same edge rule as
+    /// [`design_rect_to_cells`] over the frame, so neighbours share edges.
+    pub fn window_rect(&self, rect: (u32, u32, u32, u32)) -> FitRect {
+        let f = self.frame();
+        let (x, y, w, h) = design_rect_to_cells(rect, self.design, (f.w, f.h));
+        FitRect { x: f.x + x, y: f.y + y, w, h }
+    }
+
+    /// The inverse mapping: a point `(x, y)` in this fit's unit (fractions
+    /// allowed — a cell plus how far into it) to the design pixel under it, or
+    /// `None` in the letterbox (outside the frame).
+    pub fn to_design(&self, x: f64, y: f64) -> Option<(u32, u32)> {
+        let f = self.frame();
+        if !f.contains(x, y) {
+            return None;
+        }
+        let (dw, dh) = self.design_nz();
+        let px = ((x - f.x as f64) * dw as f64 / f.w as f64).floor() as u32;
+        let py = ((y - f.y as f64) * dh as f64 / f.h as f64).floor() as u32;
+        Some((px.min(dw - 1), py.min(dh - 1)))
+    }
+}
+
 /// The Windows Glk window-shape mask (`WindowMask=<pict>`), SQ-1703 P4, as
 /// a coverage table. Windows Glulxe's `config.htm`: "If a particular pixel in
 /// the graphic is white then the window is transparent at that point, else it
@@ -274,6 +495,18 @@ impl GlkMask {
             y1 = y0 + 1;
         }
         (self.rect_sum(x0, y0, x1, y1), (x1 - x0) * (y1 - y0))
+    }
+
+    /// Whether mask pixel `(x, y)` is opaque (the window is drawn there);
+    /// outside the mask picture is not.
+    pub fn opaque(&self, x: u32, y: u32) -> bool {
+        x < self.width && y < self.height && self.rect_sum(x, y, x + 1, y + 1) == 1
+    }
+
+    /// The whole mask as an alpha image for a host that applies it per pixel:
+    /// 255 where [`Self::opaque`], 0 where transparent, at the mask's own size.
+    pub fn alpha_image(&self) -> image::GrayImage {
+        image::GrayImage::from_fn(self.width, self.height, |x, y| image::Luma([if self.opaque(x, y) { 255 } else { 0 }]))
     }
 
     /// Whether cell `(cx, cy)` is drawn: a cell with LESS than 50% of its area

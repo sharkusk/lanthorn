@@ -22,6 +22,44 @@ use crate::engine::{
 };
 use crate::state::StyleRun;
 
+// ── Aspect-fit letterbox (SQ-1707) ─────────────────────────────────────────────
+
+/// The `win` id of the filler buffers [`letterbox_wrap`] pads an aspect-fit
+/// design frame with. Never a real Glk window id; the renderer paints a buffer
+/// carrying it with the `glk_mask_outside` style and nothing else.
+pub const GLK_LETTERBOX_WIN: u32 = u32::MAX;
+
+/// Surround `inner` (the design frame, `frame` cells inside a `pane` of
+/// `(cols, rows)`) with letterbox filler buffers so the tree still covers the
+/// whole pane. A frame that IS the pane (stretch mode) is returned untouched.
+fn letterbox_wrap(inner: WinNode, frame: crate::glk_cfg::FitRect, pane: (u32, u32)) -> WinNode {
+    let filler = || WinNode::Buffer(BufferWindow { win: GLK_LETTERBOX_WIN, ..Default::default() });
+    let pair = |vertical: bool, fixed: u32, rest: u32, first: WinNode, second: WinNode| WinNode::Pair {
+        vertical,
+        split: Split { fixed: fixed as u16, fixed_px: None, rest: Some(rest as u16) },
+        border: false,
+        key_bg: None,
+        key_fg: None,
+        first: Box::new(first),
+        second: Box::new(second),
+    };
+    let (right, bottom) = (pane.0 - frame.x - frame.w, pane.1 - frame.y - frame.h);
+    let mut node = inner;
+    if right > 0 {
+        node = pair(false, frame.w, right, node, filler());
+    }
+    if frame.x > 0 {
+        node = pair(false, frame.x, frame.w + right, filler(), node);
+    }
+    if bottom > 0 {
+        node = pair(true, frame.h, bottom, node, filler());
+    }
+    if frame.y > 0 {
+        node = pair(true, frame.y, frame.h + bottom, filler(), node);
+    }
+    node
+}
+
 // ── Glk style → text-style bits ────────────────────────────────────────────────
 
 /// Map a Glk style class to the neutral text-style bitset used by the transcript
@@ -318,6 +356,10 @@ pub struct AppGlk {
     /// ([`crate::glk_cfg::glk_design_screen`]), so a pane resize or a cell-size
     /// change relayouts with no host hook to forget. `screen_override` wins.
     design: Option<(u32, u32)>,
+    /// How the design frame fills the pane (SQ-1707): stretch (the frame IS the
+    /// pane) or aspect (a centred, uniformly scaled frame snapped to whole
+    /// cells, letterboxed). Only read while `design` is set.
+    fit_mode: crate::glk_cfg::GlkFitMode,
     /// The `.cfg` window-shape mask while stretch mode is on (SQ-1703 P4); the
     /// same value the renderer reads off `AppState::glk_mask`. Presentation
     /// only: nothing the story is told depends on it.
@@ -547,6 +589,7 @@ impl AppGlk {
             char_px,
             screen_override: None,
             design: None,
+            fit_mode: crate::glk_cfg::GlkFitMode::default(),
             mask: None,
             picts,
             schannels: BTreeMap::new(),
@@ -569,6 +612,29 @@ impl AppGlk {
         self.design = design;
     }
 
+    /// Choose how the design frame fills the pane (SQ-1707). Takes effect at
+    /// the next relayout.
+    pub fn set_design_fit_mode(&mut self, mode: crate::glk_cfg::GlkFitMode) {
+        self.fit_mode = mode;
+    }
+
+    /// The fit mode in force.
+    pub fn design_fit_mode(&self) -> crate::glk_cfg::GlkFitMode {
+        self.fit_mode
+    }
+
+    /// The [`crate::glk_cfg::GlkFit`] for the pane right now (cells, at the
+    /// current `char_px`), or `None` when design mode is off or an explicit
+    /// screen override is in force.
+    pub fn design_fit(&self) -> Option<crate::glk_cfg::GlkFit> {
+        if self.screen_override.is_some() {
+            return None;
+        }
+        self.design.map(|d| {
+            crate::glk_cfg::GlkFit::cells(self.fit_mode, d, (self.cols, self.rows), self.char_px)
+        })
+    }
+
     /// Load the stretch-mode window mask from Blorb `Pict` `resnum` (SQ-1703
     /// P4; `None` clears it). Returns the mask for the host to carry. A Pict
     /// that is missing or will not decode leaves the window unmasked.
@@ -583,15 +649,7 @@ impl AppGlk {
     /// The design-pixel screen in force (an explicit override, else the
     /// stretch mode's), or `None` in cell mode.
     fn design_screen(&self) -> Option<gvm::glk::GlkScreen> {
-        self.screen_override.or_else(|| {
-            self.design.map(|d| {
-                crate::glk_cfg::glk_design_screen(
-                    d,
-                    (self.cols as f64 * self.char_px.0, self.rows as f64 * self.char_px.1),
-                    self.char_px,
-                )
-            })
-        })
+        self.screen_override.or_else(|| self.design_fit().map(|fit| fit.design_screen(self.char_px)))
     }
 
     /// The screen the layout is measured against right now.
@@ -1490,10 +1548,18 @@ impl AppGlk {
                     // Design mode: the tree is in design pixels; map it onto
                     // the pane's terminal cells (see `convert_design_tree`).
                     Some(screen) => {
-                        let cells = (self.cols, self.rows);
+                        let pane = (self.cols, self.rows);
+                        // Stretch: the frame IS the pane. Aspect: a centred
+                        // frame of whole cells, wrapped in letterbox fillers
+                        // so the tree still covers the pane (SQ-1707).
+                        let frame = self
+                            .design_fit()
+                            .map(|f| f.frame())
+                            .unwrap_or(crate::glk_cfg::FitRect { x: 0, y: 0, w: pane.0, h: pane.1 });
+                        let inner = self.convert_design_tree(tree, &screen, (frame.w, frame.h));
                         (
-                            self.convert_design_tree(tree, &screen, cells),
-                            (cells.0.min(u16::MAX as u32) as u16, cells.1.min(u16::MAX as u32) as u16),
+                            letterbox_wrap(inner, frame, pane),
+                            (pane.0.min(u16::MAX as u32) as u16, pane.1.min(u16::MAX as u32) as u16),
                         )
                     }
                     None => {

@@ -1027,6 +1027,45 @@ impl GlulxSession {
         self.refresh_screen();
     }
 
+    /// [`Self::set_glk_design`] and [`Self::set_glk_fit_mode`] in ONE relayout
+    /// (SQ-1707), so a boot or `@restart` into aspect mode shows the story a
+    /// single Arrange rather than a stretch one first.
+    pub fn set_glk_design_fit(&mut self, design: Option<(u32, u32)>, mode: crate::glk_cfg::GlkFitMode) {
+        if self.quit {
+            return;
+        }
+        self.appglk().set_design_fit_mode(mode);
+        self.set_glk_design(design);
+    }
+
+    /// Choose how the design frame fills the pane (SQ-1707): stretch or aspect.
+    /// Relayouts and redraws like [`Self::set_glk_design`]; a no-op once the
+    /// game has quit. Meaningless (stored, unread) while design mode is off.
+    pub fn set_glk_fit_mode(&mut self, mode: crate::glk_cfg::GlkFitMode) {
+        if self.quit {
+            return;
+        }
+        self.appglk().set_design_fit_mode(mode);
+        self.machine.rearrange();
+        self.settle_after_event();
+        self.refresh_screen();
+    }
+
+    /// The [`crate::glk_cfg::GlkFit`] for the current pane and cell size (in
+    /// cells), or `None` in cell mode. The frame, each window's rect and the
+    /// click inverse for the TUI's current layout.
+    pub fn glk_fit(&mut self) -> Option<crate::glk_cfg::GlkFit> {
+        self.appglk().design_fit()
+    }
+
+    /// The primary text-buffer window id — the story window whose text the app
+    /// mirrors into the transcript (the first text buffer opened, retargeted to
+    /// the window awaiting line input); `None` before one is open. The same id
+    /// the app's own renderer treats as primary.
+    pub fn primary_text_window(&mut self) -> Option<u32> {
+        self.appglk().primary()
+    }
+
     /// Load (or clear, `None`) the stretch-mode window mask from Blorb `Pict`
     /// `resnum` (SQ-1703 P4) and return it for the host to carry. Redraws.
     pub fn set_glk_mask(&mut self, resnum: Option<u32>) -> Option<std::sync::Arc<crate::glk_cfg::GlkMask>> {

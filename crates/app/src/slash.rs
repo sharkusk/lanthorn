@@ -119,6 +119,10 @@ pub enum SlashOutcome {
     /// in the per-game `config.toml` sidecar, never the global one. Handled in
     /// `slash_dispatch` (mutates `state.config.v6_render`).
     SetV6Render(V6RenderArg),
+    /// Switch how this game's design-size Glulx layout fills the pane (SQ-1707):
+    /// stretch or aspect. Applies live and is persisted in the per-game
+    /// `config.toml` sidecar, never the global one. Handled in `slash_dispatch`.
+    SetGlkFit(GlkFitArg),
     /// Set this game's v6 pixel-lock preference (SQ-0945). Applies live —
     /// `state.config.v6_pixel_lock` is read afresh every frame — and is persisted
     /// in the per-game `config.toml` sidecar, never the global one. Handled in
@@ -233,6 +237,20 @@ pub enum V6RenderArg {
     /// Step to the next mode (hybrid → raster → extended → hybrid).
     Cycle,
     /// Clear the per-game override: inherit the global `v6_render`.
+    Auto,
+}
+
+/// Argument for `set-glk-fit` (SQ-1707): an explicit mode, a bare TOGGLE
+/// between the two, and `Auto` — which clears this game's override so the
+/// global `glk_design_fit` decides again. The toggle never visits `auto`, for
+/// the reason [`V6RenderArg`] gives.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum GlkFitArg {
+    /// Use exactly this mode for this game.
+    Mode(crate::glk_cfg::GlkFitMode),
+    /// Flip stretch ↔ aspect.
+    Toggle,
+    /// Clear the per-game override: inherit the global `glk_design_fit`.
     Auto,
 }
 
@@ -603,6 +621,18 @@ pub static COMMANDS: &[CommandSpec] = &[
                 Some("extended")  => SlashOutcome::SetV6Render(V6RenderArg::Mode(V6RenderMode::Extended)),
                 Some("auto")      => SlashOutcome::SetV6Render(V6RenderArg::Auto),
                 Some(s) => err(format!("set-v6-render: unknown mode '{s}' (hybrid | raster | extended | auto, or bare to cycle)")),
+            }
+        } },
+    CommandSpec { name: "set-glk-fit", category: Category::Style, context: Context::Global,
+        usage: "set-glk-fit [stretch|aspect|auto]", description: "how a design-size Glulx game fills the pane — stretch fills it, aspect keeps the art's proportions with a letterbox; bare toggles, auto inherits the global setting; persisted per-game",
+        dispatch: |a| {
+            use crate::glk_cfg::GlkFitMode;
+            match a.first().copied() {
+                None => SlashOutcome::SetGlkFit(GlkFitArg::Toggle),
+                Some("stretch") => SlashOutcome::SetGlkFit(GlkFitArg::Mode(GlkFitMode::Stretch)),
+                Some("aspect")  => SlashOutcome::SetGlkFit(GlkFitArg::Mode(GlkFitMode::Aspect)),
+                Some("auto")    => SlashOutcome::SetGlkFit(GlkFitArg::Auto),
+                Some(s) => err(format!("set-glk-fit: unknown mode '{s}' (stretch | aspect | auto, or bare to toggle)")),
             }
         } },
     CommandSpec { name: "set-v6-pixel-lock", category: Category::Style, context: Context::Global,
@@ -1251,7 +1281,8 @@ mod tests {
         // SQ-1681 added `open-document`, `close-document`, `select-document` and
         // `scroll-document` for the Journal's Documents tab, and made
         // `create-documents-folder` a second command both worlds share.
-        assert_eq!(COMMANDS.len(), 100, "registry must match the spec's Full command table");
+        // SQ-1707 added `set-glk-fit`: stretch/aspect fit for design-size Glulx games.
+        assert_eq!(COMMANDS.len(), 101, "registry must match the spec's Full command table");
     }
 
     /// SQ-1237 unified the panel vocabulary — `command band` became `command

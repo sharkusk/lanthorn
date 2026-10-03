@@ -1553,6 +1553,10 @@ pub fn boot_story(req: BootRequest<'_>, hooks: &mut dyn BootHooks) -> Result<Boo
     state.glk_cell_px = glk_cell_px;
     // SQ-1703 P3: a story with a `.cfg` design size lays out at it and is
     // stretched over the pane, unless the per-game `glk_design = false`.
+    // `state.config` is only assigned below, and `apply_glk_design` resolves the
+    // global `glk_design` / `glk_design_fit` keys (SQ-1707) through it.
+    state.config.glk_design = cfg.glk_design;
+    state.config.glk_design_fit = cfg.glk_design_fit;
     crate::host::screen::apply_glk_design(&mut *session, &mut state, &game_dir);
     state.min_story_screen = min_story_screen;
     state.term_default_colors = term_default_colors;

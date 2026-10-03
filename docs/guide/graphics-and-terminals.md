@@ -225,6 +225,13 @@ frame, borders and artwork included, to fill your story pane, so the frame meets
 the text with no gaps; put `glk_design = false` in the story's `config.toml`
 sidecar to get the ordinary cell-sized layout back.
 
+If the stretch makes the art look too wide or too tall, `/set-glk-fit aspect`
+(or the render icon on the story pane's top border, which appears only for these
+games) keeps the frame's proportions instead: the largest whole-cell frame that
+fits, centred, with the spare area painted in the `glk_mask_outside` style.
+`/set-glk-fit` again switches back; the choice is remembered per game, and
+`glk_design_fit` in `config.toml` sets the default for every game.
+
 ## Going deeper
 
 - [v6 graphics](../internals/v6-graphics.md) — render modes, the pixel lock, and period fonts in full

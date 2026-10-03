@@ -838,6 +838,14 @@ pub(crate) fn dispatch_slash_outcome(
                 Err(e) => state.set_status(format!("set-v6-render failed: {e}")),
             }
         }
+        SlashOutcome::SetGlkFit(arg) => {
+            // SQ-1707: the whole effect lives in `host::screen` so a host that
+            // is not this binary runs the very same thing.
+            match app::host::screen::run_set_glk_fit(session, state, game_dir, arg) {
+                Ok(line) => state.push_transcript_internal(&line, TranscriptKind::Meta),
+                Err(e) => state.set_status(format!("[{e}]")),
+            }
+        }
         SlashOutcome::SetV6PixelLock(arg) => {
             // SQ-0945: the runtime switch for SQ-0936's magnification ladder.
             // Per-game, not global: the ladder's step is derived from the

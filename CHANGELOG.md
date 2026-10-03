@@ -39,7 +39,14 @@ while any such tag, or this Unreleased section, still exists.*
   with no gaps. Narcolepsy's thought-bubble shape and Photopia's rounded corners
   (the games' window masks) are honoured too: cells outside the shape are left
   blank (style it with `glk_mask_outside`). Put `glk_design = false` in the story's `config.toml` to keep the
-  old layout.
+  old layout (or in `config.toml` itself to turn it off for every game).
+- **Keep a designed frame's proportions with `/set-glk-fit aspect`.** For games with
+  a Windows Glk `.cfg` the frame stretches to fill the pane by default; `aspect`
+  instead fits the largest whole-cell frame at the design's proportions, centred,
+  with the spare area painted like outside the window mask. A bare `/set-glk-fit`
+  (or a click on the render icon on the story pane's top border, shown only for
+  these games) toggles; it is remembered per game, and `glk_design_fit` in
+  `config.toml` sets the default.
 - **Click a dotted "to/from" room on the map to jump there**: the map switches to
   that room's layer with the room selected.
 - **Hint files can live in the game's documents folder.** Drop an *InvisiClues* file

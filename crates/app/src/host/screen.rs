@@ -132,28 +132,123 @@ pub fn set_glk_design_screen(session: &mut dyn Engine, screen: Option<GlkScreen>
     }
 }
 
-/// Turn on STRETCH design mode for a Glulx story whose `.cfg` states a design
-/// size, unless the per-game `glk_design = false` switch is off (SQ-1703 P3):
-/// the story lays out at the design size and the whole frame is stretched over
-/// the pane. Sets `state.glk_stretch` for the renderer. Called at boot and
-/// again after `@restart` (a fresh session starts in cell mode); the pane
-/// resizing needs nothing further — see [`GlulxSession::set_glk_design`].
-/// Returns whether stretch mode is now on. A non-Glulx engine, a story with
-/// no design size, or a per-game `false` leaves (or returns) cell mode.
+/// Turn on design-size layout for a Glulx story whose `.cfg` states a design
+/// size (SQ-1703 P3, SQ-1707): the story lays out at the design size and the
+/// whole frame fills the pane — stretched, or fitted by aspect with a centred
+/// letterboxed frame, per [`resolve_glk_fit`]. Sets `state.glk_stretch` (design
+/// mode on) and `state.glk_fit` for the renderer and the border icon. Called at
+/// boot and again after `@restart` (a fresh session starts in cell mode); the
+/// pane resizing needs nothing further — see [`GlulxSession::set_glk_design`].
+/// Returns whether design mode is now on. A non-Glulx engine, a story with no
+/// design size, or `glk_design = false` (per-game, else the global key) leaves
+/// (or returns) cell mode.
 pub fn apply_glk_design(session: &mut dyn Engine, state: &mut AppState, game_dir: &std::path::Path) -> bool {
+    let pg = crate::styles::PerGameConfig::read(game_dir);
     let design = match state.glk_design.as_ref().and_then(|d| d.size()) {
-        Some(size) if crate::styles::read_per_game_glk_design(game_dir) != Some(false) => Some(size),
+        Some(size) if crate::glk_cfg::resolve_design_on(pg.glk_design, state.config.glk_design) => Some(size),
         _ => None,
     };
-    let on = design.is_some()
-        && session.as_any_mut().downcast_mut::<GlulxSession>().map(|gs| gs.set_glk_design(design)).is_some();
+    let fit = crate::glk_cfg::resolve_fit_mode(pg.glk_design_fit, state.config.glk_design_fit);
+    let on = match session.as_any_mut().downcast_mut::<GlulxSession>() {
+        Some(gs) if design.is_some() => {
+            gs.set_glk_design_fit(design, fit);
+            true
+        }
+        _ => false,
+    };
     state.glk_stretch = on;
-    // P4: the window mask rides with the design state, in stretch mode only.
+    state.glk_fit = fit;
+    // P4: the window mask rides with the design state, in design mode only.
     state.glk_mask = match (on, state.glk_design.as_ref().and_then(|d| d.mask_pict)) {
         (true, Some(pict)) => session.as_any_mut().downcast_mut::<GlulxSession>().and_then(|gs| gs.set_glk_mask(Some(pict))),
         _ => None,
     };
     on
+}
+
+/// The fit mode this game resolves to: the per-game sidecar's `glk_design_fit`
+/// over the global config's (SQ-1707).
+pub fn resolve_glk_fit(state: &AppState, game_dir: &std::path::Path) -> crate::glk_cfg::GlkFitMode {
+    crate::glk_cfg::resolve_fit_mode(crate::styles::read_per_game_glk_design_fit(game_dir), state.config.glk_design_fit)
+}
+
+/// Switch the live fit mode of a design-size Glulx story (SQ-1707): relayouts
+/// and redraws, and sets `state.glk_fit`. `false` (nothing changed) when the
+/// story is not in design mode (no `.cfg` design size, `glk_design` off, not
+/// Glulx). Persisting the choice per game is the caller's business
+/// ([`crate::styles::write_per_game_glk_design_fit`]).
+pub fn set_glk_fit(session: &mut dyn Engine, state: &mut AppState, mode: crate::glk_cfg::GlkFitMode) -> bool {
+    if !state.glk_stretch {
+        return false;
+    }
+    match session.as_any_mut().downcast_mut::<GlulxSession>() {
+        Some(gs) => {
+            gs.set_glk_fit_mode(mode);
+            state.glk_fit = mode;
+            true
+        }
+        None => false,
+    }
+}
+
+/// `/set-glk-fit`'s whole effect (SQ-1707), shared by the TUI and any host: pick
+/// the mode (`Toggle` flips the one in force, `Auto` clears this game's
+/// override and falls back to the global `glk_design_fit`), persist it in the
+/// per-game sidecar (`Auto` removes the key), and apply it live. `Ok` is the
+/// line to tell the player; `Err` is a refusal that changed nothing — the game
+/// has no design size, or design layout is off for it.
+pub fn run_set_glk_fit(
+    session: &mut dyn Engine,
+    state: &mut AppState,
+    game_dir: &std::path::Path,
+    arg: crate::slash::GlkFitArg,
+) -> Result<String, String> {
+    use crate::slash::GlkFitArg;
+    if state.glk_design.as_ref().and_then(|d| d.size()).is_none() {
+        return Err("this game has no design size".into());
+    }
+    if !state.glk_stretch {
+        return Err("design-size layout is off for this game (glk_design = false)".into());
+    }
+    let want = match arg {
+        GlkFitArg::Mode(m) => Some(m),
+        GlkFitArg::Toggle => Some(state.glk_fit.toggled()),
+        GlkFitArg::Auto => None,
+    };
+    crate::styles::write_per_game_glk_design_fit(game_dir, want).map_err(|e| format!("set-glk-fit failed: {e}"))?;
+    let live = want.unwrap_or(state.config.glk_design_fit);
+    if !set_glk_fit(session, state, live) {
+        return Err("this game has no design size".into());
+    }
+    Ok(format!(
+        "glk fit: {} (for this game — glk_design_fit = {})",
+        want.map_or("auto", |m| m.key()),
+        live.key()
+    ))
+}
+
+/// The [`crate::glk_cfg::GlkFit`] for a Glulx story in design mode — the frame
+/// size and offset, each window's rect and the click inverse for the pane as it
+/// is now, in cells (SQ-1707). `None` in cell mode or for another engine. A
+/// pixel host builds its own with [`crate::glk_cfg::GlkFit::pixels`] and
+/// [`glk_design_size`].
+pub fn glk_fit(session: &mut dyn Engine) -> Option<crate::glk_cfg::GlkFit> {
+    session.as_any_mut().downcast_mut::<GlulxSession>().and_then(|gs| gs.glk_fit())
+}
+
+/// The primary text-buffer window id of a Glulx story (SQ-1707), `None` for
+/// another engine or before a text buffer is open.
+pub fn glk_primary_text_window(session: &mut dyn Engine) -> Option<u32> {
+    session.as_any_mut().downcast_mut::<GlulxSession>().and_then(|gs| gs.primary_text_window())
+}
+
+/// The design size, in design pixels, a story's `.cfg` states, when design
+/// layout applies to this game (a `.cfg` with `WindowWidth` and `WindowHeight`
+/// was found and `glk_design` is on, per-game over global); the size a pixel
+/// host feeds [`crate::glk_cfg::GlkFit::pixels`].
+pub fn glk_design_size(state: &AppState, game_dir: &std::path::Path) -> Option<(u32, u32)> {
+    let on = crate::glk_cfg::resolve_design_on(crate::styles::read_per_game_glk_design(game_dir), state.config.glk_design);
+    state.glk_design.as_ref().and_then(|d| d.size()).filter(|_| on)
 }
 
 /// The Glk screen and the leaf windows' rects (in its layout units) for a

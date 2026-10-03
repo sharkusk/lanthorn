@@ -371,10 +371,13 @@ fn render_story_pane_frame(
     // the whole stretched frame, i.e. `inner` (the whole pane in Glulx).
     if let (true, Some(mask)) = (state.glk_stretch, state.glk_mask.as_ref()) {
         let outside = state.colors.theme.get("glk_mask_outside").style;
-        for y in 0..inner.height {
-            for x in 0..inner.width {
-                if !mask.cell_visible(x as u32, y as u32, inner.width as u32, inner.height as u32) {
-                    if let Some(c) = buf.cell_mut((inner.x + x, inner.y + y)) {
+        // SQ-1707: in aspect mode the mask is the FRAME's shape, so it spans
+        // the frame and not the letterboxed pane.
+        let frame = glk_frame_rect(&model.root, inner);
+        for y in 0..frame.height {
+            for x in 0..frame.width {
+                if !mask.cell_visible(x as u32, y as u32, frame.width as u32, frame.height as u32) {
+                    if let Some(c) = buf.cell_mut((frame.x + x, frame.y + y)) {
                         c.reset();
                         c.set_symbol(" ").set_style(outside);
                     }
@@ -413,6 +416,25 @@ fn render_story_pane_frame(
     m.links.extend(grid_links);
     m.win_rects.extend(win_rects);
     m
+}
+
+/// The design frame's rect inside `area` (SQ-1707): descends the letterbox
+/// pairs [`crate::glk_backend`] wraps an aspect-fit frame in (a `Pair` with a
+/// [`crate::glk_backend::GLK_LETTERBOX_WIN`] filler child), and is `area`
+/// itself for a stretch frame, which has none.
+fn glk_frame_rect(node: &WinNode, area: Rect) -> Rect {
+    let is_letterbox = |n: &WinNode| matches!(n, WinNode::Buffer(b) if b.win == crate::glk_backend::GLK_LETTERBOX_WIN);
+    match node {
+        WinNode::Pair { vertical, split, first, second, .. } if is_letterbox(first) || is_letterbox(second) => {
+            let (a1, _, a2) = split_area_bordered(area, *vertical, split.fixed, split.rest, 0);
+            if is_letterbox(first) {
+                glk_frame_rect(second, a2)
+            } else {
+                glk_frame_rect(first, a1)
+            }
+        }
+        _ => area,
+    }
 }
 
 /// The sub-rect of the story pane that gvm's window tree actually covers: the
@@ -807,6 +829,20 @@ fn render_node(
             // draw thinner (or not at all, SQ-0821).
             if g.win != 0 {
                 win_rects.push((g.win, WinKind::Grid, area));
+            }
+            None
+        }
+        // SQ-1707: the strip around an aspect-fit design frame is painted like
+        // the outside of the window mask, and holds nothing.
+        WinNode::Buffer(b) if b.win == crate::glk_backend::GLK_LETTERBOX_WIN => {
+            let outside = state.colors.theme.get("glk_mask_outside").style;
+            for y in area.y..area.y + area.height {
+                for x in area.x..area.x + area.width {
+                    if let Some(c) = buf.cell_mut((x, y)) {
+                        c.reset();
+                        c.set_symbol(" ").set_style(outside);
+                    }
+                }
             }
             None
         }

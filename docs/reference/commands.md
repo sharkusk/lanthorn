@@ -61,6 +61,7 @@ Every slash command, grouped the way `/help` groups them. Type any of these afte
 | Style | `print-colors [color]` | print the current color scheme (color = actual colors) |
 | Style | `set-game-colours on|off|auto` | force this game's own colours on/off (auto follows garglk.ini/global); persisted per-game |
 | Style | `set-v6-render [hybrid|raster|extended|auto]` | switch this game's v6 render mode — bare cycles hybrid → raster → extended, auto inherits the global setting; persisted per-game |
+| Style | `set-glk-fit [stretch|aspect|auto]` | how a design-size Glulx game fills the pane — stretch fills it, aspect keeps the art's proportions with a letterbox; bare toggles, auto inherits the global setting; persisted per-game |
 | Style | `set-v6-pixel-lock [on|off|auto]` | lock v6 art to a whole number of device pixels per art pixel — bare toggles, auto inherits the global setting; persisted per-game |
 | Style | `set-guidance [on|off|auto]` | Lanthorn's Guiding Light: help while you play, marked in the margin — bare toggles, auto inherits the global setting; persisted per-game |
 | Style | `set-return-probe [on|off|auto]` | after a move, look for the way back in a silent copy of the game and put it on the map — bare toggles, auto inherits the global setting; persisted per-game |

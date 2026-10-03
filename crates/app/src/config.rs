@@ -1306,6 +1306,14 @@ where
 /// the removed `"frameless"` (SQ-0895) and a plain typo alike — the trade is
 /// that `"rastr"` quietly renders hybrid rather than complaining, which is the
 /// behaviour every other token-valued key here already has.
+fn deserialize_glk_design_fit<'de, D>(d: D) -> Result<crate::glk_cfg::GlkFitMode, D::Error>
+where
+    D: Deserializer<'de>,
+{
+    let s = String::deserialize(d)?;
+    Ok(crate::glk_cfg::GlkFitMode::from_key(&s).unwrap_or_default())
+}
+
 fn deserialize_v6_render<'de, D>(d: D) -> Result<V6RenderMode, D::Error>
 where
     D: Deserializer<'de>,
@@ -1707,6 +1715,15 @@ pub struct Config {
     /// How the v6 graphical story pane is rendered. Default: Hybrid.
     #[serde(default, deserialize_with = "deserialize_v6_render")]
     pub v6_render: V6RenderMode,
+    /// Whether a Glulx story that ships a Windows Glk `.cfg` with a design size
+    /// lays out at that size (SQ-1703/SQ-1707). Default: true. A per-game
+    /// `glk_design` in the sidecar wins.
+    #[serde(default = "default_true")]
+    pub glk_design: bool,
+    /// How a design-size Glulx story fills the pane: `"stretch"` (default) or
+    /// `"aspect"` (SQ-1707). A per-game `glk_design_fit` in the sidecar wins.
+    #[serde(default, deserialize_with = "deserialize_glk_design_fit")]
+    pub glk_design_fit: crate::glk_cfg::GlkFitMode,
     /// Whether a kitty terminal may be handed artwork through POSIX shared
     /// memory rather than base64 on the wire (SQ-1374). Default: Auto.
     #[serde(default, deserialize_with = "deserialize_kitty_shared_memory")]
@@ -2394,6 +2411,8 @@ impl Default for Config {
             background_tidy: BackgroundTidy::EveryRoom,
             aux_storage: AuxStorage::Ask,
             v6_render: V6RenderMode::Hybrid,
+            glk_design: true,
+            glk_design_fit: crate::glk_cfg::GlkFitMode::Stretch,
             kitty_shared_memory: KittySharedMemory::Auto,
             fuse_art_dither: true,
             glk_pixel_scale: GlkPixelScale::Native,
@@ -2728,6 +2747,8 @@ fn resolve_config_layers(
             cfg.background_tidy = from_file.background_tidy;
             cfg.aux_storage = from_file.aux_storage;
             cfg.v6_render = from_file.v6_render;
+            cfg.glk_design = from_file.glk_design;
+            cfg.glk_design_fit = from_file.glk_design_fit;
             cfg.kitty_shared_memory = from_file.kitty_shared_memory;
             cfg.fuse_art_dither = from_file.fuse_art_dither;
             cfg.glk_pixel_scale = from_file.glk_pixel_scale;
@@ -3004,6 +3025,8 @@ pub fn write_config_at(config_path: &std::path::Path, cfg: &Config) -> std::io::
     };
     doc.put("aux_storage", aux_str.into(), cfg.aux_storage == def.aux_storage);
     doc.put("v6_render", v6_render_key(cfg.v6_render).into(), cfg.v6_render == def.v6_render);
+    doc.put("glk_design", cfg.glk_design.into(), cfg.glk_design == def.glk_design);
+    doc.put("glk_design_fit", cfg.glk_design_fit.key().into(), cfg.glk_design_fit == def.glk_design_fit);
     doc.put(
         "kitty_shared_memory",
         kitty_shared_memory_key(cfg.kitty_shared_memory).into(),
@@ -4281,6 +4304,8 @@ use_defaults = false
             background_tidy: BackgroundTidy::OnOverlap,
             aux_storage: AuxStorage::Ask,
             v6_render: V6RenderMode::Hybrid,
+            glk_design: true,
+            glk_design_fit: crate::glk_cfg::GlkFitMode::Stretch,
             kitty_shared_memory: KittySharedMemory::Auto,
             fuse_art_dither: false,
             glk_pixel_scale: GlkPixelScale::Native,
