@@ -228,6 +228,17 @@ pub enum DocKind {
 }
 
 impl DocKind {
+    /// The short label the Documents tab (and any host listing) shows for this kind.
+    pub fn label(&self) -> &'static str {
+        match self {
+            DocKind::Pdf => "PDF",
+            DocKind::Image => "image",
+            DocKind::Text => "text",
+            DocKind::HintProgram => "hint program \u{2014} opens in Hints tab",
+            DocKind::Other => "file",
+        }
+    }
+
     pub fn of(name: &str) -> DocKind {
         let ext = Path::new(name).extension().and_then(|e| e.to_str()).unwrap_or("").to_ascii_lowercase();
         match ext.as_str() {

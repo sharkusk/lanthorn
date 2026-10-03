@@ -337,16 +337,6 @@ pub fn is_spoiler(entry: &DocEntry) -> bool {
     entry.spoiler
 }
 
-fn kind_label(k: DocKind) -> &'static str {
-    match k {
-        DocKind::Pdf => "PDF",
-        DocKind::Image => "image",
-        DocKind::Text => "text",
-        DocKind::HintProgram => "hint program \u{2014} opens in Hints tab",
-        DocKind::Other => "file",
-    }
-}
-
 fn read_capped(path: &Path, cap: u64) -> std::io::Result<(Vec<u8>, bool)> {
     use std::io::Read;
     let mut buf = Vec::new();
@@ -852,7 +842,7 @@ fn finish_list(tab: &DocumentsTab, st: &Styles, area: Rect, buf: &mut Buffer, hi
         let base = if on { st.selected } else { st.row };
         fill(buf, row, base);
         let spoiler = is_spoiler(e);
-        let meta = format!("{:<5} {:>7}", kind_label(e.kind), crate::ifdb_documents::format_size(e.size));
+        let meta = format!("{:<5} {:>7}", e.kind.label(), crate::ifdb_documents::format_size(e.size));
         let flag = if spoiler { " spoiler" } else { "" };
         let right_w = crate::textwidth::str_cells(&meta) + flag.len() + 1;
         let name_w = (area.width as usize).saturating_sub(right_w + 2);
