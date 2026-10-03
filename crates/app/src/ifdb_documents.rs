@@ -594,6 +594,42 @@ pub fn save_document(dir: &Path, name: &str, bytes: &[u8], meta: Option<DocMeta>
     result
 }
 
+// ── What is already saved ────────────────────────────────────────────────────
+
+/// Whether a row of the documents chooser is already in the game's folder, for a
+/// host to say so before downloading (SQ-1699).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum SavedState {
+    /// Nothing in the folder came from this link or entry (or it was deleted).
+    NotSaved,
+    /// The folder holds the file, at the size it was saved with (or the index
+    /// recorded no size, an entry from before sizes were kept).
+    Saved,
+    /// The folder holds the file but its size is no longer the recorded one: it
+    /// was edited or replaced, so downloading again is a real choice.
+    Changed,
+}
+
+/// The state of the link at `url` (`zip_entry` `None`) or of the entry
+/// `zip_entry` (its [`ZipEntry::path`]) of the zip at `url`, against `docs`, the
+/// folder's [`crate::documents::list`]. No network and no disk: the index's
+/// `source_url` / `zip_entry` say where a file came from, `docs` says it is still
+/// there and how big it is. Any file that is [`Saved`](SavedState::Saved) makes
+/// the answer `Saved`; failing that, any `Changed` one makes it `Changed`.
+pub fn saved_state(docs: &[crate::documents::DocEntry], url: &str, zip_entry: Option<&str>) -> SavedState {
+    let mut state = SavedState::NotSaved;
+    for d in docs {
+        if d.source_url.as_deref() != Some(url) || d.zip_entry.as_deref() != zip_entry {
+            continue;
+        }
+        match d.recorded_size {
+            Some(r) if r != d.size => state = SavedState::Changed,
+            _ => return SavedState::Saved,
+        }
+    }
+    state
+}
+
 // ── The worker ───────────────────────────────────────────────────────────────
 
 /// A row of the chooser: link `i`, or entry `j` of link `i`'s zip.
@@ -614,12 +650,15 @@ pub struct LinkInfo {
     pub title: Option<String>,
     pub desc: Option<String>,
     pub spoiler: bool,
+    /// For a zip entry saved on its own: its path inside the zip (what
+    /// [`saved_state`] matches on). `None` for a whole link.
+    pub entry: Option<String>,
 }
 
 impl LinkInfo {
     /// A top-level link's own title, description and spoiler flag.
     pub fn of_link(o: &DocumentOption) -> LinkInfo {
-        LinkInfo { title: o.title.clone(), desc: o.desc.clone(), spoiler: o.spoiler }
+        LinkInfo { title: o.title.clone(), desc: o.desc.clone(), spoiler: o.spoiler, entry: None }
     }
 
     /// A zip entry's: its own name, the zip link's description with
@@ -630,7 +669,7 @@ impl LinkInfo {
             Some(d) => format!("{d} {from}"),
             None => from,
         };
-        LinkInfo { title: Some(entry.name.clone()), desc: Some(desc), spoiler: entry.spoiler }
+        LinkInfo { title: Some(entry.name.clone()), desc: Some(desc), spoiler: entry.spoiler, entry: Some(entry.path.clone()) }
     }
 }
 
@@ -646,6 +685,9 @@ pub enum DocJob {
     /// A text preview of row `key`: the file at `url`, or entry `entry` (an index
     /// from [`ZipEntry::index`]) of the zip at `url`.
     Preview { key: RowKey, url: String, entry: Option<usize> },
+    /// List the game's documents folder (nothing is created), for the chooser's
+    /// "In your documents" marks.
+    Scan { tuid: String, title: String },
     /// Save `items` into the game's documents folder, making it if need be.
     Download { tuid: String, title: String, items: Vec<DownloadItem> },
 }
@@ -658,6 +700,8 @@ pub enum DocEvent {
     Listed { link: usize, result: Result<ZipListing, String> },
     Previewed { key: RowKey, result: Result<String, String> },
     Progress { done: usize, total: usize, name: String },
+    /// What the documents folder holds now, answering [`DocJob::Scan`].
+    Scanned(Vec<crate::documents::DocEntry>),
     Finished {
         dir: Option<std::path::PathBuf>,
         saved: Vec<String>,
@@ -710,6 +754,12 @@ fn run_job_capped(
             let result = fetch_preview(source, &url, entry).map_err(|e| e.to_string());
             send(DocEvent::Previewed { key, result })
         }
+        DocJob::Scan { tuid, title } => {
+            let docs = crate::documents::documents_dir(roots, &tuid, &title)
+                .and_then(|d| crate::documents::list(&d).ok())
+                .unwrap_or_default();
+            send(DocEvent::Scanned(docs))
+        }
         DocJob::Download { tuid, title, items } => {
             let dir = match crate::documents::ensure_documents_dir(roots, &tuid, &title) {
                 Ok(d) => d,
@@ -747,12 +797,13 @@ fn run_job_capped(
                     }
                 };
                 match got.and_then(|(name, bytes)| {
-                    let meta = DocMeta::now(
+                    let mut meta = DocMeta::now(
                         info.title.clone(),
                         info.desc.clone(),
                         Some(source_url.clone()),
                         info.spoiler,
                     );
+                    meta.zip_entry = info.entry.clone();
                     save_document(&dir, &name, &bytes, Some(meta)).map_err(|e| SearchError::Io(e.to_string()))
                 }) {
                     Ok(Imported::Added(d)) => saved.push(d.id),
@@ -1154,12 +1205,12 @@ pub(crate) mod tests {
             DownloadItem::File {
                 url: "https://x/manual.pdf".into(),
                 filename: "manual.pdf".into(),
-                info: LinkInfo { title: Some("Manual".into()), desc: Some("The printed manual".into()), spoiler: false },
+                info: LinkInfo { title: Some("Manual".into()), desc: Some("The printed manual".into()), spoiler: false, entry: None },
             },
             DownloadItem::Entry {
                 zip_url: URL.into(),
                 index: 3,
-                info: LinkInfo { title: Some("ZorkI.txt".into()), desc: Some("Sols (from Setup.zip)".into()), spoiler: true },
+                info: LinkInfo { title: Some("ZorkI.txt".into()), desc: Some("Sols (from Setup.zip)".into()), spoiler: true, entry: Some("Sols/ZorkI.txt".into()) },
             },
         ];
         let (dir, _, failed) =
@@ -1171,6 +1222,79 @@ pub(crate) mod tests {
         assert_eq!(m.subtitle().as_deref(), Some("Manual \u{2014} The printed manual"));
         let z = listed.iter().find(|e| e.id == "ZorkI.txt").unwrap();
         assert_eq!((z.desc.as_deref(), z.source_url.as_deref(), z.spoiler), (Some("Sols (from Setup.zip)"), Some(URL), true));
+        // The size on disk is recorded for a link and for a zip entry, and the
+        // entry remembers where in the zip it came from (SQ-1699).
+        assert_eq!((m.recorded_size, m.zip_entry.as_deref()), (Some(14), None));
+        assert_eq!((z.recorded_size, z.zip_entry.as_deref()), (Some(11), Some("Sols/ZorkI.txt")));
+        let _ = std::fs::remove_dir_all(home);
+    }
+
+    /// Save a manual (a whole link) and one zip entry through the real worker,
+    /// and return the home, the folder and its listing.
+    fn saved_folder(tag: &str) -> (PathBuf, PathBuf, Vec<crate::documents::DocEntry>) {
+        let (home, roots) = roots(tag);
+        let zip = big_zip(3, 2000, &[("Sols/ZorkI.txt", b"walkthrough")]);
+        let host = Host::new(true).with("https://x/manual.pdf", b"%PDF-1.4 hello".to_vec()).with(URL, zip);
+        let items = vec![
+            DownloadItem::File { url: "https://x/manual.pdf".into(), filename: "manual.pdf".into(), info: LinkInfo::default() },
+            DownloadItem::Entry {
+                zip_url: URL.into(),
+                index: 3,
+                info: LinkInfo { entry: Some("Sols/ZorkI.txt".into()), ..LinkInfo::default() },
+            },
+        ];
+        let (dir, _, failed) =
+            finished(run(&host, &roots, DocJob::Download { tuid: "abc123".into(), title: "Zork I".into(), items }, MAX_DOWNLOAD));
+        assert!(failed.is_empty(), "{failed:?}");
+        let dir = dir.unwrap();
+        let listed = crate::documents::list(&dir).unwrap();
+        (home, dir, listed)
+    }
+
+    #[test]
+    fn saved_state_tells_saved_changed_and_not_saved_for_links_and_zip_entries() {
+        let (home, dir, listed) = saved_folder("docs-saved-state");
+        let pdf = "https://x/manual.pdf";
+        assert_eq!(saved_state(&listed, pdf, None), SavedState::Saved);
+        assert_eq!(saved_state(&listed, URL, Some("Sols/ZorkI.txt")), SavedState::Saved);
+        // The entry came out of the zip: that is not the whole zip being saved,
+        // and a different entry of it is not saved either.
+        assert_eq!(saved_state(&listed, URL, None), SavedState::NotSaved);
+        assert_eq!(saved_state(&listed, URL, Some("Sols/Other.txt")), SavedState::NotSaved);
+        assert_eq!(saved_state(&listed, "https://x/other.pdf", None), SavedState::NotSaved);
+
+        // Edited on disk: still there, a different size.
+        std::fs::write(dir.join("manual.pdf"), b"%PDF-1.4 hello, edited").unwrap();
+        std::fs::write(dir.join("ZorkI.txt"), b"x").unwrap();
+        let listed = crate::documents::list(&dir).unwrap();
+        assert_eq!(saved_state(&listed, pdf, None), SavedState::Changed);
+        assert_eq!(saved_state(&listed, URL, Some("Sols/ZorkI.txt")), SavedState::Changed);
+
+        // Deleted: not saved, however the index remembers it.
+        std::fs::remove_file(dir.join("manual.pdf")).unwrap();
+        let listed = crate::documents::list(&dir).unwrap();
+        assert_eq!(saved_state(&listed, pdf, None), SavedState::NotSaved);
+        let _ = std::fs::remove_dir_all(home);
+    }
+
+    #[test]
+    fn an_entry_without_a_recorded_size_counts_as_saved_while_the_file_is_there() {
+        let (home, dir, _) = saved_folder("docs-saved-legacy");
+        // An index from before sizes were kept: drop every `size`.
+        let idx = dir.join(".documents.json");
+        let mut v: serde_json::Value = serde_json::from_slice(&std::fs::read(&idx).unwrap()).unwrap();
+        for e in v.as_object_mut().unwrap().values_mut() {
+            e.as_object_mut().unwrap().remove("size");
+        }
+        std::fs::write(&idx, serde_json::to_vec(&v).unwrap()).unwrap();
+        std::fs::write(dir.join("manual.pdf"), b"changed since, but nobody wrote the size down").unwrap();
+        let listed = crate::documents::list(&dir).unwrap();
+        assert!(listed.iter().all(|d| d.recorded_size.is_none()));
+        assert_eq!(saved_state(&listed, "https://x/manual.pdf", None), SavedState::Saved);
+        assert_eq!(saved_state(&listed, URL, Some("Sols/ZorkI.txt")), SavedState::Saved);
+        std::fs::remove_file(dir.join("manual.pdf")).unwrap();
+        let listed = crate::documents::list(&dir).unwrap();
+        assert_eq!(saved_state(&listed, "https://x/manual.pdf", None), SavedState::NotSaved, "deleted");
         let _ = std::fs::remove_dir_all(home);
     }
 
@@ -1187,7 +1311,7 @@ pub(crate) mod tests {
         };
         let entry = ZipEntry { index: 0, path: "a/b.txt".into(), name: "b.txt".into(), size: 1, spoiler: true };
         let info = LinkInfo::of_entry(&zip, &entry);
-        assert_eq!(info, LinkInfo { title: Some("b.txt".into()), desc: Some("Solutions (from Setup.zip)".into()), spoiler: true });
+        assert_eq!(info, LinkInfo { title: Some("b.txt".into()), desc: Some("Solutions (from Setup.zip)".into()), spoiler: true, entry: Some("a/b.txt".into()) });
     }
 
     #[test]

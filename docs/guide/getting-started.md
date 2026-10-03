@@ -93,6 +93,10 @@ game, `/download-documents` does the same.) Move with the arrow keys, press
 documents folder, which is made if it is not there yet. With nothing marked,
 `Enter` saves the row you are on.
 
+- **Files you already have are marked.** A row whose file is already in the
+  folder says *In your documents*, its tick is greyed, and it is never fetched
+  twice; if you have since changed the file, the row says *different size* and you
+  can still take a fresh copy.
 - **Spoilers are tagged.** A link from IFDB's solutions or hints directories is
   marked *spoiler* in the list, so you do not open a walkthrough by accident.
 - **Zips open without being downloaded.** Press `→` on a zip to see its contents:

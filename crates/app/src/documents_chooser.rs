@@ -25,10 +25,11 @@ use ratatui::layout::{Position, Rect};
 
 use crate::colors::ColorScheme;
 use crate::config::AnimationConfig;
+use crate::documents::DocEntry;
 use crate::data_roots::DataRoots;
 use crate::ifdb_documents::{
     format_size, is_previewable, matches_title, DocEvent, DocJob, DocumentOption, DocumentWorker, DownloadItem,
-    LinkInfo, LinkKind, RowKey, ZipEntry, ZipListing,
+    saved_state, LinkInfo, LinkKind, RowKey, SavedState, ZipEntry, ZipListing,
 };
 use crate::ifdb_search::{IfdbGate, SearchSource};
 use crate::ifdb_search_modal::{clip_with_ellipsis, put_str, row_glyph, window_start, ROW_MARGIN};
@@ -100,6 +101,9 @@ pub struct DocumentsChooser {
     /// of its own (the running game's mouse path).
     last_rects: RefCell<Option<DialogRects>>,
     checked: BTreeSet<RowKey>,
+    /// What the game's documents folder held at the last scan (SQ-1699), for the
+    /// "In your documents" marks.
+    docs: Vec<DocEntry>,
     previews: HashMap<RowKey, Preview>,
     focus: Focus,
     /// A line under the list: what happened, and whether it was a failure.
@@ -122,6 +126,7 @@ impl DocumentsChooser {
             list_rows: Cell::new(1),
             last_rects: RefCell::new(None),
             checked: BTreeSet::new(),
+            docs: Vec::new(),
             previews: HashMap::new(),
             focus: Focus::List,
             status: None,
@@ -186,6 +191,18 @@ impl DocumentsChooser {
         match (key, self.links.get(key.0).map(|l| &l.zip)) {
             ((_, Some(j)), Some(ZipState::Listed(entries))) => entries.get(j),
             _ => None,
+        }
+    }
+
+    /// Whether the row's file is already in the documents folder.
+    fn saved(&self, key: RowKey) -> SavedState {
+        let Some(l) = self.links.get(key.0) else { return SavedState::NotSaved };
+        match key.1 {
+            None => saved_state(&self.docs, &l.opt.url, None),
+            Some(_) => match self.entry(key) {
+                Some(e) => saved_state(&self.docs, &l.opt.url, Some(&e.path)),
+                None => SavedState::NotSaved,
+            },
         }
     }
 
@@ -288,6 +305,10 @@ impl DocumentsChooser {
 
     fn toggle_mark(&mut self) {
         if let Some(key) = self.selected_key() {
+            if self.saved(key) == SavedState::Saved {
+                self.status = Some(("Already in your documents".to_string(), false));
+                return;
+            }
             if !self.checked.remove(&key) {
                 self.checked.insert(key);
             }
@@ -358,6 +379,9 @@ impl DocumentsChooser {
         let items: Vec<DownloadItem> = keys
             .iter()
             .filter_map(|&key| {
+                if self.saved(key) == SavedState::Saved {
+                    return None;
+                }
                 let l = self.links.get(key.0)?;
                 Some(match key.1 {
                     None => DownloadItem::File {
@@ -377,6 +401,9 @@ impl DocumentsChooser {
             })
             .collect();
         if items.is_empty() {
+            if !keys.is_empty() {
+                self.status = Some(("Already in your documents".to_string(), false));
+            }
             return;
         }
         self.phase = Phase::Downloading { done: 0, total: items.len() };
@@ -410,6 +437,7 @@ impl DocumentsChooser {
                     .collect();
                 self.scroll = ListScroll::new();
                 self.scroll.len(self.links.len());
+                self.queue.push_back(DocJob::Scan { tuid: self.tuid.clone(), title: self.title.clone() });
                 if self.links.is_empty() {
                     self.status = Some(("IFDB lists no manuals, maps or other documents for this game".to_string(), false));
                 }
@@ -447,6 +475,15 @@ impl DocumentsChooser {
                     },
                 );
             }
+            DocEvent::Scanned(docs) => {
+                self.docs = docs.clone();
+                let keys: Vec<RowKey> = self.checked.iter().copied().collect();
+                for key in keys {
+                    if self.saved(key) == SavedState::Saved {
+                        self.checked.remove(&key);
+                    }
+                }
+            }
             DocEvent::Progress { done, total, .. } => self.phase = Phase::Downloading { done: *done, total: *total },
             DocEvent::Finished { dir, saved, already, failed } => {
                 self.phase = Phase::Ready;
@@ -474,6 +511,8 @@ impl DocumentsChooser {
                     line.push_str(&format!("{} failed ({what}: {why})", failed.len()));
                 }
                 self.status = Some((line, !failed.is_empty()));
+                // The folder changed: refresh which rows are saved.
+                self.queue.push_back(DocJob::Scan { tuid: self.tuid.clone(), title: self.title.clone() });
             }
         }
         self.want_probe();
@@ -491,12 +530,17 @@ impl DocumentsChooser {
                     (LinkKind::Archive, false) => "▸ ",
                     _ => "  ",
                 };
-                let tail = match l.size {
+                let mut tail = match l.size {
                     Some(s) => format!("{} · {}", l.opt.kind.label(), format_size(s)),
                     None => l.opt.kind.label().to_string(),
                 };
+                let saved = self.saved(key);
+                if let Some(note) = saved_note(saved) {
+                    tail = format!("{tail} · {note}");
+                }
                 RowView {
                     checked,
+                    saved,
                     indent: 0,
                     marker,
                     name: l.opt.filename.clone(),
@@ -508,11 +552,17 @@ impl DocumentsChooser {
             Some(_) => {
                 let e = self.entry(key);
                 let name = e.map(|e| e.name.clone()).unwrap_or_default();
+                let saved = self.saved(key);
+                let mut tail = e.map(|e| format_size(e.size)).unwrap_or_default();
+                if let Some(note) = saved_note(saved) {
+                    tail = format!("{tail} · {note}");
+                }
                 RowView {
                     checked,
+                    saved,
                     indent: 4,
                     marker: "",
-                    tail: e.map(|e| format_size(e.size)).unwrap_or_default(),
+                    tail,
                     spoiler: e.is_some_and(|e| e.spoiler),
                     title_match: matches_title(&name, &self.title),
                     name,
@@ -564,8 +614,18 @@ impl DocumentsChooser {
     }
 }
 
+/// What a row says about a file the folder already holds.
+fn saved_note(s: SavedState) -> Option<&'static str> {
+    match s {
+        SavedState::NotSaved => None,
+        SavedState::Saved => Some("In your documents"),
+        SavedState::Changed => Some("In your documents — different size"),
+    }
+}
+
 struct RowView {
     checked: bool,
+    saved: SavedState,
     indent: usize,
     marker: &'static str,
     name: String,
@@ -625,6 +685,9 @@ pub fn draw_documents(ch: &DocumentsChooser, area: Rect, cs: &ColorScheme, buf: 
     let attrib = cs.theme.get("ifdb_attribution").style;
     let alert = cs.theme.get("alert").style;
     let check_on = row_glyph(cs, "documents_checked", "✓");
+    // A file already saved: the IFDB modal's "I have this one" style and glyph.
+    let present_style = cs.theme.get("ifdb_download_present").style;
+    let check_present = row_glyph(cs, "ifdb_download_present", "✓");
 
     let hint = if ch.focus == Focus::List {
         "↑/↓ move · Space mark · → open zip · p preview · Enter download · Esc close"
@@ -666,10 +729,33 @@ pub fn draw_documents(ch: &DocumentsChooser, area: Rect, cs: &ColorScheme, buf: 
             put_str(buf, x_end, y, tag_w, SPOILER_TAG, if selected { base } else { spoiler_style });
         }
         let tail_x = x_end.saturating_sub(tail_w + 1);
-        put_str(buf, tail_x, y, tail_w + 1, &format!(" {}", v.tail), if selected { base } else { meta });
+        let saved = v.saved == SavedState::Saved;
+        let tail_style = if selected {
+            base
+        } else if v.saved != SavedState::NotSaved {
+            present_style
+        } else {
+            meta
+        };
+        put_str(buf, tail_x, y, tail_w + 1, &format!(" {}", v.tail), tail_style);
         // Left: mark, indent, zip marker, name.
-        let mark = if v.checked { format!("[{check_on}]") } else { "[ ]".to_string() };
-        put_str(buf, c.x, y, 3, &mark, if selected { base } else if v.checked { checked_style } else { base });
+        let mark = if saved {
+            format!("[{check_present}]")
+        } else if v.checked {
+            format!("[{check_on}]")
+        } else {
+            "[ ]".to_string()
+        };
+        let mark_style = if selected {
+            base
+        } else if saved {
+            present_style
+        } else if v.checked {
+            checked_style
+        } else {
+            base
+        };
+        put_str(buf, c.x, y, 3, &mark, mark_style);
         let name_x = c.x + 4 + v.indent as u16;
         let name_w = tail_x.saturating_sub(name_x + 1);
         let name_style = if selected { base } else if v.title_match { match_style } else { base };
@@ -923,7 +1009,9 @@ mod tests {
         assert_eq!(files_in(&roots.documents().join("Zork I [abc123]")), ["zork1.txt"]);
         press(&mut s, &[Enter]);
         let (status, failure) = s.chooser.status.clone().expect("a result line");
-        assert!(!failure && status == "Already in your documents: zork1.txt", "{status}");
+        // The row is marked saved by now, so the second Enter does not even ask.
+        assert!(!failure && status == "Already in your documents", "{status}");
+        assert!(!s.chooser.busy(), "nothing was queued to download");
         assert_eq!(files_in(&roots.documents().join("Zork I [abc123]")), ["zork1.txt"], "no copy");
         let _ = std::fs::remove_dir_all(home);
     }
@@ -992,6 +1080,8 @@ mod tests {
         assert!(matches!(ch.next_job(), Some(DocJob::Resolve { .. })));
         assert!(ch.next_job().is_none(), "the first has not come back");
         ch.on_event(&DocEvent::Resolved(Ok(parse_document_options(ZORK))));
+        assert!(matches!(ch.next_job(), Some(DocJob::Scan { .. })), "the folder is scanned for what is saved");
+        ch.on_event(&DocEvent::Scanned(Vec::new()));
         let probe = ch.next_job();
         assert!(matches!(probe, Some(DocJob::Probe { link: 0, .. })), "{probe:?}");
         ch.on_key(Down, &anim());
@@ -999,6 +1089,70 @@ mod tests {
         assert!(ch.next_job().is_none(), "moving queues probes but starts none while one runs");
         ch.on_event(&DocEvent::Probed { link: 0, size: Some(5), ranges: true });
         assert!(matches!(ch.next_job(), Some(DocJob::Probe { link: 1, .. })));
+    }
+
+    /// Save `zork1.txt` (link 9) and the zip entry `Sols/ZorkI.txt` (row 4/3)
+    /// through the chooser, leaving the cursor on `zork1.txt`.
+    fn open_with_saved(h: &Arc<Host>, tag: &str) -> (DocumentsSession, PathBuf, DataRoots) {
+        let (mut s, home, roots) = open(h, tag);
+        settle(&mut s);
+        press(&mut s, &[Down, Down, Down, Down, Right, Down, Down, Down, Down, Char(' ')]);
+        press(&mut s, &[Down, Down, Down, Down, Down, Char(' ')]);
+        assert_eq!(s.chooser.saved((9, None)), SavedState::NotSaved, "nothing is saved yet");
+        assert!(!screen(&s.chooser, 100, 40).contains("In your documents"));
+        press(&mut s, &[Enter]);
+        assert_eq!(files_in(&roots.documents().join("Zork I [abc123]")), ["ZorkI.txt", "zork1.txt"]);
+        (s, home, roots)
+    }
+
+    #[test]
+    fn saved_rows_say_so_cannot_be_ticked_and_are_not_downloaded_again() {
+        let h = host(true);
+        let (mut s, home, _) = open_with_saved(&h, "chooser-saved");
+        let ch = &mut s.chooser;
+        // The marks were refreshed when the batch finished, with no further key.
+        assert_eq!(ch.saved((4, Some(3))), SavedState::Saved);
+        assert_eq!(ch.saved((9, None)), SavedState::Saved);
+        assert_eq!(ch.saved((4, None)), SavedState::NotSaved, "the zip itself was not saved, one entry was");
+        let shown = screen(ch, 100, 40);
+        assert_eq!(shown.matches("In your documents").count(), 2, "{shown}");
+        assert!(ch.checked.is_empty(), "a saved row is not left ticked");
+
+        // Space on the saved row ticks nothing.
+        assert_eq!(ch.selected_key(), Some((9, None)));
+        ch.on_key(Char(' '), &anim());
+        assert!(ch.checked.is_empty(), "a saved row cannot be ticked");
+
+        // Even forced into the set, it is left out of the download.
+        ch.checked.insert((9, None));
+        ch.start_download();
+        assert!(ch.queue.iter().all(|j| !matches!(j, DocJob::Download { .. })), "{:?}", ch.queue);
+        assert_eq!(ch.phase, Phase::Ready);
+
+        // And Enter on it with nothing ticked downloads nothing either.
+        ch.checked.clear();
+        ch.on_key(Enter, &anim());
+        assert!(ch.queue.iter().all(|j| !matches!(j, DocJob::Download { .. })), "{:?}", ch.queue);
+        let _ = std::fs::remove_dir_all(home);
+    }
+
+    #[test]
+    fn a_changed_row_stays_tickable_and_says_the_size_differs() {
+        let h = host(true);
+        let (mut s, home, roots) = open_with_saved(&h, "chooser-changed");
+        let path = roots.documents().join("Zork I [abc123]").join("zork1.txt");
+        std::fs::write(&path, b"edited by hand, so another size").unwrap();
+        // The next batch to finish rescans the folder.
+        s.chooser.on_event(&DocEvent::Finished { dir: None, saved: vec![], already: vec![], failed: vec![] });
+        settle(&mut s);
+        assert_eq!(s.chooser.saved((9, None)), SavedState::Changed);
+        let shown = screen(&s.chooser, 100, 40);
+        assert!(shown.contains("In your documents \u{2014} different size"), "{shown}");
+        press(&mut s, &[Char(' ')]);
+        assert!(s.chooser.checked.contains(&(9, None)), "a changed row can be ticked");
+        // The entry beside it is untouched and still saved.
+        assert_eq!(s.chooser.saved((4, Some(3))), SavedState::Saved);
+        let _ = std::fs::remove_dir_all(home);
     }
 
     #[test]

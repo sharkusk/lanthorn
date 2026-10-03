@@ -342,6 +342,13 @@ pub struct DocEntry {
     /// IFDB's description for the link (or the zip it came out of), from the index.
     pub desc: Option<String>,
     pub source_url: Option<String>,
+    /// The entry's path inside the zip at `source_url`, when this file was saved
+    /// out of a zip on its own (SQ-1699); `None` for a whole link.
+    pub zip_entry: Option<String>,
+    /// The byte length the index recorded when the file was saved (SQ-1699);
+    /// `None` for an entry written before sizes were recorded. [`size`](Self::size)
+    /// is what is on disk now.
+    pub recorded_size: Option<u64>,
     /// The index says so, or the file name reads as a walkthrough/hint/solution.
     pub spoiler: bool,
 }
@@ -364,9 +371,17 @@ pub struct DocMeta {
     pub desc: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub source_url: Option<String>,
+    /// The entry's path inside the zip at `source_url`, for a file saved out of a
+    /// zip on its own (SQ-1699). Set by the downloader; `None` for a whole link.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub zip_entry: Option<String>,
     pub spoiler: bool,
     /// Seconds since the Unix epoch.
     pub downloaded_at: u64,
+    /// Byte length of the file as saved (SQ-1699), written by [`import_with`].
+    /// Absent in an index written before it existed.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub size: Option<u64>,
 }
 
 impl DocMeta {
@@ -374,7 +389,7 @@ impl DocMeta {
     pub fn now(title: Option<String>, desc: Option<String>, source_url: Option<String>, spoiler: bool) -> DocMeta {
         let downloaded_at =
             std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map_or(0, |d| d.as_secs());
-        DocMeta { title, desc, source_url, spoiler, downloaded_at }
+        DocMeta { title, desc, source_url, zip_entry: None, spoiler, downloaded_at, size: None }
     }
 }
 
@@ -423,6 +438,8 @@ fn entry_for(path: PathBuf, size: u64, meta: Option<&DocMeta>) -> Option<DocEntr
         title: meta.and_then(|m| m.title.clone()),
         desc: meta.and_then(|m| m.desc.clone()),
         source_url: meta.and_then(|m| m.source_url.clone()),
+        zip_entry: meta.and_then(|m| m.zip_entry.clone()),
+        recorded_size: meta.and_then(|m| m.size),
         spoiler,
         id,
     })
@@ -559,9 +576,12 @@ pub fn import_with(dir: &Path, src: &Path, meta: Option<DocMeta>) -> io::Result<
     std::fs::create_dir_all(dir)?;
     let _lock = lock_dir(dir)?; // released when `_lock` drops, however this function ends
     if let Some(mut existing) = find_identical(dir, src, size)? {
-        if let Some(meta) = meta {
+        if let Some(mut meta) = meta {
             let mut index = read_index(dir);
             if !index.contains_key(&existing.id) {
+                meta.size = Some(existing.size);
+                existing.recorded_size = meta.size;
+                existing.zip_entry = meta.zip_entry.clone();
                 existing.title = meta.title.clone();
                 existing.desc = meta.desc.clone();
                 existing.source_url = meta.source_url.clone();
@@ -599,6 +619,7 @@ pub fn import_with(dir: &Path, src: &Path, meta: Option<DocMeta>) -> io::Result<
     }
     let size = std::fs::metadata(&dest)?.len();
     let name = dest.file_name().and_then(|n| n.to_str()).unwrap_or_default().to_string();
+    let meta = meta.map(|m| DocMeta { size: Some(size), ..m });
     let mut index = read_index(dir);
     if meta.is_some() || index.contains_key(&name) {
         match &meta {
@@ -1012,6 +1033,28 @@ mod tests {
             let e = got.iter().find(|e| e.id == format!("f{i}.txt")).unwrap();
             assert_eq!(e.desc, Some(format!("desc {i}")), "entry {i} survived");
         }
+        let _ = std::fs::remove_dir_all(home);
+    }
+
+    #[test]
+    fn import_records_the_saved_size_and_an_old_index_without_one_still_reads() {
+        let home = crate::scratch_dir("docs-idx-size");
+        let (dir, src) = (home.join("g [t]"), home.join("src"));
+        import_with(&dir, &write_src(&src, "a.pdf", b"%PDF-1.4 twelve"), Some(meta("a", false))).unwrap();
+        let got = list(&dir).unwrap();
+        assert_eq!(got[0].recorded_size, Some(15), "the byte length as saved");
+        assert_eq!(got[0].size, 15);
+        // The same bytes under another name: the existing file's entry is filled in
+        // only when it has none, and then carries the size too.
+        std::fs::write(dir.join("b.pdf"), b"%PDF-1.4 other").unwrap();
+        import_with(&dir, &write_src(&src, "c.pdf", b"%PDF-1.4 other"), Some(meta("c", false))).unwrap();
+        let b = list(&dir).unwrap().into_iter().find(|e| e.id == "b.pdf").unwrap();
+        assert_eq!(b.recorded_size, Some(14));
+        // An index written before `size` existed.
+        std::fs::write(dir.join(INDEX_NAME), br#"{"a.pdf": {"title": "Old", "downloaded_at": 5}}"#).unwrap();
+        let got = list(&dir).unwrap();
+        let a = got.iter().find(|e| e.id == "a.pdf").unwrap();
+        assert_eq!((a.title.as_deref(), a.recorded_size), (Some("Old"), None));
         let _ = std::fs::remove_dir_all(home);
     }
 }
