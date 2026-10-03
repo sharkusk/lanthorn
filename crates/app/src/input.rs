@@ -2226,13 +2226,13 @@ pub fn cycle_panel(state: &mut AppState, mapper: &mut Mapper) {
     }
 }
 
-/// Same window as the story list's launch double-click.
-const MAP_DOUBLE_CLICK: std::time::Duration = BandClickTracker::WINDOW;
+/// How long after a ghost jump a further map click is swallowed (SQ-1692) — the same window as
+/// the band's double-click.
+const GHOST_JUMP_GUARD: std::time::Duration = BandClickTracker::WINDOW;
 
-/// Resolve a plain (no-motion) click on the map (SQ-1325). A second click on the
-/// SAME room within [`MAP_DOUBLE_CLICK`] is a double-click: it pins the room (never
-/// the single click's unpin toggle) and switches the Journal to the Room tab
-/// (SQ-1684). Everything else keeps the single-click behaviour.
+/// Resolve a plain (no-motion) click on the map (SQ-1325): a click on a room pins it, a click on
+/// the pinned room unpins it, a click on empty space unpins. A click on a cross-layer ghost first
+/// jumps to the real room's layer (SQ-1692).
 fn end_map_click(
     state: &mut AppState,
     mapper: &Mapper,
@@ -2240,12 +2240,11 @@ fn end_map_click(
     now: std::time::Instant,
 ) {
     use crate::state::MapClick;
-    let last = state.last_map_room_click.take();
     // SQ-1692: a habitual double-click on a ghost must not undo the jump. The recentre moved the
     // room from under the cursor, so inside the window the second click would unpin or select
     // whatever is there now; it is swallowed instead.
-    if let Some((_, t)) = state.last_ghost_jump.take() {
-        if click.is_some() && now.duration_since(t) < MAP_DOUBLE_CLICK {
+    if let Some(t) = state.last_ghost_jump.take() {
+        if click.is_some() && now.duration_since(t) < GHOST_JUMP_GUARD {
             return;
         }
     }
@@ -2255,21 +2254,14 @@ fn end_map_click(
             // layer is not the one on screen can only be a ghost. Follow it: show its layer,
             // pin the real room, centre on it. The pin below then runs as for any room.
             let jumped = follow_to_room_layer(state, &mapper.graph, id);
-            let double = matches!(last, Some((r, t)) if r == id && now.duration_since(t) < MAP_DOUBLE_CLICK);
             if jumped {
-                state.last_ghost_jump = Some((id, now));
+                state.last_ghost_jump = Some(now);
                 let view = state.room_dock_view;
                 pin_room_dock(state, mapper, id, view);
-            } else if double {
-                let view = state.room_dock_view;
-                pin_room_dock(state, mapper, id, view);
-                state.set_journal_tab(crate::journal::JournalTab::Room);
             } else if state.selected_room == Some(id) {
-                state.last_map_room_click = Some((id, now));
                 state.selected_room = None;
                 state.room_path.clear();
             } else {
-                state.last_map_room_click = Some((id, now));
                 let view = state.room_dock_view;
                 pin_room_dock(state, mapper, id, view);
             }
@@ -7693,42 +7685,6 @@ mod tests {
         assert_eq!(sc.selected, 2, "…under a cursor that stayed put");
     }
 
-    /// SQ-1684: a double-click on a map room pins it AND opens the Room tab; a
-    /// single click pins and stays on the Map; empty space never switches.
-    #[test]
-    fn double_click_on_a_room_opens_the_room_tab() {
-        use crate::journal::JournalTab;
-        use crate::state::MapClick;
-        use std::time::{Duration, Instant};
-        let m = Mapper::default();
-        let t0 = Instant::now();
-
-        let mut s = AppState::default();
-        end_map_click(&mut s, &m, Some(MapClick::Room(1)), t0);
-        assert_eq!((s.selected_room, s.journal_tab), (Some(1), JournalTab::Map), "single click pins, stays on Map");
-        end_map_click(&mut s, &m, Some(MapClick::Room(1)), t0 + Duration::from_millis(200));
-        assert_eq!((s.selected_room, s.journal_tab), (Some(1), JournalTab::Room), "double click pins and opens Room");
-
-        // Too slow, or a different room: not a double.
-        let mut s = AppState::default();
-        end_map_click(&mut s, &m, Some(MapClick::Room(1)), t0);
-        end_map_click(&mut s, &m, Some(MapClick::Room(1)), t0 + Duration::from_millis(900));
-        assert_eq!(s.journal_tab, JournalTab::Map);
-        end_map_click(&mut s, &m, Some(MapClick::Room(2)), t0 + Duration::from_millis(1000));
-        assert_eq!(s.journal_tab, JournalTab::Map);
-
-        // Empty space, even twice, never switches.
-        let mut s = AppState::default();
-        end_map_click(&mut s, &m, Some(MapClick::Empty), t0);
-        end_map_click(&mut s, &m, Some(MapClick::Empty), t0 + Duration::from_millis(100));
-        assert_eq!(s.journal_tab, JournalTab::Map);
-        // A click on a room, then empty space, then the room again is not a double.
-        end_map_click(&mut s, &m, Some(MapClick::Room(1)), t0);
-        end_map_click(&mut s, &m, Some(MapClick::Empty), t0 + Duration::from_millis(100));
-        end_map_click(&mut s, &m, Some(MapClick::Room(1)), t0 + Duration::from_millis(200));
-        assert_eq!(s.journal_tab, JournalTab::Map);
-    }
-
     /// SQ-1692: clicking a cross-layer ghost (its rect carries the REAL room's id) switches the
     /// map to that room's layer and pins the real room; Esc
     /// unpins; a click on a room of the viewed layer is unchanged.
@@ -7736,7 +7692,7 @@ mod tests {
     fn clicking_a_ghost_jumps_to_the_real_rooms_layer() {
         use crate::journal::JournalTab;
         use crate::state::MapClick;
-        use std::time::{Duration, Instant};
+        use std::time::Instant;
         let mut m = Mapper::default();
         m.observe(1, "Hall", None);
         m.observe(2, "Cellar", Some(Direction::Down));

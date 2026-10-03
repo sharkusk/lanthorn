@@ -30,7 +30,7 @@ while any such tag, or this Unreleased section, still exists.*
 ### Added
 
 - **Click a dotted "to/from" room on the map to jump there**: the map switches to
-  that room's layer with the room selected (double-click opens its Room tab).
+  that room's layer with the room selected.
 - Downloaded documents **keep IFDB's description**: each file in the Documents tab
   shows what IFDB said about it ("Walkthrough — Competition version") on a second
   line under its name, and files pulled out of a zip say which zip they came from.

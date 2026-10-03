@@ -12,7 +12,7 @@
 //! description (wrapped, truncated with `…`), `Seen at move N` when a turn is
 //! known, and a row of buttons. The buttons run exactly what the room's
 //! right-click menu items run ([`crate::room_menu::ROOM_MENU`]); Details
-//! switches to the Room tab, as a double-click does.
+//! switches to the Room tab.
 //!
 //! Selectors: `journal.map.card` (ground), `.border`, `.name`, `.layer`,
 //! `.description`, `.seen`, `.button`.

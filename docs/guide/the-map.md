@@ -39,7 +39,7 @@ whole Journal, and the splitter beside it drags to any width.
 the map: the room's name and layer, the description the game last printed there
 (cut with `…` to fit), the move it was seen at, and **Rename…**, **Notes…**,
 **Move to another layer…** and **Details** buttons. The first three do what the
-right-click menu does; Details (or a double-click on the room) opens the Room tab.
+right-click menu does; Details opens the Room tab.
 Esc, clicking the room again, or clicking empty map space puts the card away; with
 nothing selected there is no card.
 
