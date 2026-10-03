@@ -29,6 +29,9 @@ while any such tag, or this Unreleased section, still exists.*
 
 ### Added
 
+- Downloaded documents **keep IFDB's description**: each file in the Documents tab
+  shows what IFDB said about it ("Walkthrough — Competition version") on a second
+  line under its name, and files pulled out of a zip say which zip they came from.
 - The Journal has a **Documents** tab: the game's documents folder listed with
   each file's kind and size, a link to the folder, and **Download documents…** and
   **Create documents folder** buttons. Text opens in a pager that wraps to the pane,

@@ -328,10 +328,10 @@ impl std::fmt::Debug for DocumentsTab {
     }
 }
 
-/// Whether `entry` is flagged as a spoiler: by its file name, with the same word
-/// rule the IFDB downloader flags options with.
+/// Whether `entry` is flagged as a spoiler: by the folder's index, or by its file
+/// name with the same word rule the IFDB downloader flags options with.
 pub fn is_spoiler(entry: &DocEntry) -> bool {
-    crate::ifdb_documents::looks_like_spoiler(&entry.id)
+    entry.spoiler
 }
 
 fn kind_label(k: DocKind) -> &'static str {
@@ -664,6 +664,7 @@ struct Styles {
     row: Style,
     selected: Style,
     meta: Style,
+    desc: Style,
     spoiler: Style,
     header: Style,
     button: Style,
@@ -680,6 +681,7 @@ impl Styles {
             row: t("journal.docs.row"),
             selected: t("journal.docs.row:selected"),
             meta: t("journal.docs.meta"),
+            desc: t("journal.docs.desc"),
             spoiler: t("journal.docs.spoiler"),
             header: t("journal.docs.header"),
             button: t("journal.docs.button"),
@@ -810,7 +812,10 @@ fn finish_list(tab: &DocumentsTab, st: &Styles, area: Rect, buf: &mut Buffer, hi
     // The footer takes the last row: a failure or the key hint.
     let footer_y = area.bottom() - 1;
     let list_bottom = if footer_y > top { footer_y } else { area.bottom() };
-    let viewport = list_bottom.saturating_sub(top) as usize;
+    // A row is two lines when any file has a description to show, so every row
+    // is the same height and scrolling stays in whole rows.
+    let row_h: u16 = if tab.entries.iter().any(|e| e.subtitle().is_some()) && list_bottom - top >= 2 { 2 } else { 1 };
+    let viewport = (list_bottom.saturating_sub(top) / row_h) as usize;
     tab.list_viewport.set(viewport);
     let max_top = tab.entries.len().saturating_sub(viewport.max(1));
     let mut first = tab.list_top.get().min(max_top);
@@ -823,8 +828,8 @@ fn finish_list(tab: &DocumentsTab, st: &Styles, area: Rect, buf: &mut Buffer, hi
     }
     tab.list_top.set(first);
     for (i, e) in tab.entries.iter().enumerate().skip(first).take(viewport) {
-        let ry = top + (i - first) as u16;
-        let row = Rect::new(area.x, ry, area.width, 1);
+        let ry = top + (i - first) as u16 * row_h;
+        let row = Rect::new(area.x, ry, area.width, row_h);
         let on = i == tab.selected;
         let base = if on { st.selected } else { st.row };
         fill(buf, row, base);
@@ -843,6 +848,12 @@ fn finish_list(tab: &DocumentsTab, st: &Styles, area: Rect, buf: &mut Buffer, hi
         if spoiler {
             let sp_style = if on { st.selected.patch(st.spoiler) } else { st.spoiler };
             put(buf, area, ry, r.right(), flag, sp_style);
+        }
+        if row_h == 2 {
+            if let Some(sub) = e.subtitle() {
+                let line = crate::textwidth::clip_to_cols_ellipsis(&sub, (area.width as usize).saturating_sub(4));
+                put(buf, area, ry + 1, x + 2, &line, if on { st.selected } else { st.desc });
+            }
         }
         hits.rows.push((i, row));
     }
@@ -1017,6 +1028,40 @@ mod tests {
         assert_eq!(p.scroll.get(), 3, "clamped at the end");
         p.scroll_by(-10);
         assert_eq!(p.scroll.get(), 0);
+    }
+
+    #[test]
+    fn a_description_shows_as_a_second_line_and_clicks_still_hit_the_right_row() {
+        let (t, dir) = tab_with(&[]);
+        let src = crate::scratch_dir("docs-tab-desc-src");
+        for (n, d) in [("a.txt", Some("The first map")), ("b.txt", None), ("c.txt", Some("Third, with a very long description indeed"))] {
+            std::fs::write(src.join(n), n.as_bytes()).unwrap();
+            let meta = crate::documents::DocMeta::now(None, d.map(String::from), None, false);
+            crate::documents::import_with(&dir, &src.join(n), Some(meta)).unwrap();
+        }
+        let mut t = t;
+        t.set_location(Location::Exists(dir));
+        let s = state_with(t);
+        let buf = render(&s, 40, 14);
+        let out = text_of(&buf);
+        assert!(out.contains("The first map"), "{out}");
+        let rows = s.documents_tab.hits().rows;
+        assert_eq!(rows.len(), 3);
+        assert!(rows.iter().all(|(_, r)| r.height == 2), "two-line rows: {rows:?}");
+        assert!(rows.windows(2).all(|w| w[1].1.y == w[0].1.bottom()), "rows tile: {rows:?}");
+        let line = |y: u16| (0..40).map(|x| buf[(x, y)].symbol().to_string()).collect::<String>();
+        assert!(line(rows[0].1.y + 1).contains("The first map"));
+        assert!(line(rows[2].1.y + 1).contains('…'), "truncated to the width: {}", line(rows[2].1.y + 1));
+        let ev = |y| MouseEvent { kind: MouseEventKind::Down(MouseButton::Left), column: 5, row: y, modifiers: crossterm::event::KeyModifiers::NONE };
+        for (i, (idx, r)) in rows.iter().enumerate() {
+            for y in [r.y, r.y + 1] {
+                let hit = mouse_action(&s, &ev(y));
+                assert!(matches!(hit, Some(DocMouse::Action(Action::DocTabClickRow(n))) if n == *idx), "row {i} line {y}");
+            }
+        }
+        // Few lines: scrolling still works in whole rows.
+        let small = text_of(&render(&s, 40, 9));
+        assert!(small.contains("a.txt"), "{small}");
     }
 
     #[test]
@@ -1258,7 +1303,7 @@ mod tests {
     #[test]
     fn every_documents_element_is_a_styleable_selector() {
         for name in [
-            "journal.docs.row", "journal.docs.row:selected", "journal.docs.meta", "journal.docs.spoiler",
+            "journal.docs.row", "journal.docs.row:selected", "journal.docs.meta", "journal.docs.desc", "journal.docs.spoiler",
             "journal.docs.header", "journal.docs.button", "journal.docs.hint", "journal.docs.pager",
             "journal.docs.pager_title", "journal.docs.pager_notice",
         ] {

@@ -64,6 +64,7 @@ version = 1   # style schema version — do not remove; lets lanthorn flag an ou
 # "journal.docs.row" = { parent = "text" }
 # "journal.docs.row:selected" = { parent = "accent", reversed = true }
 # "journal.docs.meta" = { parent = "muted" }
+# "journal.docs.desc" = { parent = "muted" }
 # "journal.docs.spoiler" = { parent = "alert", bold = true }
 # "journal.docs.header" = { parent = "muted" }
 # "journal.docs.button" = { parent = "accent", bold = true, reversed = true }

@@ -28,7 +28,7 @@ use crate::config::AnimationConfig;
 use crate::data_roots::DataRoots;
 use crate::ifdb_documents::{
     format_size, is_previewable, matches_title, DocEvent, DocJob, DocumentOption, DocumentWorker, DownloadItem,
-    LinkKind, RowKey, ZipEntry, ZipListing,
+    LinkInfo, LinkKind, RowKey, ZipEntry, ZipListing,
 };
 use crate::ifdb_search::{IfdbGate, SearchSource};
 use crate::ifdb_search_modal::{clip_with_ellipsis, put_str, row_glyph, window_start, ROW_MARGIN};
@@ -360,8 +360,19 @@ impl DocumentsChooser {
             .filter_map(|&key| {
                 let l = self.links.get(key.0)?;
                 Some(match key.1 {
-                    None => DownloadItem::File { url: l.opt.url.clone(), filename: l.opt.filename.clone() },
-                    Some(_) => DownloadItem::Entry { zip_url: l.opt.url.clone(), index: self.entry(key)?.index },
+                    None => DownloadItem::File {
+                        url: l.opt.url.clone(),
+                        filename: l.opt.filename.clone(),
+                        info: LinkInfo::of_link(&l.opt),
+                    },
+                    Some(_) => {
+                        let entry = self.entry(key)?;
+                        DownloadItem::Entry {
+                            zip_url: l.opt.url.clone(),
+                            index: entry.index,
+                            info: LinkInfo::of_entry(&l.opt, entry),
+                        }
+                    }
                 })
             })
             .collect();

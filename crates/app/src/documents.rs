@@ -14,6 +14,14 @@
 //! The host API (`list` / `import` / `remove`) works on a folder path obtained
 //! from [`documents_dir`] / [`ensure_documents_dir`]. Only the folder's own
 //! top-level files are listed: no subdirectories, no dotfiles.
+//!
+//! **The index** (SQ-1687): each folder may hold a hidden `.documents.json`, a
+//! JSON object mapping FILE NAME to [`DocMeta`] (IFDB's title and description for
+//! the link, its URL, the spoiler flag, when it was downloaded). It is written
+//! atomically and only under the same `.import.lock` the importer takes, so
+//! concurrent writers cannot lose each other's entries. A user rename orphans
+//! the entry (accepted); entries for files that are gone are pruned by [`list`].
+//! A corrupt index reads as empty and the next write replaces it.
 
 use std::io;
 use std::path::{Path, PathBuf};
@@ -298,33 +306,135 @@ pub struct DocEntry {
     pub path: PathBuf,
     /// Stable within the folder: the file name. What [`remove`] takes.
     pub id: String,
+    /// IFDB's title for the link this file came from, from the index.
+    pub title: Option<String>,
+    /// IFDB's description for the link (or the zip it came out of), from the index.
+    pub desc: Option<String>,
+    pub source_url: Option<String>,
+    /// The index says so, or the file name reads as a walkthrough/hint/solution.
+    pub spoiler: bool,
 }
 
-fn entry_for(path: PathBuf, size: u64) -> Option<DocEntry> {
+impl DocEntry {
+    /// The one line shown under the file: the description, with the title joined
+    /// on when it says something the file name does not (the story chooser's rule).
+    pub fn subtitle(&self) -> Option<String> {
+        crate::ifdb_search::subtitle_of(&self.id, self.title.as_deref(), self.desc.as_deref())
+    }
+}
+
+/// What the index remembers about one downloaded file.
+#[derive(Debug, Clone, Default, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[serde(default)]
+pub struct DocMeta {
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub title: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub desc: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub source_url: Option<String>,
+    pub spoiler: bool,
+    /// Seconds since the Unix epoch.
+    pub downloaded_at: u64,
+}
+
+impl DocMeta {
+    /// Metadata for a download happening now.
+    pub fn now(title: Option<String>, desc: Option<String>, source_url: Option<String>, spoiler: bool) -> DocMeta {
+        let downloaded_at =
+            std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map_or(0, |d| d.as_secs());
+        DocMeta { title, desc, source_url, spoiler, downloaded_at }
+    }
+}
+
+const INDEX_NAME: &str = ".documents.json";
+type Index = std::collections::BTreeMap<String, DocMeta>;
+
+/// Read the folder's index. Missing is empty; unreadable or corrupt is empty too
+/// (and said on stderr), never an error: the listing must not fail over it.
+fn read_index(dir: &Path) -> Index {
+    let bytes = match std::fs::read(dir.join(INDEX_NAME)) {
+        Ok(b) => b,
+        Err(e) => {
+            if e.kind() != io::ErrorKind::NotFound {
+                eprintln!("documents: cannot read {INDEX_NAME} in {}: {e}", dir.display());
+            }
+            return Index::new();
+        }
+    };
+    serde_json::from_slice(&bytes).unwrap_or_else(|e| {
+        eprintln!("documents: ignoring corrupt {INDEX_NAME} in {}: {e}", dir.display());
+        Index::new()
+    })
+}
+
+fn write_index(dir: &Path, index: &Index) -> io::Result<()> {
+    let bytes = serde_json::to_vec_pretty(index).map_err(io::Error::other)?;
+    crate::storage::atomic_write(&dir.join(INDEX_NAME), &bytes)
+}
+
+/// The exclusive advisory lock every index writer holds; released on drop.
+fn lock_dir(dir: &Path) -> io::Result<std::fs::File> {
+    let lock = std::fs::OpenOptions::new().write(true).create(true).truncate(false).open(dir.join(".import.lock"))?;
+    lock.lock()?;
+    Ok(lock)
+}
+
+fn entry_for(path: PathBuf, size: u64, meta: Option<&DocMeta>) -> Option<DocEntry> {
     let id = path.file_name()?.to_str()?.to_string();
     let display_name = Path::new(&id).file_stem().and_then(|s| s.to_str()).unwrap_or(&id).to_string();
-    Some(DocEntry { display_name, kind: sniff_kind(&path).unwrap_or_else(|_| DocKind::of(&id)), size, path, id })
+    let spoiler = meta.is_some_and(|m| m.spoiler) || crate::ifdb_documents::looks_like_spoiler(&id);
+    Some(DocEntry {
+        display_name,
+        kind: sniff_kind(&path).unwrap_or_else(|_| DocKind::of(&id)),
+        size,
+        path,
+        title: meta.and_then(|m| m.title.clone()),
+        desc: meta.and_then(|m| m.desc.clone()),
+        source_url: meta.and_then(|m| m.source_url.clone()),
+        spoiler,
+        id,
+    })
 }
 
 /// The documents in `dir`, sorted by name (case-insensitive). Top-level regular
 /// files only: dotfiles and subdirectories are ignored. A folder that does not
-/// exist yet lists as empty, not an error.
+/// exist yet lists as empty, not an error. Index entries for files that are gone
+/// are pruned, and the index rewritten only then.
 pub fn list(dir: &Path) -> io::Result<Vec<DocEntry>> {
     let rd = match std::fs::read_dir(dir) {
         Ok(rd) => rd,
         Err(e) if e.kind() == io::ErrorKind::NotFound => return Ok(Vec::new()),
         Err(e) => return Err(e),
     };
+    let index = read_index(dir);
     let mut out: Vec<DocEntry> = rd
         .flatten()
         .filter(|e| !e.file_name().to_string_lossy().starts_with('.'))
         .filter_map(|e| {
             let meta = e.metadata().ok().filter(|m| m.is_file())?;
-            entry_for(e.path(), meta.len())
+            let name = e.file_name().to_string_lossy().into_owned();
+            entry_for(e.path(), meta.len(), index.get(&name))
         })
         .collect();
     out.sort_by(|a, b| a.id.to_lowercase().cmp(&b.id.to_lowercase()).then_with(|| a.id.cmp(&b.id)));
+    if index.keys().any(|k| !out.iter().any(|e| &e.id == k)) {
+        prune_index(dir);
+    }
     Ok(out)
+}
+
+/// Drop index entries whose file is gone. Under the lock, and against a fresh
+/// read of both the index and the disk: an importer that claimed a name after
+/// the caller's scan has written (or will write) its entry under this same lock.
+fn prune_index(dir: &Path) {
+    let Ok(_lock) = lock_dir(dir) else { return };
+    let mut index = read_index(dir);
+    let before = index.len();
+    index.retain(|name, _| std::fs::symlink_metadata(dir.join(name)).is_ok_and(|m| m.is_file()));
+    if index.len() != before {
+        let _ = write_index(dir, &index);
+    }
 }
 
 /// What [`import`] did.
@@ -395,21 +505,40 @@ fn find_identical(dir: &Path, src: &Path, size: u64) -> io::Result<Option<DocEnt
 /// not do: each importer can see the other, or neither, depending on timing,
 /// leaving zero or two copies.)
 pub fn import(dir: &Path, src: &Path) -> io::Result<Imported> {
+    import_with(dir, src, None)
+}
+
+/// [`import`] that also records `meta` in the folder's index for the file it
+/// lands as, under the same lock. A new file replaces any stale entry for its
+/// name (with `meta`, or with nothing); for [`Imported::AlreadyPresent`] the
+/// existing file's entry is filled in only when it has none: the user's existing
+/// metadata is never overwritten.
+pub fn import_with(dir: &Path, src: &Path, meta: Option<DocMeta>) -> io::Result<Imported> {
     use std::sync::atomic::{AtomicUsize, Ordering};
     static NTH: AtomicUsize = AtomicUsize::new(0);
     let name = src.file_name().and_then(|n| n.to_str()).ok_or_else(|| invalid("no file name"))?;
     if name.starts_with('.') {
         return Err(invalid("a dotfile is not a document"));
     }
-    let meta = std::fs::metadata(src)?;
-    if !meta.is_file() {
+    let src_meta = std::fs::metadata(src)?;
+    if !src_meta.is_file() {
         return Err(invalid("not a file"));
     }
-    let size = meta.len();
+    let size = src_meta.len();
     std::fs::create_dir_all(dir)?;
-    let lock = std::fs::OpenOptions::new().write(true).create(true).truncate(false).open(dir.join(".import.lock"))?;
-    lock.lock()?; // released when `lock` drops, however this function ends
-    if let Some(existing) = find_identical(dir, src, size)? {
+    let _lock = lock_dir(dir)?; // released when `_lock` drops, however this function ends
+    if let Some(mut existing) = find_identical(dir, src, size)? {
+        if let Some(meta) = meta {
+            let mut index = read_index(dir);
+            if !index.contains_key(&existing.id) {
+                existing.title = meta.title.clone();
+                existing.desc = meta.desc.clone();
+                existing.source_url = meta.source_url.clone();
+                existing.spoiler |= meta.spoiler;
+                index.insert(existing.id.clone(), meta);
+                let _ = write_index(dir, &index);
+            }
+        }
         return Ok(Imported::AlreadyPresent(existing));
     }
     let stem = Path::new(name).file_stem().and_then(|s| s.to_str()).unwrap_or(name);
@@ -438,7 +567,16 @@ pub fn import(dir: &Path, src: &Path) -> io::Result<Imported> {
         return Err(e);
     }
     let size = std::fs::metadata(&dest)?.len();
-    entry_for(dest, size).map(Imported::Added).ok_or_else(|| invalid("unusable file name"))
+    let name = dest.file_name().and_then(|n| n.to_str()).unwrap_or_default().to_string();
+    let mut index = read_index(dir);
+    if meta.is_some() || index.contains_key(&name) {
+        match &meta {
+            Some(m) => index.insert(name, m.clone()),
+            None => index.remove(&name),
+        };
+        let _ = write_index(dir, &index); // the file is in; a failed index must not undo it
+    }
+    entry_for(dest, size, meta.as_ref()).map(Imported::Added).ok_or_else(|| invalid("unusable file name"))
 }
 
 /// Delete the file `id` (a name from [`list`]) inside `dir`. An id with a path
@@ -452,7 +590,13 @@ pub fn remove(dir: &Path, id: &str) -> io::Result<()> {
     if !std::fs::symlink_metadata(&path)?.is_file() {
         return Err(invalid("not a document"));
     }
-    std::fs::remove_file(path)
+    let _lock = lock_dir(dir)?;
+    std::fs::remove_file(path)?;
+    let mut index = read_index(dir);
+    if index.remove(id).is_some() {
+        let _ = write_index(dir, &index);
+    }
+    Ok(())
 }
 
 #[cfg(all(test, feature = "t-persist"))]
@@ -717,5 +861,126 @@ mod tests {
         assert_eq!(remove(&dir, "Manual (2).pdf").unwrap_err().kind(), io::ErrorKind::NotFound);
         let _ = std::fs::remove_dir_all(home);
         let _ = std::fs::remove_dir_all(src_dir);
+    }
+
+    // ── the index (SQ-1687) ──────────────────────────────────────────────────
+
+    fn write_src(dir: &Path, name: &str, body: &[u8]) -> PathBuf {
+        std::fs::create_dir_all(dir).unwrap();
+        std::fs::write(dir.join(name), body).unwrap();
+        dir.join(name)
+    }
+
+    fn meta(desc: &str, spoiler: bool) -> DocMeta {
+        DocMeta::now(Some("A title".into()), Some(desc.into()), Some("https://x/a.pdf".into()), spoiler)
+    }
+
+    #[test]
+    fn an_import_with_metadata_is_listed_with_it_and_the_dotfile_is_not() {
+        let home = crate::scratch_dir("docs-idx-list");
+        let (dir, src) = (home.join("g [t]"), home.join("src"));
+        import_with(&dir, &write_src(&src, "a.pdf", b"%PDF-1"), Some(meta("Competition version", true))).unwrap();
+        import(&dir, &write_src(&src, "b.txt", b"plain")).unwrap();
+        let got = list(&dir).unwrap();
+        assert_eq!(got.len(), 2, "{got:?}");
+        assert_eq!(got[0].desc.as_deref(), Some("Competition version"));
+        assert_eq!(got[0].source_url.as_deref(), Some("https://x/a.pdf"));
+        assert!(got[0].spoiler, "the index says so");
+        assert_eq!((got[1].desc.clone(), got[1].spoiler), (None, false), "no metadata for a host import");
+        assert!(dir.join(INDEX_NAME).is_file());
+        assert!(got.iter().all(|e| e.id != INDEX_NAME));
+        // The name alone still flags a spoiler.
+        import(&dir, &write_src(&src, "walkthrough.txt", b"go north")).unwrap();
+        assert!(list(&dir).unwrap().iter().find(|e| e.id == "walkthrough.txt").unwrap().spoiler);
+        let _ = std::fs::remove_dir_all(home);
+    }
+
+    #[test]
+    fn remove_drops_the_entry() {
+        let home = crate::scratch_dir("docs-idx-remove");
+        let (dir, src) = (home.join("g [t]"), home.join("src"));
+        import_with(&dir, &write_src(&src, "a.pdf", b"%PDF-1"), Some(meta("d", false))).unwrap();
+        assert!(read_index(&dir).contains_key("a.pdf"));
+        remove(&dir, "a.pdf").unwrap();
+        assert!(read_index(&dir).is_empty());
+        let _ = std::fs::remove_dir_all(home);
+    }
+
+    #[test]
+    fn a_missing_files_entry_is_pruned_and_the_index_rewritten_only_then() {
+        let home = crate::scratch_dir("docs-idx-prune");
+        let (dir, src) = (home.join("g [t]"), home.join("src"));
+        import_with(&dir, &write_src(&src, "a.pdf", b"%PDF-1"), Some(meta("d", false))).unwrap();
+        import_with(&dir, &write_src(&src, "b.pdf", b"%PDF-2"), Some(meta("e", false))).unwrap();
+        let idx = dir.join(INDEX_NAME);
+        // Listing with nothing stale does not touch the index.
+        let old = std::time::SystemTime::UNIX_EPOCH + std::time::Duration::from_secs(1_000_000);
+        std::fs::File::options().write(true).open(&idx).unwrap().set_modified(old).unwrap();
+        list(&dir).unwrap();
+        assert_eq!(std::fs::metadata(&idx).unwrap().modified().unwrap(), old, "not rewritten");
+        std::fs::remove_file(dir.join("a.pdf")).unwrap();
+        let got = list(&dir).unwrap();
+        assert_eq!(got.len(), 1);
+        assert_eq!(read_index(&dir).keys().collect::<Vec<_>>(), ["b.pdf"]);
+        assert_ne!(std::fs::metadata(&idx).unwrap().modified().unwrap(), old, "rewritten once");
+        let _ = std::fs::remove_dir_all(home);
+    }
+
+    #[test]
+    fn a_corrupt_index_lists_fine_and_the_next_write_replaces_it() {
+        let home = crate::scratch_dir("docs-idx-corrupt");
+        let (dir, src) = (home.join("g [t]"), home.join("src"));
+        import(&dir, &write_src(&src, "a.pdf", b"%PDF-1")).unwrap();
+        std::fs::write(dir.join(INDEX_NAME), b"{ not json").unwrap();
+        let got = list(&dir).unwrap();
+        assert_eq!(got.len(), 1);
+        assert_eq!(got[0].desc, None);
+        import_with(&dir, &write_src(&src, "b.pdf", b"%PDF-2"), Some(meta("d", false))).unwrap();
+        assert_eq!(read_index(&dir).len(), 1);
+        assert!(serde_json::from_slice::<Index>(&std::fs::read(dir.join(INDEX_NAME)).unwrap()).is_ok());
+        let _ = std::fs::remove_dir_all(home);
+    }
+
+    #[test]
+    fn already_present_fills_missing_metadata_and_never_overwrites() {
+        let home = crate::scratch_dir("docs-idx-present");
+        let (dir, src) = (home.join("g [t]"), home.join("src"));
+        import(&dir, &write_src(&src, "a.pdf", b"%PDF-1")).unwrap();
+        // Existing file with no metadata: filled in.
+        let again = import_with(&dir, &write_src(&src, "copy.pdf", b"%PDF-1"), Some(meta("first", false))).unwrap();
+        assert!(matches!(&again, Imported::AlreadyPresent(e) if e.desc.as_deref() == Some("first")), "{again:?}");
+        assert_eq!(list(&dir).unwrap()[0].desc.as_deref(), Some("first"));
+        // Existing metadata: kept.
+        import_with(&dir, &write_src(&src, "copy2.pdf", b"%PDF-1"), Some(meta("second", true))).unwrap();
+        let e = &list(&dir).unwrap()[0];
+        assert_eq!((e.desc.as_deref(), e.spoiler), (Some("first"), false));
+        let _ = std::fs::remove_dir_all(home);
+    }
+
+    #[test]
+    fn concurrent_imports_keep_every_entry() {
+        let home = crate::scratch_dir("docs-idx-race");
+        let (dir, src) = (home.join("g [t]"), home.join("src"));
+        let n = 24;
+        let paths: Vec<PathBuf> =
+            (0..n).map(|i| write_src(&src, &format!("f{i}.txt"), format!("distinct {i}").as_bytes())).collect();
+        let handles: Vec<_> = paths
+            .into_iter()
+            .enumerate()
+            .map(|(i, p)| {
+                let dir = dir.clone();
+                std::thread::spawn(move || import_with(&dir, &p, Some(meta(&format!("desc {i}"), false))).unwrap())
+            })
+            .collect();
+        for h in handles {
+            h.join().unwrap();
+        }
+        let got = list(&dir).unwrap();
+        assert_eq!(got.len(), n);
+        for i in 0..n {
+            let e = got.iter().find(|e| e.id == format!("f{i}.txt")).unwrap();
+            assert_eq!(e.desc, Some(format!("desc {i}")), "entry {i} survived");
+        }
+        let _ = std::fs::remove_dir_all(home);
     }
 }

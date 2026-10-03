@@ -51,7 +51,7 @@ use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::mpsc;
 
 use crate::data_roots::DataRoots;
-use crate::documents::Imported;
+use crate::documents::{DocMeta, Imported};
 use crate::ifdb_search::{
     basename_from_url, child_text, one_line, sanitize_basename, subtitle_of, too_large_message,
     IfdbGate, IfdbWorker, RangeProbe, SearchError, SearchSource, MAX_DOWNLOAD,
@@ -576,9 +576,9 @@ pub fn fetch_preview(source: &dyn SearchSource, url: &str, entry: Option<usize>)
 
 /// Write `bytes` as `name` into `dir` through [`crate::documents::import`]: the
 /// folder is made if missing, a clash is suffixed, and bytes the folder already
-/// holds are not written again. The bytes go to a scratch
+/// holds are not written again. `meta` goes into the folder's index (SQ-1687). The bytes go to a scratch
 /// file first, so nothing partial is ever in the folder.
-pub fn save_document(dir: &Path, name: &str, bytes: &[u8]) -> io::Result<Imported> {
+pub fn save_document(dir: &Path, name: &str, bytes: &[u8], meta: Option<DocMeta>) -> io::Result<Imported> {
     static NTH: AtomicUsize = AtomicUsize::new(0);
     let scratch = std::env::temp_dir().join(format!(
         "lanthorn-doc-{}-{}",
@@ -587,7 +587,7 @@ pub fn save_document(dir: &Path, name: &str, bytes: &[u8]) -> io::Result<Importe
     ));
     std::fs::create_dir_all(&scratch)?;
     let src = scratch.join(name);
-    let result = std::fs::write(&src, bytes).and_then(|()| crate::documents::import(dir, &src));
+    let result = std::fs::write(&src, bytes).and_then(|()| crate::documents::import_with(dir, &src, meta));
     // File then (empty) directory, never a recursive delete.
     let _ = std::fs::remove_file(&src);
     let _ = std::fs::remove_dir(&scratch);
@@ -603,9 +603,35 @@ pub type RowKey = (usize, Option<usize>);
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum DownloadItem {
     /// A whole link (a file, or a whole zip).
-    File { url: String, filename: String },
+    File { url: String, filename: String, info: LinkInfo },
     /// One entry of the zip at `zip_url`.
-    Entry { zip_url: String, index: usize },
+    Entry { zip_url: String, index: usize, info: LinkInfo },
+}
+
+/// What the index keeps of a link besides its URL (SQ-1687).
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct LinkInfo {
+    pub title: Option<String>,
+    pub desc: Option<String>,
+    pub spoiler: bool,
+}
+
+impl LinkInfo {
+    /// A top-level link's own title, description and spoiler flag.
+    pub fn of_link(o: &DocumentOption) -> LinkInfo {
+        LinkInfo { title: o.title.clone(), desc: o.desc.clone(), spoiler: o.spoiler }
+    }
+
+    /// A zip entry's: its own name, the zip link's description with
+    /// ` (from <zip filename>)` appended, and the entry's own spoiler flag.
+    pub fn of_entry(zip: &DocumentOption, entry: &ZipEntry) -> LinkInfo {
+        let from = format!("(from {})", zip.filename);
+        let desc = match zip.desc.as_deref() {
+            Some(d) => format!("{d} {from}"),
+            None => from,
+        };
+        LinkInfo { title: Some(entry.name.clone()), desc: Some(desc), spoiler: entry.spoiler }
+    }
 }
 
 /// A unit of work for [`DocumentWorker`].
@@ -702,23 +728,32 @@ fn run_job_capped(
             // directory read.
             let mut open: Option<(String, Option<RemoteZip>)> = None;
             for (n, item) in items.iter().enumerate() {
-                let (label, got) = match item {
-                    DownloadItem::File { url, filename } => {
-                        (filename.clone(), source.fetch_capped(url, cap).map(|b| (filename.clone(), b)))
-                    }
-                    DownloadItem::Entry { zip_url, index } => {
+                let (label, got, source_url, info) = match item {
+                    DownloadItem::File { url, filename, info } => (
+                        filename.clone(),
+                        source.fetch_capped(url, cap).map(|b| (filename.clone(), b)),
+                        url,
+                        info,
+                    ),
+                    DownloadItem::Entry { zip_url, index, info } => {
                         if open.as_ref().is_none_or(|(u, _)| u != zip_url) {
                             open = Some((zip_url.clone(), RemoteZip::open(source, zip_url).ok().flatten()));
                         }
                         let label = format!("{zip_url} #{index}");
                         match open.as_ref().and_then(|(_, z)| z.as_ref()) {
-                            Some(z) => (label, z.read_entry(*index, cap)),
-                            None => (label, Err(SearchError::Archive("could not open the zip".into()))),
+                            Some(z) => (label, z.read_entry(*index, cap), zip_url, info),
+                            None => (label, Err(SearchError::Archive("could not open the zip".into())), zip_url, info),
                         }
                     }
                 };
                 match got.and_then(|(name, bytes)| {
-                    save_document(&dir, &name, &bytes).map_err(|e| SearchError::Io(e.to_string()))
+                    let meta = DocMeta::now(
+                        info.title.clone(),
+                        info.desc.clone(),
+                        Some(source_url.clone()),
+                        info.spoiler,
+                    );
+                    save_document(&dir, &name, &bytes, Some(meta)).map_err(|e| SearchError::Io(e.to_string()))
                 }) {
                     Ok(Imported::Added(d)) => saved.push(d.id),
                     Ok(Imported::AlreadyPresent(d)) => already.push(d.id),
@@ -1080,8 +1115,8 @@ pub(crate) mod tests {
         let host = Host::new(true).with("https://x/manual.pdf", b"%PDF-1.4 hello".to_vec()).with(URL, zip);
         let items = || {
             vec![
-                DownloadItem::File { url: "https://x/manual.pdf".into(), filename: "manual.pdf".into() },
-                DownloadItem::Entry { zip_url: URL.into(), index: 3 },
+                DownloadItem::File { url: "https://x/manual.pdf".into(), filename: "manual.pdf".into(), info: LinkInfo::default() },
+                DownloadItem::Entry { zip_url: URL.into(), index: 3, info: LinkInfo::default() },
             ]
         };
         let job = || DocJob::Download { tuid: "abc123".into(), title: "Zork I".into(), items: items() };
@@ -1111,13 +1146,58 @@ pub(crate) mod tests {
     }
 
     #[test]
+    fn downloads_write_the_index_with_link_info_and_a_zip_entrys_from_note() {
+        let (home, roots) = roots("docs-dl-index");
+        let zip = big_zip(3, 2000, &[("Sols/ZorkI.txt", b"walkthrough")]);
+        let host = Host::new(true).with("https://x/manual.pdf", b"%PDF-1.4 hello".to_vec()).with(URL, zip);
+        let items = vec![
+            DownloadItem::File {
+                url: "https://x/manual.pdf".into(),
+                filename: "manual.pdf".into(),
+                info: LinkInfo { title: Some("Manual".into()), desc: Some("The printed manual".into()), spoiler: false },
+            },
+            DownloadItem::Entry {
+                zip_url: URL.into(),
+                index: 3,
+                info: LinkInfo { title: Some("ZorkI.txt".into()), desc: Some("Sols (from Setup.zip)".into()), spoiler: true },
+            },
+        ];
+        let (dir, _, failed) =
+            finished(run(&host, &roots, DocJob::Download { tuid: "abc123".into(), title: "Zork I".into(), items }, MAX_DOWNLOAD));
+        assert!(failed.is_empty(), "{failed:?}");
+        let listed = crate::documents::list(&dir.unwrap()).unwrap();
+        let m = listed.iter().find(|e| e.id == "manual.pdf").unwrap();
+        assert_eq!((m.desc.as_deref(), m.source_url.as_deref()), (Some("The printed manual"), Some("https://x/manual.pdf")));
+        assert_eq!(m.subtitle().as_deref(), Some("Manual \u{2014} The printed manual"));
+        let z = listed.iter().find(|e| e.id == "ZorkI.txt").unwrap();
+        assert_eq!((z.desc.as_deref(), z.source_url.as_deref(), z.spoiler), (Some("Sols (from Setup.zip)"), Some(URL), true));
+        let _ = std::fs::remove_dir_all(home);
+    }
+
+    #[test]
+    fn link_info_words_a_zip_entrys_description() {
+        let zip = DocumentOption {
+            filename: "Setup.zip".into(),
+            url: URL.into(),
+            kind: LinkKind::Archive,
+            format: None,
+            title: None,
+            desc: Some("Solutions".into()),
+            spoiler: false,
+        };
+        let entry = ZipEntry { index: 0, path: "a/b.txt".into(), name: "b.txt".into(), size: 1, spoiler: true };
+        let info = LinkInfo::of_entry(&zip, &entry);
+        assert_eq!(info, LinkInfo { title: Some("b.txt".into()), desc: Some("Solutions (from Setup.zip)".into()), spoiler: true });
+    }
+
+    #[test]
     fn the_cap_aborts_cleanly_and_leaves_no_partial_file() {
         let (home, roots) = roots("docs-dl-cap");
         let zip = big_zip(1, 5000, &[]);
         let host = Host::new(true).with("https://x/huge.pdf", vec![7u8; 5000]).with(URL, zip);
         let items = vec![
-            DownloadItem::File { url: "https://x/huge.pdf".into(), filename: "huge.pdf".into() },
-            DownloadItem::Entry { zip_url: URL.into(), index: 0 },
+            DownloadItem::File { url: "https://x/huge.pdf".into(), filename: "huge.pdf".into(), info: LinkInfo::default() },
+            DownloadItem::Entry { zip_url: URL.into(), index: 0, info: LinkInfo::default() },
         ];
         let job = DocJob::Download { tuid: "abc123".into(), title: "Zork I".into(), items };
         let evs = run(&host, &roots, job, 4000);
@@ -1140,8 +1220,8 @@ pub(crate) mod tests {
             .with("https://x/sixty.pdf", vec![1u8; 60 * 1024 * 1024])
             .with("https://x/huge.pdf", vec![1u8; 101 * 1024 * 1024]);
         let items = vec![
-            DownloadItem::File { url: "https://x/sixty.pdf".into(), filename: "sixty.pdf".into() },
-            DownloadItem::File { url: "https://x/huge.pdf".into(), filename: "huge.pdf".into() },
+            DownloadItem::File { url: "https://x/sixty.pdf".into(), filename: "sixty.pdf".into(), info: LinkInfo::default() },
+            DownloadItem::File { url: "https://x/huge.pdf".into(), filename: "huge.pdf".into(), info: LinkInfo::default() },
         ];
         let job = DocJob::Download { tuid: "abc123".into(), title: "Zork I".into(), items };
         let (dir, saved, failed) = finished(run(&host, &roots, job, MAX_DOWNLOAD));

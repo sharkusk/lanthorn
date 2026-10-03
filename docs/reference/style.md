@@ -129,6 +129,7 @@ Every themeable `style.toml` selector: which role or selector it derives from, a
 | `journal.docs.row` | Elements | Style | `text` |  | |
 | `journal.docs.row:selected` | Elements | Style | `accent` | `reversed` | |
 | `journal.docs.meta` | Elements | Style | `muted` |  | |
+| `journal.docs.desc` | Elements | Style | `muted` |  | |
 | `journal.docs.spoiler` | Elements | Style | `alert` | `bold` | |
 | `journal.docs.header` | Elements | Style | `muted` |  | |
 | `journal.docs.button` | Elements | Style | `accent` | `bold reversed` | |
