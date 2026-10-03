@@ -12,7 +12,7 @@ Every slash command, grouped the way `/help` groups them. Type any of these afte
 | Game | `quit` | exit lanthorn |
 | Game | `quit-to-library` | exit the current story and return to the story library |
 | Game | `download-documents` | choose manuals, feelies and maps listed on IFDB for this game and save them to its documents folder |
-| Game | `open-hints` | open the hints panel |
+| Game | `open-hints` | show the Journal's Hints tab, starting the hint session if needed (the keyboard stays in the story) |
 | Game | `open-history` | open the rewind/replay history |
 | Game | `toggle-command-panel` | open or close the command panel; remembered per story |
 | Game | `cycle-panel` | cycle command panel → none; persisted per-game |
@@ -41,7 +41,7 @@ Every slash command, grouped the way `/help` groups them. Type any of these afte
 | Map | `toggle-portal-labels` | toggle portal labels |
 | View | `toggle-map` | show or hide the Journal (the map's panel); persisted per-game |
 | View | `toggle-focus` | switch focus between panes |
-| View | `journal-tab <map|room|inventory|documents>` | show a tab of the Journal (the right-hand panel), revealing it if hidden; remembered per story |
+| View | `journal-tab <map|room|inventory|hints|documents>` | show a tab of the Journal (the right-hand panel), revealing it if hidden; remembered per story |
 | View | `journal-next-tab` | show the Journal's next tab, wrapping |
 | View | `journal-prev-tab` | show the Journal's previous tab, wrapping |
 | View | `filter-items [query]` | filter the Journal's Inventory tab (both Carrying and Elsewhere) to items matching query; no query clears the filter |
@@ -98,7 +98,7 @@ Every slash command, grouped the way `/help` groups them. Type any of these afte
 | Library | `create-documents-folder` | create this story's documents folder (manuals, maps) beside its IFDB id |
 | Library | `open-url` | download a story from a URL into this library and open it |
 | Library | `search-ifdb` | search IFDB by title or author and download a story into this directory |
-| Library | `download-hints` | download a matching InvisiClues hint file for the selected story |
+| Library | `download-hints` | download a matching InvisiClues hint file for this story (the selected one in the browser) |
 | Library | `sort-library` | cycle the browser's sort column, keeping the direction |
 | Library | `reverse-sort` | reverse the browser's sort direction, keeping the column |
 | Library | `find-story` | type to filter the whole library by title, author, filename or folder |

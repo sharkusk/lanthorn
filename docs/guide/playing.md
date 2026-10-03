@@ -114,11 +114,14 @@ format other interpreters use, so a script recorded elsewhere replays here.
 
 ## Hints
 
-`/open-hints` lays a companion *InvisiClues* file over the story pane — its
-own topic menu on top, the clue text below, driven with the arrow keys and
-whatever it prompts for. lanthorn finds a hint file sitting beside the
-story automatically, or you can fetch one for free from the story picker
-before you even start playing (see [Getting started](getting-started.md)).
+`/open-hints` (or **Alt+4**) shows the Journal's **Hints** tab, which runs a
+companion *InvisiClues* file beside the story — its own topic menu on top, the
+clue text below, driven with the arrow keys and whatever it prompts for once you
+click into it. lanthorn finds a hint file sitting beside the story automatically,
+or you can fetch one for free — from the story picker before you even start
+playing (see [Getting started](getting-started.md)), or with the tab's
+**Download hints…** button (`/download-hints`) in the game. The tab and how the
+keyboard moves in and out of it are described in [the map](the-map.md).
 
 ## Going deeper
 

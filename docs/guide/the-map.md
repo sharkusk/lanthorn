@@ -23,9 +23,8 @@ above the story window, and Glulx games get it from the bold room heading
 Inform prints as you enter — but you never configure any of it.
 
 **The Journal.** The panel on the right is the Journal, and it has tabs along
-its top: **Map**, **Room**, **Inventory** and **Documents**. Click a tab name,
-press **Alt+1**, **Alt+2**, **Alt+3** or **Alt+5** (Alt+4 is kept for a Hints tab
-to come), or run `/journal-tab map|room|inventory|documents`
+its top: **Map**, **Room**, **Inventory**, **Hints** and **Documents**. Click a tab
+name, press **Alt+1** to **Alt+5**, or run `/journal-tab map|room|inventory|hints|documents`
 (`/journal-next-tab` and `/journal-prev-tab` step through them). The leader
 panel (`Ctrl+P`) has `j`, `k` and `i` for the first three. Your terminal may need
 "Option as Alt" turned on for the Alt keys to reach lanthorn. The Room tab shows
@@ -43,6 +42,25 @@ the map: the room's name and layer, the description the game last printed there
 right-click menu does; Details (or a double-click on the room) opens the Room tab.
 Esc, clicking the room again, or clicking empty map space puts the card away; with
 nothing selected there is no card.
+
+**The Hints tab.** A game's *InvisiClues* file, if lanthorn finds one beside the
+story (or you have downloaded one), runs here in a window of its own: its topic
+menu on top, the clue text below, an input row at the bottom. It starts the first
+time you show the tab and keeps its place while you look at other tabs. With no hint
+file the tab says so and offers **Download hints…** (`/download-hints`, also
+`Shift+H` in the story browser). If the story ships its own `HINT` command, the tab
+points you at that too.
+
+Who is typing? The keyboard stays with the story when you show the tab by clicking
+its label, pressing **Alt+4** or running `/open-hints`. It moves to the hint window
+when you **click inside it**, or press **Tab** on an empty story prompt while the
+tab is showing (**Shift+Tab** goes back the other way). While the hint window has
+it, every key goes to the hint file — arrows, Enter and single letters included,
+because InvisiClues menus are driven that way — and **PageUp/PageDown** scroll the
+clues. The mouse wheel scrolls them whoever holds the keyboard. The input that has
+the keyboard shows the cursor and the other one dims, and the **Hints** label gets a
+`▸` in front. **Esc**, **Tab** on an empty hint line, a click on the story, or
+switching to another tab hands the keyboard back to the story.
 
 **The Documents tab.** The manual, the map, the feelies: whatever sits in this
 game's documents folder (see [getting started](getting-started.md)) is listed in

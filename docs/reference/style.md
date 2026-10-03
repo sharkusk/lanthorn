@@ -133,6 +133,13 @@ Every themeable `style.toml` selector: which role or selector it derives from, a
 | `journal.map.card.description` | Elements | Style | `text` |  | |
 | `journal.map.card.seen` | Elements | Style | `muted` |  | |
 | `journal.map.card.button` | Elements | Style | `accent` | `bold reversed` | |
+| `journal.hints.transcript` | Elements | Style | `text` |  | |
+| `journal.hints.input` | Elements | Style | `text` |  | |
+| `journal.hints.input:unfocused` | Elements | Style | `muted` | `dim` | |
+| `journal.hints.builtin` | Elements | Style | `muted` | `italic` | |
+| `journal.hints.nohint` | Elements | Style | `muted` |  | |
+| `journal.hints.button` | Elements | Style | `accent` | `bold reversed` | |
+| `journal.hints.tab:focused` | Elements | Style | `accent` | `bold` | |
 | `journal.docs.row` | Elements | Style | `text` |  | |
 | `journal.docs.row:selected` | Elements | Style | `accent` | `reversed` | |
 | `journal.docs.meta` | Elements | Style | `muted` |  | |

@@ -727,19 +727,31 @@ know which side you're on).
   after a few seconds, so a "map exported" or "style reloaded" note never
   interrupts the transcript. `/dump-notifications` replays the recent ones into
   the transcript if you missed a slide-by.
-- **In-game hints** — `/open-hints` lays a hint panel over the story pane (the
-  story pauses beneath it) that runs a companion *Invisiclues* `.z5` in a second
-  Z-machine session, resizing with the pane. The panel renders the file's full
-  split screen — its topic menu in the upper
-  window with the clue text below — and forwards your keystrokes to it, so you
-  drive the menu exactly as the file intends (arrows to move the highlight, plus
-  whatever letters it prompts for, e.g. to pick a topic and reveal successive
-  hints). `PageUp`/`PageDown` scroll back through the revealed clues in the lower
-  window, and `Esc` closes. The hint file is auto-detected beside the story (or
-  inside a sibling
-  `.zip`), matched to *that* game by name so a multi-game folder never crosses
-  wires, and remembered per game; if the story ships its own `HINT` command, the
-  panel points you at that too. The downloaded *InvisiClues* files open on a
+- **In-game hints** — the Journal's **Hints** tab (`Alt+4`, `/journal-tab hints`,
+  `/open-hints`; `hints_tab.rs`) runs a companion *Invisiclues* `.z5` in a second
+  Z-machine session (`AppState.overlays.hints`, never saved to the archive). The
+  session starts the first time the tab is on screen and is kept, as the same
+  object, across tab switches until quit. The tab renders the file's full split
+  screen — its topic menu in the upper window with the clue text below, the
+  built-in-`HINT` line, and an input row at the bottom — and, while it holds the
+  keyboard, forwards every key to it (arrows, Enter and single characters for
+  `read_char` menus); `PageUp`/`PageDown` and the wheel scroll the clues. The hint
+  file is auto-detected beside the story (or inside a sibling `.zip`), matched to
+  *that* game by name so a multi-game folder never crosses wires, and remembered
+  per game; with nothing resolving the tab shows the no-hint message and a
+  **Download hints…** button (`download-hints`, a registry command both the game and
+  the story browser run). An ambiguous pick (`HintResolution::AskUser`) has no
+  chooser: `host::hints::open` reports it as `Ok(None)` and the tab shows the
+  no-hint body.
+  **Focus** is `Focus::Hints`, and `AppState::hints_have_keyboard()` is the one
+  question everything asks (focus AND the tab on screen AND a session running), so
+  the keyboard can never be in an invisible window (SQ-0599). Showing the tab —
+  label click, `Alt+4`, `open-hints` — never moves it. A click inside the hint
+  window, or Tab from an empty story prompt (story → hints → debug windows →
+  story), does; Esc, Tab on an empty hint input, a click on the story and any tab
+  switch return it. The focused input shows the cursor, the other dims
+  (`journal.hints.input:unfocused`), and the tab label wears `▸`
+  (`journal.hints.tab:focused`). The downloaded *InvisiClues* files open on a
   "your screen is only N characters wide" banner (their menu names can be very
   long); lanthorn skips it for you and drops you straight on the topic menu —
   turn `hint_skip_screen_warning = false` in the settings if you'd rather see it.

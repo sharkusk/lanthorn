@@ -105,6 +105,17 @@ while any such tag, or this Unreleased section, still exists.*
   that cycled the command panel and inventory now just opens and closes the
   command panel.
 
+- **Hints moved from a pop-up into the Journal.** `/open-hints` no longer covers the
+  story: the hint file now runs in the Journal's new **Hints** tab (`Alt+4`, or
+  `/journal-tab hints`), starts by itself the first time you show it, and keeps its
+  place in the hint menu while you look at other tabs. The keyboard stays with the
+  story until you click inside the hint window (or press Tab on an empty prompt); the
+  focused input shows the cursor, the other dims, and the tab label gets a `▸` mark.
+  Esc, Tab on an empty hint line, a click on the story or another tab hand the
+  keyboard back. With no hint file the tab says so and offers **Download hints…**,
+  and `/download-hints` now works in a running game as well as in the story browser.
+  Styleable as `journal.hints.*`.
+
 ### Fixed
 
 - **Hints are found in game for a story played from a disk image.** Zork I from
