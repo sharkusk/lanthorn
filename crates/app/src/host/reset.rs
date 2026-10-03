@@ -412,6 +412,8 @@ pub fn reset_game(
             // its sink.)
             session.set_stream_files(game_dir);
             let start_loc = session.current_location();
+            // The opening room, not the pre-restart one (SQ-1710).
+            super::turn::sync_current_room(state, &*session);
             state.reset_sound_sidecars();
             // A restart is a new game: the death the old one left unresolved died with it, and so
             // did the `tried` record a fatal move there might still owe. Carried across, an

@@ -150,6 +150,15 @@ fn days_to_ymd(mut days: u64) -> (u64, u64, u64) {
     (y, m, d)
 }
 
+/// Point `state.current_room_name` at the room the engine is in NOW (`None` when it
+/// reports no location, rather than leaving a stale name). Every path that swaps
+/// game state without a normal turn — restore, resume, rewind, restart — calls this
+/// so the status line, `save_summary` and the room-name highlight never name the
+/// pre-swap room (SQ-1710).
+pub fn sync_current_room(state: &mut AppState, session: &dyn Engine) {
+    state.current_room_name = session.current_location().map(|l| l.name);
+}
+
 /// Re-observe the VM's current location after a restore/resume: fold the room into the
 /// map, deselect the viewed layer, select the room, and recenter the map pane on it.
 /// Produces no transcript output. Shared by every host restore/resume arm.
@@ -176,6 +185,7 @@ pub fn reobserve_location(
     // change with no passage behind it. Cleared before the early return, so a restore into a game
     // that reports no location does not carry the old one's death either. (SQ-0671, SQ-0673)
     state.death_watch = Default::default();
+    sync_current_room(state, session);
     let Some(snap) = session.current_location() else { return };
     let rid = snap.number as mapper::graph::RoomId;
     let restore_result = TurnResult::observation(snap);

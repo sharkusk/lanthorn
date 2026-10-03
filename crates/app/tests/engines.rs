@@ -37,6 +37,8 @@ mod sq1586_host_hints_open;
 mod sq1596_min_story_screen_floor;
 #[path = "suites/sq1654_scrollback_preserves_screens.rs"]
 mod sq1654_scrollback_preserves_screens;
+#[path = "suites/sq1710_restore_syncs_current_room.rs"]
+mod sq1710_restore_syncs_current_room;
 #[path = "suites/sq1656_preserve_clear_top_anchor.rs"]
 mod sq1656_preserve_clear_top_anchor;
 #[path = "suites/sq1661_topanchor_followease.rs"]
