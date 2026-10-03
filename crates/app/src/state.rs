@@ -4953,6 +4953,11 @@ impl AppState {
         if let Some(c) = self.map_render.borrow_mut().as_mut() {
             let current = graph.current();
             for r in &mut c.rm.rooms {
+                // A ghost shares its real room's id but is a placeholder: the render
+                // keeps it never-current and labelled "to Cellar" (SQ-1698).
+                if r.ghost.is_some() {
+                    continue;
+                }
                 r.is_current = Some(r.id) == current;
                 if let Some(room) = graph.room(r.id) {
                     // Compare before writing: labels rarely change, and this
@@ -8000,6 +8005,46 @@ mod tests {
         assert_eq!(s.frame_layer(&live, None), cellar, "viewed layer still wins on the live graph");
         s.set_viewed_layer(None);
         assert_eq!(s.frame_layer(&live, None), MAIN_LAYER, "falls back to the current room's layer");
+    }
+
+    /// A two-layer graph: Hall -> Study on main, Study --Down--> Sump on "Under" (one way only,
+    /// so the ghost on main reads "to Sump"). The player stands in the Sump.
+    fn ghost_fixture() -> mapper::graph::MapGraph {
+        use mapper::direction::Direction;
+        let mut g = mapper::graph::MapGraph::new();
+        for (id, n) in [(1, "Hall"), (2, "Study"), (4, "Sump")] {
+            g.upsert_room(id, n.into());
+        }
+        g.set_pos(1, (0, 0));
+        g.set_pos(2, (1, 0));
+        g.set_pos(4, (0, 0));
+        g.add_edge(1, Direction::E, 2);
+        g.add_edge(2, Direction::W, 1);
+        let under = g.new_layer(Some(0), "Under".into());
+        g.set_room_layer(4, under);
+        g.add_edge(2, Direction::Down, 4);
+        g.set_current(4);
+        g
+    }
+
+    /// SQ-1698: a ghost shares its real room's id, so the per-frame live refresh in
+    /// `cached_map_render` used to overwrite "to Sump" with "Sump" (and light the ghost as the
+    /// current room, which the renderer deliberately never does).
+    #[test]
+    fn live_refresh_leaves_a_cross_layer_ghost_label_and_current_flag_alone() {
+        let g = ghost_fixture();
+        let mut s = AppState::default();
+        let _ = s.cached_map_render(mapper::layer::MAIN_LAYER, &g);
+        while s.map_render_in_flight() {
+            s.poll_render_job(&g);
+            std::thread::yield_now();
+        }
+        // Refresh runs on every call, whatever the generation.
+        let rm = s.cached_map_render(mapper::layer::MAIN_LAYER, &g);
+        let ghost = rm.rooms.iter().find(|r| r.id == 4).expect("main draws a ghost for the Sump");
+        assert!(ghost.ghost.is_some(), "fixture: room 4 is a ghost here");
+        assert_eq!(ghost.label, "to Sump", "the refresh must not rename a ghost");
+        assert!(!ghost.is_current, "the player is never standing in a placeholder");
     }
 
     /// Replay outranks an animation, matching the map pane's own order.
