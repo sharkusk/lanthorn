@@ -517,8 +517,28 @@ pin it. The text margin is not carved out of a stretched text window. A click
 in a stretched graphics window reports the inverse-stretched DESIGN-pixel
 position inside the window (`glk_cfg::cell_offset_to_design_px`, via
 `glk_mouse_target_design`); grid windows still report cells (drawn == told) and
-cell mode is unchanged. Not yet done: the window mask (`WindowMask`, P4:
-coverage-classify these same cell rects) and raster mode.
+cell mode is unchanged. Not yet done: raster mode.
+
+**The window mask (SQ-1703 P4).** `WindowMask=<n>` names a Blorb Pict; per
+Windows Glulxe's `config.htm` a white pixel makes the window transparent there
+and any other pixel is opaque (alpha 0 also counts as transparent). Verified on
+the specimens: Narcolepsy's Pict 3 is 800x600, pure black and white (the left
+half opaque, the right half a thought-bubble; its look comes entirely from the
+mask, the margin windows are never painted) and Photopia's Pict 39 is a black
+640x480 field with 32 white corner pixels. The Pict is loaded through the
+ordinary `PictSource` when stretch mode switches on (`apply_glk_design`), carried
+as one `glk_cfg::GlkMask` (a summed-area table) in `AppState::glk_mask` and the
+session, and dropped with the per-game `glk_design = false` switch (no mask in
+cell mode). It stretches per axis exactly as the frame does. Art: a graphics
+canvas has its alpha zeroed where the mask is transparent (`GlkMask::clip_canvas`,
+design pixels, applied in `convert_design_tree`). Text and fills: a cell whose
+area is LESS than 50% inside the mask is hidden, exactly half stays
+(`GlkMask::cell_visible`, cell edges `floor(i * mask_size / cells)` so
+neighbours share edges; `visible_cells` gives a whole pane). Hidden cells are
+reset to blank in the `glk_mask_outside` style (derives from `graphics`) after
+the pane renders. Presentation only: the story is told the same screen, so
+`chars_in` is untouched. At real pane sizes Photopia's corners are sub-cell and
+hide nothing; only a 2x2-pixel-cell pane would.
 
 **And we answer for it.** A game can ask the interpreter what colour it actually
 paints a given style — and at least one game asks in order to find out whether

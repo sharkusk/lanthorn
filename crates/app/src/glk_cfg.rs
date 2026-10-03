@@ -203,6 +203,130 @@ pub fn design_rect_to_cells(
     (x0, y0, x1 - x0, y1 - y0)
 }
 
+/// The Windows Glk window-shape mask (`WindowMask=<pict>`), SQ-1703 P4, as
+/// a coverage table. Windows Glulxe's `config.htm`: "If a particular pixel in
+/// the graphic is white then the window is transparent at that point, else it
+/// is opaque." Transparent shows what lies behind the window (here the pane
+/// background). The mask is the design frame's shape, so it is stretched per
+/// axis over whatever it is asked about, exactly as the frame is.
+///
+/// Holds a summed-area table so any cell's opaque coverage is O(1).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct GlkMask {
+    width: u32,
+    height: u32,
+    /// `(width + 1) * (height + 1)` prefix sums of opaque pixels.
+    sums: Vec<u32>,
+}
+
+impl GlkMask {
+    /// Build from per-pixel opacity, row-major, `width * height` long.
+    pub fn from_opaque(width: u32, height: u32, opaque: &[bool]) -> Option<GlkMask> {
+        if width == 0 || height == 0 || opaque.len() != (width as usize) * (height as usize) {
+            return None;
+        }
+        let stride = width as usize + 1;
+        let mut sums = vec![0u32; stride * (height as usize + 1)];
+        for y in 0..height as usize {
+            let mut run = 0u32;
+            for x in 0..width as usize {
+                run += opaque[y * width as usize + x] as u32;
+                sums[(y + 1) * stride + x + 1] = sums[y * stride + x + 1] + run;
+            }
+        }
+        Some(GlkMask { width, height, sums })
+    }
+
+    /// Build from a decoded Pict: a pixel is transparent when it is white
+    /// (every channel 255) or has no alpha, else opaque.
+    pub fn from_rgba(img: &image::RgbaImage) -> Option<GlkMask> {
+        let opaque: Vec<bool> =
+            img.pixels().map(|p| p.0[3] != 0 && !(p.0[0] == 255 && p.0[1] == 255 && p.0[2] == 255)).collect();
+        GlkMask::from_opaque(img.width(), img.height(), &opaque)
+    }
+
+    /// The mask picture's size in its own pixels.
+    pub fn size(&self) -> (u32, u32) {
+        (self.width, self.height)
+    }
+
+    fn rect_sum(&self, x0: u32, y0: u32, x1: u32, y1: u32) -> u32 {
+        let s = self.width as usize + 1;
+        let at = |x: u32, y: u32| self.sums[y as usize * s + x as usize];
+        at(x1, y1) + at(x0, y0) - at(x1, y0) - at(x0, y1)
+    }
+
+    /// Opaque and total mask pixels under cell `(cx, cy)` of a `cols x rows`
+    /// grid stretched over the whole mask. Cell edges are `floor(i * size /
+    /// cells)` on each axis, so neighbours share edges exactly; a cell
+    /// narrower than a mask pixel still owns at least one.
+    pub fn cell_coverage(&self, cx: u32, cy: u32, cols: u32, rows: u32) -> (u32, u32) {
+        let (cols, rows) = (cols.max(1), rows.max(1));
+        let edge = |i: u32, size: u32, n: u32| ((i.min(n) as u64 * size as u64) / n as u64) as u32;
+        let (mut x0, mut x1) = (edge(cx, self.width, cols), edge(cx + 1, self.width, cols));
+        let (mut y0, mut y1) = (edge(cy, self.height, rows), edge(cy + 1, self.height, rows));
+        if x1 <= x0 {
+            x0 = x0.min(self.width - 1);
+            x1 = x0 + 1;
+        }
+        if y1 <= y0 {
+            y0 = y0.min(self.height - 1);
+            y1 = y0 + 1;
+        }
+        (self.rect_sum(x0, y0, x1, y1), (x1 - x0) * (y1 - y0))
+    }
+
+    /// Whether cell `(cx, cy)` is drawn: a cell with LESS than 50% of its area
+    /// inside the mask is hidden (exactly half stays). THE rule — the TUI and
+    /// any other host share it. Presentation only: what the story is told
+    /// never depends on it.
+    pub fn cell_visible(&self, cx: u32, cy: u32, cols: u32, rows: u32) -> bool {
+        let (opaque, area) = self.cell_coverage(cx, cy, cols, rows);
+        opaque as u64 * 2 >= area as u64
+    }
+
+    /// [`Self::cell_visible`] for a whole `cols x rows` pane, row-major.
+    pub fn visible_cells(&self, cols: u32, rows: u32) -> Vec<bool> {
+        (0..rows).flat_map(|y| (0..cols).map(move |x| self.cell_visible(x, y, cols, rows))).collect()
+    }
+
+    /// Clip a window's canvas to the mask: `canvas` is the window `rect`
+    /// `(left, top, width, height)` in DESIGN pixels on a `design`-pixel
+    /// frame; every pixel whose mask sample is transparent gets alpha 0.
+    /// Returns `None` when the mask leaves the whole rect opaque.
+    pub fn clip_canvas(
+        &self,
+        canvas: &image::RgbaImage,
+        rect: (u32, u32, u32, u32),
+        design: (u32, u32),
+    ) -> Option<image::RgbaImage> {
+        let (dw, dh) = (design.0.max(1) as u64, design.1.max(1) as u64);
+        let (cw, ch) = (canvas.width().max(1) as u64, canvas.height().max(1) as u64);
+        // Cheap exit: the mask region under the whole window is solid.
+        let lo = |v: u32, d: u64, size: u32| ((v as u64 * size as u64) / d) as u32;
+        let hi = |v: u32, d: u64, size: u32| (((v as u64 * size as u64).div_ceil(d)) as u32).min(size);
+        let (rx0, rx1) = (lo(rect.0, dw, self.width), hi(rect.0 + rect.2, dw, self.width));
+        let (ry0, ry1) = (lo(rect.1, dh, self.height), hi(rect.1 + rect.3, dh, self.height));
+        if rx1 > rx0 && ry1 > ry0 && self.rect_sum(rx0, ry0, rx1, ry1) == (rx1 - rx0) * (ry1 - ry0) {
+            return None;
+        }
+        let mut out: Option<image::RgbaImage> = None;
+        for y in 0..canvas.height() {
+            // Canvas pixel centre -> design y -> mask y.
+            let dy = rect.1 as u64 * 2 * ch + (2 * y as u64 + 1) * rect.3 as u64;
+            let my = ((dy * self.height as u64) / (2 * ch * dh)).min(self.height as u64 - 1) as u32;
+            for x in 0..canvas.width() {
+                let dx = rect.0 as u64 * 2 * cw + (2 * x as u64 + 1) * rect.2 as u64;
+                let mx = ((dx * self.width as u64) / (2 * cw * dw)).min(self.width as u64 - 1) as u32;
+                if self.rect_sum(mx, my, mx + 1, my + 1) == 0 {
+                    out.get_or_insert_with(|| canvas.clone()).get_pixel_mut(x, y).0[3] = 0;
+                }
+            }
+        }
+        out
+    }
+}
+
 #[cfg(all(test, feature = "t-persist"))]
 mod tests {
     use super::*;
@@ -344,5 +468,81 @@ mod tests {
                 }
             }
         }
+    }
+
+    /// A `w x h` mask, opaque where `f(x, y)`.
+    fn mask(w: u32, h: u32, f: impl Fn(u32, u32) -> bool) -> GlkMask {
+        let px: Vec<bool> = (0..h).flat_map(|y| (0..w).map(move |x| (x, y))).map(|(x, y)| f(x, y)).collect();
+        GlkMask::from_opaque(w, h, &px).unwrap()
+    }
+
+    #[test]
+    fn a_cell_under_half_inside_the_mask_is_hidden_exactly_at_the_threshold() {
+        // 8x4 mask over a 2x1 grid: each cell is 4x4 = 16 mask pixels.
+        // Cell 0 has `n` opaque pixels (filled row-major), cell 1 none.
+        for n in 0..=16u32 {
+            let m = mask(8, 4, |x, y| x < 4 && y * 4 + x < n);
+            assert_eq!(m.cell_coverage(0, 0, 2, 1), (n, 16));
+            assert_eq!(m.cell_visible(0, 0, 2, 1), n >= 8, "n = {n}: exactly half (8 of 16) stays");
+            assert!(!m.cell_visible(1, 0, 2, 1), "all-out cell hidden");
+        }
+        let solid = mask(8, 4, |_, _| true);
+        assert!(solid.visible_cells(2, 1).iter().all(|&v| v), "all-in");
+    }
+
+    #[test]
+    fn coverage_stretches_per_axis_over_the_mask() {
+        // Left 3/8 opaque, full height: x edge at 3 of 8 mask px; y is irrelevant.
+        let m = mask(8, 6, |x, _| x < 3);
+        // 4 cols x 3 rows: col edges 0,2,4,6,8 -> col 0 fully in, col 1 half
+        // (x 2..4 has x=2 only), col 2/3 out.
+        let v = m.visible_cells(4, 3);
+        for row in 0..3usize {
+            assert_eq!(&v[row * 4..row * 4 + 4], &[true, true, false, false], "row {row}");
+        }
+        // The same mask over a different grid: 5 cols, edges floor(i*8/5) = 0,1,3,4,6,8.
+        assert_eq!(m.cell_coverage(1, 0, 5, 1), (2 * 6, 2 * 6), "x in 1..3 both opaque");
+        assert_eq!(m.cell_coverage(2, 0, 5, 1), (0, 6), "x in 3..4 is outside");
+        // Only the part inside counts: cols=5, col 2 spans x 3..4 -> 0 of 6.
+        assert!(!m.cell_visible(2, 0, 5, 1));
+        // Anisotropic: 2 cols x 6 rows.
+        let top = mask(8, 6, |_, y| y < 2);
+        let g = top.visible_cells(2, 6);
+        assert_eq!(g.iter().filter(|&&v| v).count(), 2 * 2, "only the top 2 of 6 rows");
+    }
+
+    #[test]
+    fn more_cells_than_mask_pixels_still_gives_each_cell_a_pixel() {
+        let m = mask(2, 2, |x, y| x == 0 && y == 0);
+        let v = m.visible_cells(8, 8);
+        assert_eq!(v.iter().filter(|&&c| c).count(), 16, "the one opaque pixel owns a 4x4 block of cells");
+    }
+
+    #[test]
+    fn white_or_clear_pixels_are_transparent_everything_else_opaque() {
+        let mut img = image::RgbaImage::from_pixel(2, 2, image::Rgba([0, 0, 0, 255]));
+        img.put_pixel(1, 0, image::Rgba([255, 255, 255, 255]));
+        img.put_pixel(0, 1, image::Rgba([10, 20, 30, 0]));
+        img.put_pixel(1, 1, image::Rgba([254, 255, 255, 255]));
+        let m = GlkMask::from_rgba(&img).unwrap();
+        assert_eq!(m.cell_coverage(0, 0, 2, 2).0, 1, "black opaque");
+        assert_eq!(m.cell_coverage(1, 0, 2, 2).0, 0, "white transparent");
+        assert_eq!(m.cell_coverage(0, 1, 2, 2).0, 0, "alpha 0 transparent");
+        assert_eq!(m.cell_coverage(1, 1, 2, 2).0, 1, "near-white is opaque");
+    }
+
+    #[test]
+    fn clip_canvas_zeroes_alpha_where_the_mask_is_transparent_in_design_space() {
+        // 4x2 mask over a 40x20 design frame: left half opaque.
+        let m = mask(4, 2, |x, _| x < 2);
+        let canvas = image::RgbaImage::from_pixel(10, 20, image::Rgba([9, 9, 9, 255]));
+        // A window at design (10, 0) 10x20: wholly in the opaque half -> untouched.
+        assert!(m.clip_canvas(&canvas, (10, 0, 10, 20), (40, 20)).is_none());
+        // A window at design (10, 0) 20x20 with a 20px canvas: its right half is outside.
+        let wide = image::RgbaImage::from_pixel(20, 20, image::Rgba([9, 9, 9, 255]));
+        let c = m.clip_canvas(&wide, (10, 0, 20, 20), (40, 20)).expect("partly outside");
+        assert_eq!(c.get_pixel(9, 5).0[3], 255);
+        assert_eq!(c.get_pixel(10, 5).0[3], 0);
+        assert_eq!(c.get_pixel(19, 19).0[3], 0);
     }
 }

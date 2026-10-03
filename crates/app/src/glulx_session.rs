@@ -1027,6 +1027,17 @@ impl GlulxSession {
         self.refresh_screen();
     }
 
+    /// Load (or clear, `None`) the stretch-mode window mask from Blorb `Pict`
+    /// `resnum` (SQ-1703 P4) and return it for the host to carry. Redraws.
+    pub fn set_glk_mask(&mut self, resnum: Option<u32>) -> Option<std::sync::Arc<crate::glk_cfg::GlkMask>> {
+        if self.quit {
+            return None;
+        }
+        let mask = self.appglk().set_design_mask(resnum);
+        self.refresh_screen();
+        mask
+    }
+
     /// The Glk screen the layout is currently measured against, with every
     /// leaf window's rect in that screen's layout units (SQ-1703).
     pub fn glk_layout(&mut self) -> GlkLayout {

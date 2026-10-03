@@ -366,6 +366,22 @@ fn render_story_pane_frame(
     let mut win_rects: Vec<(u32, WinKind, Rect)> = Vec::new();
     let gc = grid_scheme(state, model);
     let metrics = render_node(&model.root, &model.status, char_mode, introspect, state, inner, buf, gi, &mut grid_links, &mut win_rects, &gc);
+    // SQ-1703 P4: the window mask hides every cell it covers under 50%, over
+    // whatever was drawn there (text, art placeholder, filler). The mask spans
+    // the whole stretched frame, i.e. `inner` (the whole pane in Glulx).
+    if let (true, Some(mask)) = (state.glk_stretch, state.glk_mask.as_ref()) {
+        let outside = state.colors.theme.get("glk_mask_outside").style;
+        for y in 0..inner.height {
+            for x in 0..inner.width {
+                if !mask.cell_visible(x as u32, y as u32, inner.width as u32, inner.height as u32) {
+                    if let Some(c) = buf.cell_mut((inner.x + x, inner.y + y)) {
+                        c.reset();
+                        c.set_symbol(" ").set_style(outside);
+                    }
+                }
+            }
+        }
+    }
     // Keep gvm's snap-margin (the strips of `area` outside `inner`) clean, so no
     // stale cells from a prior frame or the map remain beside the window tree.
     fill_margin(area, inner, model, state, buf);

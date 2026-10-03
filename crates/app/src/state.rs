@@ -3215,6 +3215,9 @@ pub struct AppState {
     /// their cell rect (aspect not honoured) and no text margin is carved out
     /// of a text window. Set by `apply_glk_design`; `false` in cell mode.
     pub glk_stretch: bool,
+    /// The story's window-shape mask (`WindowMask`, SQ-1703 P4) while stretch
+    /// mode is on and the Pict loaded; cells it covers under 50% are hidden.
+    pub glk_mask: Option<std::sync::Arc<crate::glk_cfg::GlkMask>>,
 
     /// The global `honor_game_colours` default (from config.toml/CLI, before any
     /// garglk.ini or per-game override), captured at boot. `reload_style` recomputes
@@ -3925,6 +3928,7 @@ impl Default for AppState {
             garglk_overlay: None,
             glk_design: None,
             glk_stretch: false,
+            glk_mask: None,
             honor_game_colours_base: true,
             v6_pixel_lock_base: false,
             guidance_base: false,

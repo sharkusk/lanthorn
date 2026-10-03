@@ -171,6 +171,7 @@ Every themeable `style.toml` selector: which role or selector it derives from, a
 | `story_info_documents` | Elements | Style | `story_info_value` |  | |
 | `story_info_documents_button` | Elements | Style | `accent` | `bold reversed` | |
 | `graphics` | Elements | Style | `chrome` |  | |
+| `glk_mask_outside` | Elements | Style | `graphics` |  | |
 | `inline_image` | Elements | Style | `chrome` |  | |
 | `story_header` | Elements | Style | `muted` |  | |
 | `story_header_active` | Elements | Style | `accent` | `bold` | |

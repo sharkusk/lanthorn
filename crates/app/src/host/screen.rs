@@ -148,6 +148,11 @@ pub fn apply_glk_design(session: &mut dyn Engine, state: &mut AppState, game_dir
     let on = design.is_some()
         && session.as_any_mut().downcast_mut::<GlulxSession>().map(|gs| gs.set_glk_design(design)).is_some();
     state.glk_stretch = on;
+    // P4: the window mask rides with the design state, in stretch mode only.
+    state.glk_mask = match (on, state.glk_design.as_ref().and_then(|d| d.mask_pict)) {
+        (true, Some(pict)) => session.as_any_mut().downcast_mut::<GlulxSession>().and_then(|gs| gs.set_glk_mask(Some(pict))),
+        _ => None,
+    };
     on
 }
 

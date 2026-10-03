@@ -318,6 +318,10 @@ pub struct AppGlk {
     /// ([`crate::glk_cfg::glk_design_screen`]), so a pane resize or a cell-size
     /// change relayouts with no host hook to forget. `screen_override` wins.
     design: Option<(u32, u32)>,
+    /// The `.cfg` window-shape mask while stretch mode is on (SQ-1703 P4); the
+    /// same value the renderer reads off `AppState::glk_mask`. Presentation
+    /// only: nothing the story is told depends on it.
+    mask: Option<std::sync::Arc<crate::glk_cfg::GlkMask>>,
     /// Resolves + caches Blorb `Pict` resources for `graphics_draw_image`.
     picts: crate::graphics::PictSource,
     /// Live sound channels, keyed by Glk channel ref (BTree for stable iterate).
@@ -543,6 +547,7 @@ impl AppGlk {
             char_px,
             screen_override: None,
             design: None,
+            mask: None,
             picts,
             schannels: BTreeMap::new(),
             next_schannel: 0,
@@ -562,6 +567,17 @@ impl AppGlk {
     /// `design` field. Takes effect at the next relayout.
     pub fn set_design(&mut self, design: Option<(u32, u32)>) {
         self.design = design;
+    }
+
+    /// Load the stretch-mode window mask from Blorb `Pict` `resnum` (SQ-1703
+    /// P4; `None` clears it). Returns the mask for the host to carry. A Pict
+    /// that is missing or will not decode leaves the window unmasked.
+    pub fn set_design_mask(&mut self, resnum: Option<u32>) -> Option<std::sync::Arc<crate::glk_cfg::GlkMask>> {
+        self.mask = resnum
+            .and_then(|n| self.picts.image(n))
+            .and_then(|img| crate::glk_cfg::GlkMask::from_rgba(&img.to_rgba8()))
+            .map(std::sync::Arc::new);
+        self.mask.clone()
     }
 
     /// The design-pixel screen in force (an explicit override, else the
@@ -1530,8 +1546,10 @@ impl AppGlk {
     /// story did not know it had. Drawn is never fewer than told: an integer in
     /// `(d - 1, d + 1)` is at least `floor(d)`.
     ///
-    /// P4 hook: the window mask (`GlkDesign::mask_pict`) will classify these
-    /// same cell rects by pixel coverage; nothing here consults it yet.
+    /// P4: graphics canvases are clipped to the window mask here, at pixel
+    /// level; text cells under it are hidden by the renderer
+    /// ([`crate::glk_cfg::GlkMask::cell_visible`]), never by changing the
+    /// characters told.
     fn convert_design_tree(&self, tree: &WinTree, screen: &gvm::glk::GlkScreen, cells: (u32, u32)) -> WinNode {
         let cell_rect = |r: GlkRect| {
             let (l, t, w, h) = crate::glk_cfg::design_rect_to_cells(
@@ -1561,7 +1579,18 @@ impl AppGlk {
                     fg: *fg,
                     reverse: *reverse,
                 };
-                let inner = self.convert_tree(&leaf);
+                let mut inner = self.convert_tree(&leaf);
+                // P4: a graphics canvas is clipped to the window mask at pixel
+                // level (design pixels, same per-axis stretch as the frame).
+                if let (Some(mask), WinNode::Graphics(gw)) = (&self.mask, &mut inner) {
+                    if let Some(clipped) = mask.clip_canvas(
+                        &gw.canvas,
+                        (rect.left, rect.top, rect.width, rect.height),
+                        screen.size,
+                    ) {
+                        gw.canvas = std::sync::Arc::new(clipped);
+                    }
+                }
                 let filler = || {
                     WinNode::Buffer(BufferWindow { win: 0, bg: *bg, fg: *fg, ..Default::default() })
                 };

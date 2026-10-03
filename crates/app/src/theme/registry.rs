@@ -586,6 +586,8 @@ pub static REGISTRY: std::sync::LazyLock<Vec<RegRow>> = std::sync::LazyLock::new
     row("story_info_documents", Section::Elements, Kind::Style, Some("story_info_value"), Delta::EMPTY),
     row("story_info_documents_button", Section::Elements, Kind::Style, Some("accent"), mods(true, false, false, true)),
     row("graphics", Section::Elements, Kind::Style, Some("chrome"), Delta::EMPTY),
+    // SQ-1703 P4: the cells a Windows Glk window mask hides in stretch mode.
+    row("glk_mask_outside", Section::Elements, Kind::Style, Some("graphics"), Delta::EMPTY),
     row("inline_image", Section::Elements, Kind::Style, Some("chrome"), Delta::EMPTY),
     row("story_header", Section::Elements, Kind::Style, Some("muted"), Delta::EMPTY),
     row("story_header_active", Section::Elements, Kind::Style, Some("accent"), mods(true, false, false, false)),
@@ -926,6 +928,7 @@ mod tests {
         "story_info_documents",
         "story_info_documents_button",
         "graphics",
+        "glk_mask_outside",
         "inline_image",
         "story_header",
         "story_header_active",

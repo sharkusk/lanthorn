@@ -106,6 +106,7 @@ version = 1   # style schema version — do not remove; lets lanthorn flag an ou
 # story_info_documents = { parent = "story_info_value" }
 # story_info_documents_button = { parent = "accent", bold = true, reversed = true }
 # graphics = { parent = "chrome" }
+# glk_mask_outside = { parent = "graphics" }
 # inline_image = { parent = "chrome" }
 # story_header = { parent = "muted" }
 # story_header_active = { parent = "accent", bold = true }
