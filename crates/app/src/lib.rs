@@ -98,6 +98,7 @@ pub mod export_json;
 pub mod export_svg;
 pub mod fetch_worker;
 pub mod metadata_import;
+pub mod miss_cache;
 pub mod cover_gallery;
 pub mod ifdb;
 pub mod documents_chooser;

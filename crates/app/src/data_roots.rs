@@ -37,6 +37,7 @@ pub struct DataRoots {
     catalogue: PathBuf,
     player: PathBuf,
     documents: PathBuf,
+    cache: PathBuf,
     create_documents: bool,
 }
 
@@ -56,7 +57,13 @@ impl DataRoots {
     pub fn single(base: impl Into<PathBuf>) -> Self {
         let base = base.into();
         // No user dir to hang `documents/` off, so it sits inside the base.
-        DataRoots { documents: base.join("documents"), create_documents: false, catalogue: base.clone(), player: base }
+        DataRoots {
+            documents: base.join("documents"),
+            cache: base.join("cache"),
+            create_documents: false,
+            catalogue: base.clone(),
+            player: base,
+        }
     }
 
     /// The roots for a launch.
@@ -80,7 +87,13 @@ impl DataRoots {
             None => catalogue.clone(),
         };
         let docs = documents.dir.clone().unwrap_or_else(|| user_dir.join("documents"));
-        DataRoots { catalogue, player, documents: docs, create_documents: documents.auto_create }
+        DataRoots {
+            catalogue,
+            player,
+            documents: docs,
+            cache: user_dir.join("cache"),
+            create_documents: documents.auto_create,
+        }
     }
 
     /// The shared catalogue base.
@@ -96,6 +109,12 @@ impl DataRoots {
     /// The root of the per-game documents folders (see [`crate::documents`]).
     pub fn documents(&self) -> &Path {
         &self.documents
+    }
+
+    /// Install-wide derived data that is safe to delete (`<user_dir>/cache`),
+    /// shared by every player; see [`crate::miss_cache`].
+    pub fn cache(&self) -> &Path {
+        &self.cache
     }
 
     /// Whether lanthorn creates a linked game's documents folder on its own

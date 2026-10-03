@@ -2028,32 +2028,54 @@ pub fn resolve_entry_from(
 /// takes the plain path with no selector at all: nothing about a single-game
 /// floppy or a single-game download changes, which is most of the corpus.
 pub fn resolve_entries(path: &Path, roots: &DataRoots) -> Vec<StoryEntry> {
-    if let Some((_, stories)) = crate::hints::mounted_stories(path) {
-        if stories.len() >= 2 {
-            let mut rows: Vec<StoryEntry> = stories
-                .into_iter()
-                .filter_map(|(story, image)| {
-                    let loaded = crate::hints::extract_story(story.bytes).ok()?;
-                    // `image` is THIS story's, not the volume's: on a hybrid
-                    // disc the two differ, and the row's badge and interpreter
-                    // both follow from it (SQ-0876).
-                    entry_from_loaded(path, Some(&story.name), loaded, Some(image), roots)
-                })
-                .collect();
-            // One build per machine, once — the same fold the directory scan
-            // applies, applied here because this door builds a volume's rows on
-            // its own (SQ-0878).
-            dedupe_within_a_volume(&mut rows);
-            return rows;
+    // A disk image already found to hold no story, and unchanged since (SQ-1691):
+    // every scan and index path comes through here, so one check serves them all.
+    if crate::miss_cache::is_known_miss(roots, path) {
+        return Vec::new();
+    }
+    match crate::hints::scan_mounted_stories(path) {
+        crate::hints::DiskScan::Stories(found) => {
+            let stories = found.stories;
+            if stories.len() >= 2 {
+                let mut rows: Vec<StoryEntry> = stories
+                    .into_iter()
+                    .filter_map(|(story, image)| {
+                        let loaded = crate::hints::extract_story(story.bytes).ok()?;
+                        // `image` is THIS story's, not the volume's: on a hybrid
+                        // disc the two differ, and the row's badge and interpreter
+                        // both follow from it (SQ-0876).
+                        entry_from_loaded(path, Some(&story.name), loaded, Some(image), roots)
+                    })
+                    .collect();
+                // One build per machine, once — the same fold the directory scan
+                // applies, applied here because this door builds a volume's rows on
+                // its own (SQ-0878).
+                dedupe_within_a_volume(&mut rows);
+                return rows;
+            }
+            // Exactly one story: the plain path, no selector — `disk_entry` stays
+            // `None`, exactly as it always did. A story the format itself listed
+            // is opened through `resolve_entry`, whose tiebreak is the format's
+            // own. One that only the Scott scan found (the format lists nothing,
+            // so the tiebreak is empty and `load_mounted_story_from` falls back
+            // to this same single candidate, SQ-1470) is already in hand, and
+            // taking it from here spares a second mount and, on a crunched
+            // Commodore disk, a second 6502 depack (SQ-1691).
+            if found.listed == 0 {
+                let (story, image) = stories.into_iter().next().expect("one story");
+                let Ok(loaded) = crate::hints::extract_story(story.bytes) else { return Vec::new() };
+                return entry_from_loaded(path, None, loaded, Some(image), roots).into_iter().collect();
+            }
+            return resolve_entry(path, roots).into_iter().collect();
         }
-        // Exactly one story: the plain path, no selector — `resolve_entry`
-        // reaches it through `load_mounted_story_from(path, None)`, which
-        // since SQ-1470 falls back to this same single Scott candidate when
-        // the format's own Z-code/Glulx/Blorb tiebreak (`MountedDisk::story`)
-        // finds nothing — see `hints::read_story_file`'s own doc. Nothing
-        // about an ordinary single-story floppy changes: `disk_entry` stays
-        // `None`, exactly as it always did.
-        return resolve_entry(path, roots).into_iter().collect();
+        // Mounted fine and holds nothing: the one outcome worth remembering. It
+        // would only have gone on to `resolve_entry` and failed the same way,
+        // after a second look.
+        crate::hints::DiskScan::NoStory => {
+            crate::miss_cache::record_miss(roots, path);
+            return Vec::new();
+        }
+        crate::hints::DiskScan::NotADisk => {}
     }
     // A zip is a container too (SQ-1098). Its entries carry no `DiskImage`, so
     // every row's save key is its ENTRY's basename — which is what had to be

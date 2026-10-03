@@ -784,9 +784,46 @@ pub use blorb::medium::DiskImage;
 pub fn mounted_stories(
     path: &Path,
 ) -> Option<(DiskImage, Vec<(blorb::medium::DiskStory, DiskImage)>)> {
-    let raw = std::fs::read(path).ok()?;
-    blorb::medium::DiskImage::detect(&raw)?;
-    let disk = mount_disk(path, raw).ok()?;
+    match scan_mounted_stories(path) {
+        DiskScan::Stories(found) => Some((found.format, found.stories)),
+        DiskScan::NotADisk | DiskScan::NoStory => None,
+    }
+}
+
+/// What [`scan_mounted_stories`] found at a path.
+pub enum DiskScan {
+    /// Not a disk image, or one that would not read or mount. Says nothing
+    /// about whether a story is there, so nothing is remembered about it.
+    NotADisk,
+    /// A disk image that mounted fine and holds no story of any engine — the one
+    /// outcome [`crate::miss_cache`] remembers.
+    NoStory,
+    /// A disk image with at least one story.
+    Stories(DiskStories),
+}
+
+/// The stories of one mounted disk image: the value [`scan_mounted_stories`]
+/// carries so a caller never mounts (and never depacks) the same file twice.
+pub struct DiskStories {
+    /// The volume's format.
+    pub format: DiskImage,
+    /// Each story with its own medium, as [`mounted_stories`] documents.
+    pub stories: Vec<(blorb::medium::DiskStory, DiskImage)>,
+    /// How many of `stories`, from the front, `MountedDisk::stories` itself
+    /// listed; the rest are Scott programs found by [`scott_disk_stories`].
+    /// Zero with one story means that one story is a Scott program, which the
+    /// plain launch path would find through the very same scan.
+    pub listed: usize,
+}
+
+/// [`mounted_stories`], keeping the difference between "not a disk" and "a disk
+/// with nothing playable on it" (see [`DiskScan`]).
+pub fn scan_mounted_stories(path: &Path) -> DiskScan {
+    let Ok(raw) = std::fs::read(path) else { return DiskScan::NotADisk };
+    if blorb::medium::DiskImage::detect(&raw).is_none() {
+        return DiskScan::NotADisk;
+    }
+    let Ok(disk) = mount_disk(path, raw) else { return DiskScan::NotADisk };
     let format = disk.format();
     let mut stories: Vec<_> = disk
         .stories()
@@ -796,6 +833,7 @@ pub fn mounted_stories(
             (s, image)
         })
         .collect();
+    let listed = stories.len();
     // Scott Adams programs — the Commodore 64 *Mysterious Adventures*
     // compilation disks (SQ-1414) — that `MountedDisk::stories` does not cover:
     // that door stays Z-code/Glulx/Blorb-only by design (`blorb::medium`'s own
@@ -805,7 +843,11 @@ pub fn mounted_stories(
         let image = disk.image_for(&story.name);
         stories.push((story, image));
     }
-    (!stories.is_empty()).then_some((format, stories))
+    if stories.is_empty() {
+        DiskScan::NoStory
+    } else {
+        DiskScan::Stories(DiskStories { format, stories, listed })
+    }
 }
 
 /// Names a Commodore/CBM DOS directory lists that are never a game, even when
@@ -839,6 +881,21 @@ const NON_GAME_DISK_NAMES: [&str; 2] = ["BOOT", "DOS.SYS"];
 /// their databases ARE ordinary catalogue files (`A4.DAT`, `DATABASE`,
 /// `SHULK.DB`) that `contents()` already lists.
 fn scott_disk_stories(disk: &blorb::medium::MountedDisk) -> Vec<blorb::medium::DiskStory> {
+    scott_disk_scan(disk).stories
+}
+
+/// What [`scott_disk_scan`] found: the playable Scott programs, and — only when
+/// there are none and the disk's program was crunched — the one that could not
+/// be turned into one, for [`read_story_file`]'s honest refusal (SQ-1488).
+struct ScottScan {
+    stories: Vec<blorb::medium::DiskStory>,
+    crunched: Option<CrunchedProgram>,
+}
+
+/// [`scott_disk_stories`] and the crunched-program diagnosis from ONE pass over
+/// the candidates, so the 6502 emulation runs once per candidate: it used to run
+/// here and again in a separate diagnosis walk (SQ-1691).
+fn scott_disk_scan(disk: &blorb::medium::MountedDisk) -> ScottScan {
     let already: Vec<String> = disk.stories().into_iter().map(|s| s.name).collect();
     let mut candidates: Vec<(String, Vec<u8>)> = disk.contents();
     if disk.format() == blorb::medium::DiskImage::AtariDos2 {
@@ -868,28 +925,56 @@ fn scott_disk_stories(disk: &blorb::medium::MountedDisk) -> Vec<blorb::medium::D
     // working, uncrunched game AND a second, crunched one — has not been
     // seen; every crunched disk in `stories/scott-dialects/c64/` holds
     // exactly the one program the quest's own title describes.
-    let depacked: Vec<(String, Vec<u8>)> =
-        if cheap.is_empty() && disk.format() == blorb::medium::DiskImage::CommodoreD64 {
-            candidates
-                .into_iter()
-                .filter_map(|(name, bytes)| {
-                    let depacked = blorb::depack::depack_c64_prg(&bytes).ok()?;
-                    let prg = depacked_prg_bytes(&depacked);
-                    resolves_to_scott(&prg).then_some((name, prg))
-                })
-                .collect()
-        } else {
-            Vec::new()
-        };
+    let mut depacked: Vec<(String, Vec<u8>)> = Vec::new();
+    // The first candidate that did not turn into a game, as the refusal names it.
+    // A candidate that never looked like a `$0801` BASIC-stub program at all
+    // ([`blorb::depack::DepackError::NoEntryPoint`]) is not evidence of a
+    // crunched program, just an ordinary file that is neither Scott nor packed.
+    let mut crunched: Option<CrunchedProgram> = None;
+    if cheap.is_empty() && disk.format() == blorb::medium::DiskImage::CommodoreD64 {
+        for (name, bytes) in candidates {
+            match depack_counted(&bytes) {
+                Err(blorb::depack::DepackError::NoEntryPoint) => {}
+                Err(_) => {
+                    crunched.get_or_insert(CrunchedProgram::NotUnpacked(name));
+                }
+                Ok(d) => {
+                    let prg = depacked_prg_bytes(&d);
+                    if resolves_to_scott(&prg) {
+                        depacked.push((name, prg));
+                    } else {
+                        crunched.get_or_insert(CrunchedProgram::Unrecognised(name));
+                    }
+                }
+            }
+        }
+    }
 
-    cheap
+    let stories = cheap
         .into_iter()
         .chain(depacked)
         .map(|(name, bytes)| {
             let name = saga_us_keyed_name(&name, &bytes);
             blorb::medium::DiskStory { name, bytes }
         })
-        .collect()
+        .collect();
+    ScottScan { stories, crunched }
+}
+
+/// [`blorb::depack::depack_c64_prg`], counted per thread so a test can assert
+/// how many times one resolve emulates (SQ-1691).
+fn depack_counted(
+    prg: &[u8],
+) -> Result<blorb::depack::DepackedProgram, blorb::depack::DepackError> {
+    #[cfg(test)]
+    DEPACK_CALLS.with(|c| c.set(c.get() + 1));
+    blorb::depack::depack_c64_prg(prg)
+}
+
+#[cfg(test)]
+thread_local! {
+    /// Calls to [`depack_counted`] on this thread.
+    pub(crate) static DEPACK_CALLS: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
 }
 
 /// Whether `bytes` are a Scott Adams database this crate's own loader agrees
@@ -945,38 +1030,6 @@ impl CrunchedProgram {
             Self::NotUnpacked(name) | Self::Unrecognised(name) => name,
         }
     }
-}
-
-/// The Commodore disk's one crunched program, when [`scott_disk_stories`]
-/// could not turn it into a playable game — SQ-1488's honest refusal in
-/// place of the generic "no story file" message below.
-///
-/// Only asked when `scott_disk_stories` found nothing at all: a candidate
-/// that already resolved is never reported as failed, and this only runs on
-/// a Commodore disk (`blorb::depack::depack_c64_prg` reads a CBM `PRG`'s own
-/// load-address header, which is specifically what a D64 directory keeps).
-/// A candidate that never looked like a `$0801` BASIC-stub program at all —
-/// [`blorb::depack::DepackError::NoEntryPoint`] — is not reported: that is
-/// not evidence of a crunched program, just an ordinary file that is neither
-/// Scott Adams nor packed.
-fn crunched_program_name(disk: &blorb::medium::MountedDisk) -> Option<CrunchedProgram> {
-    if disk.format() != blorb::medium::DiskImage::CommodoreD64 {
-        return None;
-    }
-    let already: Vec<String> = disk.stories().into_iter().map(|s| s.name).collect();
-    disk.contents()
-        .into_iter()
-        .filter(|(name, _)| !already.iter().any(|n| n.eq_ignore_ascii_case(name)))
-        .filter(|(name, _)| !NON_GAME_DISK_NAMES.iter().any(|n| name.eq_ignore_ascii_case(n)))
-        .filter(|(_, bytes)| !resolves_to_scott(bytes))
-        .find_map(|(name, bytes)| match blorb::depack::depack_c64_prg(&bytes) {
-            Err(blorb::depack::DepackError::NoEntryPoint) => None,
-            Err(_) => Some(CrunchedProgram::NotUnpacked(name)),
-            Ok(depacked) if !resolves_to_scott(&depacked_prg_bytes(&depacked)) => {
-                Some(CrunchedProgram::Unrecognised(name))
-            }
-            Ok(_) => None, // resolves — `scott_disk_stories` would have found it too
-        })
 }
 
 /// A save-key-safe name for a Scott candidate found on a disk (SQ-1470).
@@ -1121,7 +1174,7 @@ fn read_story_file(path: &Path, want: Option<&str>) -> io::Result<(Vec<u8>, Opti
         // tiebreak"), and has to reach that one candidate the same way
         // `scott-cli` does without `--story`. Ambiguous (zero, or more than
         // one) falls through to the refusal below, exactly as before.
-        let mut scott = scott_disk_stories(&disk);
+        let ScottScan { stories: mut scott, crunched } = scott_disk_scan(&disk);
         if scott.len() == 1 {
             let story = scott.remove(0);
             let image = disk.image_for(&story.name);
@@ -1133,7 +1186,7 @@ fn read_story_file(path: &Path, want: Option<&str>) -> io::Result<(Vec<u8>, Opti
         // the only thing a disk like the Hulk collection's could ever say
         // (every file scanned, none of them a Scott table in the clear).
         if scott.is_empty() {
-            if let Some(crunched) = crunched_program_name(&disk) {
+            if let Some(crunched) = crunched {
                 let name = crunched.name();
                 let reason = match crunched {
                     CrunchedProgram::NotUnpacked(_) => "lanthorn could not unpack it",

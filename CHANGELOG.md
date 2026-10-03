@@ -118,6 +118,12 @@ while any such tag, or this Unreleased section, still exists.*
 
 ### Fixed
 
+- **Folders of Commodore 64 disks list much faster.** Crunched disk images with
+  no playable game were unpacked three times each, every time the folder was
+  listed or a library was indexed. They are now unpacked once, and lanthorn
+  remembers which disks held no game (until the file changes), so a folder of
+  C64 disks that took 12.4 seconds to list now takes 4.2 seconds the first time
+  and 0.07 seconds after that.
 - **Hints are found in game for a story played from a disk image.** Zork I from
   an Amiga disk showed its hint file in the story list but the in-game hints said
   none was available; the game and the story list now pick the same file.
