@@ -54,6 +54,20 @@ CI is exempt — both workflows export `CARGO_BUILD_JOBS` from the runner's own 
 count before installing Rust, because a 3-4 core runner running six or eight rustc
 processes is slower AND puts a crate the size of `app` near the memory ceiling.
 
+**The VM engines and the 6502 depacker are built at `opt-level = 3` even in dev/test
+(SQ-1702).** `[profile.dev.package.*]` in the root `Cargo.toml` covers `lanthorn-gvm`,
+`lanthorn-zvm`, `lanthorn-scott`, `mos6502` and `regenerator2000-core`; `test` inherits
+`dev`, so nextest and CI get it. Debug-assertions and overflow-checks stay ON for them
+(only the opt-level moves). Measured 2026-10-03, same machine, engines binary: the
+Anchorhead walkthrough 279s -> 32s, its `_is_deterministic_` twin 630s -> 62s,
+`story_identity_sweep` 1017s -> 161s (that one is the C64 depacker's 6502 emulator, not the
+VMs: the engine override alone left it at 966s), and the whole `binary(engines)` run now
+finishes in 320s, 601/601 passing. `-p lanthorn-gvm` tests 47s -> 6s, `-p lanthorn-zvm`
+8s -> 9s (already fast), `-p lanthorn-scott` 90s -> 12s. Cost: a cold `--tests` build of
+`lanthorn` went 43s -> 54s, and touching an engine and rebuilding `app` is unchanged
+(~9-13s); the in-crate `t-all` run is unchanged (~50s incl. build). Remaining slow case:
+`cover_frontispiece` (~240s), still inside the depacker.
+
 **`app`'s ~3,271 in-crate `#[test]`s (SQ-1242) sit behind `t-*` Cargo features, not
 bare `cfg(test)`.** `crates/app/Cargo.toml`'s `[features]` table names nine groups
 following the module tree (`t-input`, `t-render`, `t-picker`, `t-session`,

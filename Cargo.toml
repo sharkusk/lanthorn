@@ -34,6 +34,23 @@ rust-version = "1.98"
 [profile.dev]
 debug = "line-tables-only"
 
+# SQ-1702: the three VM engines are optimised in dev/test builds. The Anchorhead
+# walkthrough spent ~95% of 345s inside the unoptimised Glulx interpreter loop.
+# Only opt-level changes: debug-assertions and overflow-checks stay ON on purpose
+# (debug builds must keep catching arithmetic overflow in the VMs).
+[profile.dev.package.lanthorn-gvm]
+opt-level = 3
+[profile.dev.package.lanthorn-zvm]
+opt-level = 3
+[profile.dev.package.lanthorn-scott]
+opt-level = 3
+# The C64 crunched-PRG depacker (blorb::depack) runs a 6502 emulator; sampling
+# story_identity_sweep showed it dominating that test, not the VMs.
+[profile.dev.package.mos6502]
+opt-level = 3
+[profile.dev.package.regenerator2000-core]
+opt-level = 3
+
 # SQ-1510: lanthorn depended on a personal fork of ratatui-image
 # (sharkusk/ratatui-image, branch lanthorn-shm) for kitty shared-memory
 # transmission (`t=s`), two macOS platform fixes to it, and a capability
