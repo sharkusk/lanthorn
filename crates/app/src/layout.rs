@@ -38,6 +38,9 @@ pub struct PaneLayout {
     /// the debug inspector holds the slot), zero-area on every other tab, so
     /// nothing that hit-tests the map has to ask which tab is showing.
     pub map: Rect,
+    /// The Map tab's room card (SQ-1688): the strip under `map` while a room is
+    /// pinned, zero-area otherwise. `map` has already been shortened by it.
+    pub map_card: Rect,
     pub command_band: Rect,
     pub help_row: Rect,
     /// How wide/tall each draggable boundary's grab zone reaches, in cells —
@@ -203,6 +206,15 @@ pub fn split_pct_for_story_width(panes_area: Rect, want: u16) -> u16 {
 /// is gone (SQ-1684): the story pane keeps those rows, and the inventory is a
 /// Journal tab.
 pub fn compute_pane_layout(area: Rect, state: &AppState) -> PaneLayout {
+    compute_pane_layout_with_card(area, state, 0)
+}
+
+/// [`compute_pane_layout`] with the Map tab's room card (SQ-1688) carved off the
+/// bottom of the Journal body: `card_rows` is `map_card::rows_for` (0 = no card).
+/// The map rect shrinks by that many rows and `map_card` is the strip under it;
+/// `compute_pane_layout` is the card-less form, which is what every caller that
+/// only wants the STORY geometry uses (the card never touches it).
+pub fn compute_pane_layout_with_card(area: Rect, state: &AppState, card_rows: u16) -> PaneLayout {
     // ── Command band: a bottom band under the story pane, above the help row,
     // sliding up when opened (SQ-0664).
     let band_visible = state.command_band_visible();
@@ -240,11 +252,17 @@ pub fn compute_pane_layout(area: Rect, state: &AppState) -> PaneLayout {
             Rect::new(journal.x, journal.y + 1, journal.width, journal.height - 1),
         )
     };
-    let map = if debugging || state.journal_tab == JournalTab::Map {
+    let mut map = if debugging || state.journal_tab == JournalTab::Map {
         journal_body
     } else {
         Rect::default()
     };
+    let mut map_card = Rect::default();
+    if !debugging && state.journal_tab == JournalTab::Map && card_rows > 0 && card_rows < map.height {
+        let h = map.height - card_rows;
+        map_card = Rect::new(map.x, map.y + h, map.width, card_rows);
+        map.height = h;
+    }
 
     PaneLayout {
         frame: area,
@@ -253,6 +271,7 @@ pub fn compute_pane_layout(area: Rect, state: &AppState) -> PaneLayout {
         journal_tabs,
         journal_body,
         map,
+        map_card,
         command_band: band_area,
         help_row,
         grab_zone_cells: state.config.grab_zone_cells.clamp(MIN_GRAB_ZONE_CELLS, MAX_GRAB_ZONE_CELLS),

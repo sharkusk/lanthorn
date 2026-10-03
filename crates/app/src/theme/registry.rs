@@ -494,6 +494,16 @@ pub static REGISTRY: std::sync::LazyLock<Vec<RegRow>> = std::sync::LazyLock::new
     row("journal.tabbar", Section::Elements, Kind::Style, Some("text"), Delta::EMPTY),
     row("journal.tab", Section::Elements, Kind::Style, Some("muted"), Delta::EMPTY),
     row("journal.tab:active", Section::Elements, Kind::Style, Some("accent"), mods(true, false, false, false)),
+    // ── The Map tab's room card (SQ-1688): the compact summary under the map while a
+    // room is pinned. `journal.map.card` is its ground; the rest style one element
+    // each, laid over it.
+    row("journal.map.card", Section::Elements, Kind::Style, Some("text"), Delta::EMPTY),
+    row("journal.map.card.border", Section::Elements, Kind::Style, Some("chrome"), Delta::EMPTY),
+    row("journal.map.card.name", Section::Elements, Kind::Style, Some("heading"), Delta::EMPTY),
+    row("journal.map.card.layer", Section::Elements, Kind::Style, Some("muted"), Delta::EMPTY),
+    row("journal.map.card.description", Section::Elements, Kind::Style, Some("text"), Delta::EMPTY),
+    row("journal.map.card.seen", Section::Elements, Kind::Style, Some("muted"), Delta::EMPTY),
+    row("journal.map.card.button", Section::Elements, Kind::Style, Some("accent"), mods(true, false, false, true)),
     // ── The Journal's Documents tab (SQ-1681). A list row and its selection, the
     // kind/size column, the spoiler marker, the folder line and the buttons under
     // it, the empty-folder hint; the pager's text, its title line and its
@@ -856,6 +866,13 @@ mod tests {
         "journal.tabbar",
         "journal.tab",
         "journal.tab:active",
+        "journal.map.card",
+        "journal.map.card.border",
+        "journal.map.card.name",
+        "journal.map.card.layer",
+        "journal.map.card.description",
+        "journal.map.card.seen",
+        "journal.map.card.button",
         "journal.docs.row",
         "journal.docs.row:selected",
         "journal.docs.meta",

@@ -495,6 +495,10 @@ struct PaneRects {
     /// neither a map click nor a story click, and must not fall through to
     /// either (nor to v6 mouse delivery).
     room_tab: Rect,
+    /// The Map tab's room card (SQ-1688): its rect (in `pane_layout.map_card`)
+    /// and each button's hit-rect this frame. A click on the card never reaches
+    /// the map or the story.
+    map_card_buttons: Vec<(app::map_card::MapCardButton, Rect)>,
     /// Hit-rects for the Journal's tab bar (SQ-1684): a click shows that tab, or
     /// steps to the neighbour on the narrow form's ‹ › markers. Empty while the
     /// Journal is hidden or the debug inspector holds its slot.
@@ -675,6 +679,7 @@ fn draw_frame(
     let mut map_control_view = mapper::layer::MapView::Drawn;
     let mut room_dock_tabs_out: Vec<(app::state::RoomDockView, Rect)> = Vec::new();
     let mut journal_tabs_out: Vec<(app::journal::TabBarHit, Rect)> = Vec::new();
+    let mut map_card_buttons_out: Vec<(app::map_card::MapCardButton, Rect)> = Vec::new();
     let mut room_dock_room_out: Option<RoomId> = None;
     let mut room_dock_body_total_out: u16 = 0;
     let mut room_dock_body_viewport_out: u16 = 0;
@@ -767,7 +772,15 @@ fn draw_frame(
         } else {
             Vec::new()
         };
-        let pane_layout = app::layout::compute_pane_layout(full, state);
+        // The Map tab's room card (SQ-1688) is sized against the card-less
+        // layout's Journal body, then carved off the map.
+        let card_graph = replay_graph.as_ref().unwrap_or(&mapper.graph);
+        let card_rows = app::map_card::rows_for(
+            card_graph,
+            state,
+            app::layout::compute_pane_layout(full, state).journal_body,
+        );
+        let pane_layout = app::layout::compute_pane_layout_with_card(full, state, card_rows);
         pane_layout_out = pane_layout;
 
         // While any background map job is in flight — a tidy relayout or the
@@ -980,6 +993,8 @@ fn draw_frame(
                             }
                         }
                         map_area = map_fp.content;
+                        // The room card under the map (SQ-1688); empty rect = no card.
+                        map_card_buttons_out = app::map_card::draw(card_graph, state, pane_layout.map_card, buf);
                         // Apply pulsing border color overlay when a tidy job is in flight
                         if let Some(pulse_color) = map_border_override {
                             let pulse_style = Style::default().fg(pulse_color);
@@ -1294,7 +1309,7 @@ fn draw_frame(
 
     // The draw closure runs exactly once, so the overlay ladder always ran.
     let overlay_rects = overlay_rects.expect("draw_frame closure runs exactly once");
-    Ok(PaneRects { map: map_area, story: story_area, boundaries: pane_layout_out.boundary_zones(), pane_layout: pane_layout_out, room_rects: room_rects_out, map_marker_rects: map_marker_rects_out, map_view: map_control_view, room_tab: if state.room_tab_visible() && state.debug.is_none() { pane_layout_out.journal_body } else { Rect::default() }, journal_tabs: journal_tabs_out, room_dock_tabs: room_dock_tabs_out, room_dock_room: room_dock_room_out, room_dock_body_total: room_dock_body_total_out, room_dock_body_viewport: room_dock_body_viewport_out, room_menu_area: room_menu_area_out, room_menu_items: room_menu_items_out, layer_tabs: layer_tabs_out, border_controls: border_controls_out, debug_tabs: debug_tabs_out, dialog: overlay_rects.dialog, aux_dialog: overlay_rects.aux_dialog, history_prompt: overlay_rects.history_prompt, font_check: overlay_rects.font_check, fetch_keep: overlay_rects.fetch_keep, reset_dialog: overlay_rects.reset_dialog, region_prompt: overlay_rects.region_prompt, game_over: overlay_rects.game_over, save_name_dialog: overlay_rects.save_name_dialog, text_entry: overlay_rects.text_entry, confirm_delete: overlay_rects.confirm_delete, confirm_overwrite: overlay_rects.confirm_overwrite, confirm_spoiler: overlay_rects.confirm_spoiler, quit_dialog: overlay_rects.quit_dialog, launch_dialog: overlay_rects.launch_dialog, hints_panel: overlay_rects.hints_panel, command_band: band_hits, inventory_dock: inv_hits, palette: palette_hits, transcript_links: transcript_links_out, win_rects: win_rects_out, transcript_max_scroll, transcript_viewport_rows, transcript_prompt_rows, transcript_total_rows, transcript_surface, transcript_top_anchored_fits, modal_list_viewport })
+    Ok(PaneRects { map: map_area, story: story_area, boundaries: pane_layout_out.boundary_zones(), pane_layout: pane_layout_out, room_rects: room_rects_out, map_marker_rects: map_marker_rects_out, map_view: map_control_view, room_tab: if state.room_tab_visible() && state.debug.is_none() { pane_layout_out.journal_body } else { Rect::default() }, journal_tabs: journal_tabs_out, map_card_buttons: map_card_buttons_out, room_dock_tabs: room_dock_tabs_out, room_dock_room: room_dock_room_out, room_dock_body_total: room_dock_body_total_out, room_dock_body_viewport: room_dock_body_viewport_out, room_menu_area: room_menu_area_out, room_menu_items: room_menu_items_out, layer_tabs: layer_tabs_out, border_controls: border_controls_out, debug_tabs: debug_tabs_out, dialog: overlay_rects.dialog, aux_dialog: overlay_rects.aux_dialog, history_prompt: overlay_rects.history_prompt, font_check: overlay_rects.font_check, fetch_keep: overlay_rects.fetch_keep, reset_dialog: overlay_rects.reset_dialog, region_prompt: overlay_rects.region_prompt, game_over: overlay_rects.game_over, save_name_dialog: overlay_rects.save_name_dialog, text_entry: overlay_rects.text_entry, confirm_delete: overlay_rects.confirm_delete, confirm_overwrite: overlay_rects.confirm_overwrite, confirm_spoiler: overlay_rects.confirm_spoiler, quit_dialog: overlay_rects.quit_dialog, launch_dialog: overlay_rects.launch_dialog, hints_panel: overlay_rects.hints_panel, command_band: band_hits, inventory_dock: inv_hits, palette: palette_hits, transcript_links: transcript_links_out, win_rects: win_rects_out, transcript_max_scroll, transcript_viewport_rows, transcript_prompt_rows, transcript_total_rows, transcript_surface, transcript_top_anchored_fits, modal_list_viewport })
 }
 
 // ── Command-band mouse routing ───────────────────────────────────────────────
@@ -2514,6 +2529,7 @@ fn run_event_loop(boot: startup::BootResult, launched_from_library: bool) -> Run
                 .iter()
                 .map(|(_, r)| *r)
                 .chain(last_panes.room_dock_tabs.iter().map(|(_, r)| *r))
+                .chain(last_panes.map_card_buttons.iter().map(|(_, r)| *r))
                 .collect();
             match app::pane_drag::on_mouse(&mut state, m, &last_panes.pane_layout, &last_panes.boundaries, &last_panes.border_controls, &dock_chrome) {
                 DragOutcome::Ignored => {}
@@ -3669,6 +3685,37 @@ fn run_event_loop(boot: startup::BootResult, launched_from_library: bool) -> Run
                         }
                     }
                     continue 'event_loop;
+                }
+                // Map tab's room card (SQ-1688): owns every mouse event inside its
+                // rect. A left-click on a button runs what the room's right-click
+                // menu item runs (Details switches to the Room tab); anything else
+                // on the card is swallowed, so nothing passes through to the map.
+                if !state.any_modal_overlay_open() {
+                    if let Some(click) = app::map_card::click_at(
+                        last_panes.pane_layout.map_card, &last_panes.map_card_buttons, m.column, m.row,
+                    ) {
+                        if let (crossterm::event::MouseEventKind::Down(crossterm::event::MouseButton::Left),
+                                app::map_card::CardClick::Button(b)) = (m.kind, click)
+                        {
+                            if let Some(action) = b.action() {
+                                apply_action(action, &mut state, &mut mapper);
+                            } else if let Some(cmd) = b.command() {
+                                let outcome = slash::parse_in_context(
+                                    cmd, state.config.command_prefix, Context::Map,
+                                );
+                                let should_break = dispatch_slash_outcome(
+                                    outcome, &mut state, &mut mapper, &mut *session, &mut style_watcher,
+                                    &game_dir, &ifid, &arc_file, &quick_save_file, &story_bytes, &story_path,
+                                    last_panes.map, last_panes.story, true,
+                                );
+                                lifecycle::flush_pending_config_write(&mut state);
+                                if should_break {
+                                    break 'event_loop state.exit_target.into();
+                                }
+                            }
+                        }
+                        continue 'event_loop;
+                    }
                 }
                 // Room tab (SQ-0692): the tab owns every mouse event inside its
                 // rect. A left-click on one of its two view tabs switches the body;

@@ -126,6 +126,13 @@ Every themeable `style.toml` selector: which role or selector it derives from, a
 | `journal.tabbar` | Elements | Style | `text` |  | |
 | `journal.tab` | Elements | Style | `muted` |  | |
 | `journal.tab:active` | Elements | Style | `accent` | `bold` | |
+| `journal.map.card` | Elements | Style | `text` |  | |
+| `journal.map.card.border` | Elements | Style | `chrome` |  | |
+| `journal.map.card.name` | Elements | Style | `heading` |  | |
+| `journal.map.card.layer` | Elements | Style | `muted` |  | |
+| `journal.map.card.description` | Elements | Style | `text` |  | |
+| `journal.map.card.seen` | Elements | Style | `muted` |  | |
+| `journal.map.card.button` | Elements | Style | `accent` | `bold reversed` | |
 | `journal.docs.row` | Elements | Style | `text` |  | |
 | `journal.docs.row:selected` | Elements | Style | `accent` | `reversed` | |
 | `journal.docs.meta` | Elements | Style | `muted` |  | |

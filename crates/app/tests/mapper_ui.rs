@@ -60,6 +60,8 @@ mod retired_exit_surfaces;
 mod journal_tabs;
 #[path = "suites/journal_room_tab.rs"]
 mod journal_room_tab;
+#[path = "suites/journal_map_card.rs"]
+mod journal_map_card;
 #[path = "suites/sq1264_forest_randomization.rs"]
 mod sq1264_forest_randomization;
 #[path = "suites/sq1287_advent_map_layout.rs"]

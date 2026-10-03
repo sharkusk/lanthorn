@@ -36,6 +36,14 @@ left on, per story. Narrow it down far enough and the bar shortens its labels, t
 shows only the current tab between `‹` and `›`. `/toggle-map` hides or shows the
 whole Journal, and the splitter beside it drags to any width.
 
+**The room card.** Click a room on the Map tab and a compact card appears under
+the map: the room's name and layer, the description the game last printed there
+(cut with `…` to fit), the move it was seen at, and **Rename…**, **Notes…**,
+**Move to another layer…** and **Details** buttons. The first three do what the
+right-click menu does; Details (or a double-click on the room) opens the Room tab.
+Esc, clicking the room again, or clicking empty map space puts the card away; with
+nothing selected there is no card.
+
 **The Documents tab.** The manual, the map, the feelies: whatever sits in this
 game's documents folder (see [getting started](getting-started.md)) is listed in
 the Documents tab with its kind and size, so you can read it without leaving the
