@@ -4,7 +4,7 @@
 //!
 //! # What was actually invisible
 //!
-//! Not lanthorn's own `/open-hints` companion panel (`render::hints_panel`) —
+//! Not lanthorn's own `/open-hints` companion panel (`hints_tab`) —
 //! Counterfeit Monkey ships no local InvisiClues-style hint file, so that panel
 //! never opens for it at all (`hints::resolve_hint_source` finds nothing, and
 //! `open_hints` in `main.rs` only sets a status message). The game's OWN

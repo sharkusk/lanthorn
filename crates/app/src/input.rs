@@ -827,7 +827,10 @@ pub fn key_to_command(state: &AppState, key: KeyEvent) -> KeyResolve {
 
     // 10. Per-focus routing.
     match state.focus {
-        Focus::Game => {
+        // `Focus::Hints` is only ever live while the run loop's own intercept
+        // (`hints_tab::on_key`) is handing keys to the hint session; a key that
+        // reaches here with it set belongs to the story, as it would in `Game`.
+        Focus::Game | Focus::Hints => {
             // Text entry is hardwired (printable chars, Enter, Backspace, Shift+Arrows,
             // Home, PageUp/Down). Non-printable / unmatched keys fall through to a
             // Global KeyMap lookup so that non-ctrl global bindings reach Game focus.
@@ -1257,7 +1260,7 @@ pub fn mouse_to_action(
         // Must precede the story arm below: the input line sits inside the story pane, so a click
         // on it would otherwise start a text selection instead of moving the caret (SQ-0354).
         MouseEventKind::Down(MouseButton::Left)
-            if state.focus == Focus::Game && state.input_click_index(col, row).is_some() =>
+            if matches!(state.focus, Focus::Game | Focus::Hints) && state.input_click_index(col, row).is_some() =>
         {
             Action::CursorToClick(col, row)
         }
@@ -2459,6 +2462,10 @@ fn apply_action_inner(action: Action, state: &mut AppState, mapper: &mut Mapper)
         Action::CursorToClick(col, row) => {
             if let Some(idx) = state.input_click_index(col, row) {
                 state.input.cursor = idx;
+                // Clicking the story pane gives the keyboard back to the story.
+                if state.focus == Focus::Hints {
+                    state.focus = Focus::Game;
+                }
             }
         }
         Action::ZoomIn => state.zoom_in(),
@@ -3276,8 +3283,7 @@ fn apply_action_inner(action: Action, state: &mut AppState, mapper: &mut Mapper)
         Action::DocTabOpenLink(url) => crate::opener::open(&url),
 
         Action::SetJournalTab(tab) => {
-            state.set_journal_tab(tab);
-            persist_journal_tab(state);
+            state.set_journal_tab(tab);            persist_journal_tab(state);
         }
 
         Action::JournalStepTab(forward) => {
@@ -4069,10 +4075,13 @@ pub fn apply_paste(state: &mut AppState, text: &str) -> bool {
     {
         return false;
     }
-    // Hints panel: its own line buffer, ahead of the palette in the ladder.
-    if let Some(hs) = state.overlays.hints.as_mut() {
-        hs.input.push_str(&text);
-        return true;
+    // Hints tab: while it holds the keyboard, a paste lands in its input row
+    // (SQ-1685), ahead of the palette in the ladder.
+    if state.hints_have_keyboard() {
+        if let Some(hs) = state.overlays.hints.as_mut() {
+            hs.input.push_str(&text);
+            return true;
+        }
     }
     let vp = state.modal_list_viewport;
     let anim = state.config.animation.clone();
@@ -13066,9 +13075,9 @@ mod tests {
             crate::browser::action_for_command("download-documents"),
             Some(crate::browser::BrowserAction::DownloadDocuments)
         );
-        // It is the ONLY command that crosses: every other game command is still refused in the browser.
+        // Only these cross: every other game command is still refused in the browser.
         let both: Vec<&str> = COMMANDS.iter().filter(|c| in_both_worlds(c)).map(|c| c.name).collect();
-        assert_eq!(both, ["download-documents", "create-documents-folder"]);
+        assert_eq!(both, ["download-documents", "create-documents-folder", "download-hints"]);
         assert!(matches!(parse_in_context("quit", '/', Context::Browser), SlashOutcome::Error(_)));
         // The in-game palette and Tab completion offer it; /help lists it.
         assert!(crate::slash::slash_names().iter().any(|n| n == "download-documents"));

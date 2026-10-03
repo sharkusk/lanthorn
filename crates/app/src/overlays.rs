@@ -35,7 +35,6 @@ use app::render::game_over_dialog::{
     draw_game_over_dialog, game_over_dialog_key_focused, GameOverAction, GameOverDialogRects,
 };
 use app::render::file_picker::draw_file_picker;
-use app::render::hints_panel::{draw_hints_panel, HintsPanelRects};
 use app::render::history::draw_history;
 use app::render::hotkeys::draw_hotkey_dialog;
 use app::render::launch_dialog::{
@@ -76,7 +75,6 @@ pub(crate) struct OverlayRects {
     pub quit_dialog: Option<QuitDialogRects>,
     pub launch_dialog: Option<LaunchDialogRects>,
     pub region_prompt: Option<RegionPromptRects>,
-    pub hints_panel: Option<HintsPanelRects>,
 }
 
 /// Draw the z-ordered modal/overlay ladder over the current frame.
@@ -92,7 +90,6 @@ pub(crate) fn draw_all(
     state: &AppState,
     screen_model: &ScreenModel,
     story_area: Rect,
-    story_pane: Rect,
     full: Rect,
     buf: &mut Buffer,
     dialog_seed: Option<DialogRects>,
@@ -115,7 +112,6 @@ pub(crate) fn draw_all(
         quit_dialog: None,
         launch_dialog: None,
         region_prompt: None,
-        hints_panel: None,
     };
 
     // Modal dialogs center within the graphics-free text region (story text +
@@ -176,14 +172,6 @@ pub(crate) fn draw_all(
     // ── Command palette popup — drawn over everything (SQ-0419) ────────────
     if state.overlays.palette.is_some() {
         out.dialog = draw_palette(state, dialog_area, buf, modal_list_viewport, palette_hits);
-    }
-
-    // ── Hints panel overlay — drawn after the common dialogs ───────────────
-    // Laid over the story pane's full rect (not the centered dialog area), so it
-    // reads as the story panel temporarily replaced by the hint session and
-    // resizes with it.
-    if state.overlays.hints.is_some() {
-        out.hints_panel = draw_hints_panel(state, story_pane, buf);
     }
 
     out

@@ -2308,8 +2308,10 @@ fn render_input_content(
     }
 
     // Not focus-gated: the caret shows what you typed and where, which stays true
-    // while the keyboard is on the map. A modal still suppresses it.
-    if !state.any_modal_overlay_open() {
+    // while the keyboard is on the map. A modal still suppresses it — and so does
+    // the Hints tab holding the keyboard (SQ-1685): the cursor is drawn only in
+    // the input that has focus.
+    if !state.any_modal_overlay_open() && !state.hints_have_keyboard() {
         // Draw the caret where it actually IS, not always after the last char (SQ-0354). Clamped to
         // the drawn text: a long line is truncated to fit, and the caret must not be painted past
         // what is on screen.
@@ -3067,7 +3069,7 @@ fn render_middle(
             // display width of the text before it, not that text's char count.
             let cursor_x = start_col
                 + crate::textwidth::cols_of_chars(input_trunc, state.input.cursor.min(drawn)) as u16;
-            if cursor_x < body_area.right() {
+            if cursor_x < body_area.right() && !state.hints_have_keyboard() {
                 if let Some(cell) = buf.cell_mut((cursor_x, row_y)) {
                     // Mid-line, or over the ghost's first glyph: restyle the char
                     // the caret sits on (keep it readable); at the end of the line

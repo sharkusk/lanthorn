@@ -17,7 +17,7 @@ use ratatui::layout::Rect;
 use app::engine_helpers::zvm_session_opt;
 use crate::reset::reset_game;
 use crate::{
-    combined_saves, format_rfc3339, handle_map_export, map_view, open_hints, scroll_for_match,
+    combined_saves, format_rfc3339, handle_map_export, map_view, scroll_for_match,
     should_prompt_save_on_quit, toggle_style_watch,
 };
 
@@ -562,9 +562,14 @@ pub(crate) fn dispatch_slash_outcome(
             }
         }
         SlashOutcome::OpenHints => {
-            let ud = state.config.user_dir.clone();
-            let title = state.title.clone();
-            open_hints(state, story_path, ifid, &title, &ud);
+            // SQ-1685: show the Journal's Hints tab (starting its session); the
+            // keyboard stays where it was.
+            app::hints_tab::show(state, mapper, story_path, ifid);
+        }
+        SlashOutcome::DownloadHints => {
+            // SQ-1685: the Hints tab's button, and the same command the story
+            // browser runs for the selected story.
+            app::hints_tab::start_download(state, story_path);
         }
         SlashOutcome::HelpCommand(name) => {
             for line in slash::help_for_command(state.config.command_prefix, &name) {

@@ -82,7 +82,7 @@ fn available_and_open_agree_on_zork1_izm_and_skip_its_banner() {
 
     // zork1izm.z5's topic menu is a GRID (upper-window) screen, not lower-window
     // text — `hint_opening`'s own doc says so ("the menu lives in the upper
-    // window") and `render::hints_panel` draws it separately from `transcript`
+    // window") and `hints_tab` draws it separately from `transcript`
     // for exactly that reason. So "the first screen is the hint menu" is read
     // off the companion VM's live grid, not off `session.transcript`.
     let app::state::HintSource::Zcode(vm) = &session.source;

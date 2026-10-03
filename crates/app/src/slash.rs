@@ -155,6 +155,11 @@ pub enum SlashOutcome {
     /// [`crate::browser::BrowserAction::CreateDocumentsFolder`]) the selected
     /// story. The second outcome both worlds apply, see [`in_both_worlds`].
     CreateDocumentsFolder,
+    /// Download a matching InvisiClues hint file for the game the caller has in
+    /// hand (SQ-1685): the running game — from the Hints tab's button — or in the
+    /// browser (which maps it to [`crate::browser::BrowserAction::DownloadHints`])
+    /// the selected story. The third outcome both worlds apply, see [`in_both_worlds`].
+    DownloadHints,
     /// Act on the pre-game story browser. The browser has no `AppState`, so it
     /// cannot take an [`Action`]; its verbs are their own type and are applied
     /// by the picker loop. See [`crate::browser`] (SQ-0796).
@@ -337,7 +342,7 @@ pub static COMMANDS: &[CommandSpec] = &[
         usage: "download-documents", description: "choose manuals, feelies and maps listed on IFDB for this game and save them to its documents folder",
         dispatch: |_| SlashOutcome::DownloadDocuments },
     CommandSpec { name: "open-hints", category: Category::Game, context: Context::Global,
-        usage: "open-hints", description: "open the hints panel",
+        usage: "open-hints", description: "show the Journal's Hints tab, starting the hint session if needed (the keyboard stays in the story)",
         dispatch: |_| SlashOutcome::OpenHints },
     CommandSpec { name: "open-history", category: Category::Game, context: Context::Global,
         usage: "open-history", description: "open the rewind/replay history",
@@ -498,12 +503,12 @@ pub static COMMANDS: &[CommandSpec] = &[
         usage: "toggle-focus", description: "switch focus between panes",
         dispatch: |_| SlashOutcome::Action(crate::input::Action::ToggleFocus) },
     CommandSpec { name: "journal-tab", category: Category::View, context: Context::Global,
-        usage: "journal-tab <map|room|inventory|documents>", description: "show a tab of the Journal (the right-hand panel), revealing it if hidden; remembered per story",
+        usage: "journal-tab <map|room|inventory|hints|documents>", description: "show a tab of the Journal (the right-hand panel), revealing it if hidden; remembered per story",
         dispatch: |a| match a.first().copied() {
-            None => err("journal-tab: a tab name is required (map | room | inventory | documents)".to_string()),
+            None => err("journal-tab: a tab name is required (map | room | inventory | hints | documents)".to_string()),
             Some(name) => match crate::journal::JournalTab::from_name(name) {
                 Some(tab) => SlashOutcome::Action(crate::input::Action::SetJournalTab(tab)),
-                None => err(format!("journal-tab: '{name}' is not a tab (map | room | inventory | documents)")),
+                None => err(format!("journal-tab: '{name}' is not a tab (map | room | inventory | hints | documents)")),
             },
         } },
     CommandSpec { name: "journal-next-tab", category: Category::View, context: Context::Global,
@@ -785,9 +790,9 @@ pub static COMMANDS: &[CommandSpec] = &[
     CommandSpec { name: "search-ifdb", category: Category::Library, context: Context::Browser,
         usage: "search-ifdb", description: "search IFDB by title or author and download a story into this directory",
         dispatch: |_| SlashOutcome::Browser(crate::browser::BrowserAction::SearchIfdb) },
-    CommandSpec { name: "download-hints", category: Category::Library, context: Context::Browser,
-        usage: "download-hints", description: "download a matching InvisiClues hint file for the selected story",
-        dispatch: |_| SlashOutcome::Browser(crate::browser::BrowserAction::DownloadHints) },
+    CommandSpec { name: "download-hints", category: Category::Library, context: Context::Global,
+        usage: "download-hints", description: "download a matching InvisiClues hint file for this story (the selected one in the browser)",
+        dispatch: |_| SlashOutcome::DownloadHints },
     CommandSpec { name: "sort-library", category: Category::Library, context: Context::Browser,
         usage: "sort-library", description: "cycle the browser's sort column, keeping the direction",
         dispatch: |_| SlashOutcome::Browser(crate::browser::BrowserAction::SortLibrary) },
@@ -816,7 +821,7 @@ pub fn find_command(name: &str) -> Option<&'static CommandSpec> {
 /// (SQ-1680). Everything else is one or the other (SQ-0796), and the gates below
 /// keep it so; these have a counterpart on each side because the thing they act
 /// on — "this game's IFDB record" — exists on each.
-const BOTH_WORLDS: &[&str] = &["download-documents", "create-documents-folder"];
+const BOTH_WORLDS: &[&str] = &["download-documents", "create-documents-folder", "download-hints"];
 
 /// Is `spec` available in the story browser and in the game alike?
 pub fn in_both_worlds(spec: &CommandSpec) -> bool {

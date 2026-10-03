@@ -41,7 +41,7 @@ fn the_bar_draws_in_the_journals_first_row_with_the_active_tab_accented() {
             st.journal_tab = tab;
             let pl = compute_pane_layout(FRAME, &st);
             let mut buf = Buffer::empty(FRAME);
-            let hits = draw_tab_bar(pl.journal_tabs, tab, &st.colors, &mut buf);
+            let hits = draw_tab_bar(pl.journal_tabs, tab, false, &st.colors, &mut buf);
 
             let row = text_in(&buf, pl.journal_tabs);
             for t in JournalTab::ALL {
@@ -65,7 +65,7 @@ fn a_click_on_each_drawn_label_resolves_to_that_tab() {
     let st = AppState::default();
     let pl = compute_pane_layout(FRAME, &st);
     let mut buf = Buffer::empty(FRAME);
-    let hits = draw_tab_bar(pl.journal_tabs, st.journal_tab, &st.colors, &mut buf);
+    let hits = draw_tab_bar(pl.journal_tabs, st.journal_tab, false, &st.colors, &mut buf);
     for t in JournalTab::ALL {
         let (hit, r) = hits.iter().find(|(h, _)| *h == TabBarHit::Tab(t)).expect("label drawn");
         // Every cell of the label is a target.
@@ -93,9 +93,9 @@ fn narrow_bars_abbreviate_then_show_only_the_active_tab_with_step_markers() {
     let colors = st.colors.clone();
 
     // Wide enough for abbreviations only.
-    let r = Rect::new(0, 0, 20, 1);
+    let r = Rect::new(0, 0, 26, 1);
     let mut buf = Buffer::empty(r);
-    draw_tab_bar(r, JournalTab::Map, &colors, &mut buf);
+    draw_tab_bar(r, JournalTab::Map, false, &colors, &mut buf);
     let row = text_in(&buf, r);
     assert!(row.contains("Inv") && !row.contains("Inventory"), "{row:?}");
     assert!(row.contains("Docs") && !row.contains("Documents"), "the Documents tab abbreviates: {row:?}");
@@ -103,7 +103,7 @@ fn narrow_bars_abbreviate_then_show_only_the_active_tab_with_step_markers() {
     // Too narrow for any strip: the active tab between markers, and the markers step.
     let r = Rect::new(0, 0, 9, 1);
     let mut buf = Buffer::empty(r);
-    let hits = draw_tab_bar(r, JournalTab::Room, &colors, &mut buf);
+    let hits = draw_tab_bar(r, JournalTab::Room, false, &colors, &mut buf);
     let row = text_in(&buf, r);
     assert!(row.contains('\u{2039}') && row.contains('\u{203a}') && row.contains("Room"), "{row:?}");
     let next = hits.iter().find(|(h, _)| *h == TabBarHit::Next).expect("› hit").0;
@@ -118,7 +118,7 @@ fn narrow_bars_abbreviate_then_show_only_the_active_tab_with_step_markers() {
 #[test]
 fn alt_digits_switch_tabs_through_the_real_key_path_in_game_focus() {
     let mut st = AppState::default();
-    for (c, tab) in [('2', JournalTab::Room), ('3', JournalTab::Inventory), ('5', JournalTab::Documents), ('1', JournalTab::Map)] {
+    for (c, tab) in [('2', JournalTab::Room), ('3', JournalTab::Inventory), ('4', JournalTab::Hints), ('5', JournalTab::Documents), ('1', JournalTab::Map)] {
         let a = key_to_action(&st, key_alt(c));
         assert_eq!(a, Action::SetJournalTab(tab), "Alt+{c}");
         app::input::apply_action(a, &mut st, &mut mapper::mapper::Mapper::default());

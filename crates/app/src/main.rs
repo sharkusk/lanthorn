@@ -25,7 +25,6 @@ use app::input::{
 };
 use app::persist_files::restore_game;
 use app::render::dialog::{DialogRects, DialogStyle};
-use app::render::hints_panel::{hint_input_action, hint_key_routes, HintInputAct, HintKeyKind, HintsPanelRects};
 use app::render::command_band::draw_command_band;
 use app::render::map::{pulse_border_color, render_map_layered, room_screen_rects, sound_pulse_color, MarkerKind};
 use app::render::paneframe::{build_layer_segments, InsetSegment};
@@ -37,8 +36,6 @@ use mapper::layer::LayerId;
 use app::render::screen::render_story_pane;
 use app::render::draw_str_clipped;
 use app::engine::Engine;
-use app::session::TurnResult;
-use app::hints;
 use app::keymap::Context;
 use app::render::hintbar::{hint_bar, ANIM_HINTS, GAME_HINTS};
 use app::slash;
@@ -559,8 +556,6 @@ struct PaneRects {
     pub quit_dialog: Option<app::render::quit_dialog::QuitDialogRects>,
     /// Hit-rects for the launch dialog (when open).
     pub launch_dialog: Option<app::render::launch_dialog::LaunchDialogRects>,
-    /// Hit-rects for the hints panel (when open).
-    pub hints_panel: Option<HintsPanelRects>,
     /// Hit-rects for the command band (when open): its own rect, the column
     /// headers, the item rows and the quick words (rose block or flat row).
     pub command_band: app::render::command_band::CommandBandHits,
@@ -934,7 +929,7 @@ fn draw_frame(
 
                     // ── The Journal (SQ-1684): a tab bar over the active tab's body.
                     journal_tabs_out = app::journal::draw_tab_bar(
-                        pane_layout.journal_tabs, state.journal_tab, &state.colors, buf,
+                        pane_layout.journal_tabs, state.journal_tab, state.hints_have_keyboard(), &state.colors, buf,
                     );
                     match state.journal_tab {
                         JournalTab::Map => {
@@ -1097,6 +1092,9 @@ fn draw_frame(
                                 &mut inv_hits,
                             );
                         }
+                        JournalTab::Hints => {
+                            app::hints_tab::draw(state, pane_layout.journal_body, buf);
+                        }
                         JournalTab::Documents => {
                             app::documents_tab::draw(state, pane_layout.journal_body, buf);
                         }
@@ -1107,6 +1105,8 @@ fn draw_frame(
                     if state.focus == Focus::Map {
                         dim_area(buf, story_fp.content);
                     }
+                    // The story's prompt row dims while the hint session has the keyboard.
+                    app::hints_tab::dim_story_input(state, story_fp.content, buf);
                 }
             }
         }
@@ -1194,6 +1194,11 @@ fn draw_frame(
                     let hints = app::render::hintbar::debug_hints(section, mode);
                     app::render::hintbar::literal_hint_bar(&hints, w)
                 }
+                // The hint session holds the keyboard (SQ-1685): say so, and how out.
+                Focus::Hints => app::render::hintbar::literal_hint_bar(
+                    &[("Hints", "keys go to the hint window"), ("PgUp/PgDn", "scroll"), ("Esc", "back to the story")],
+                    w,
+                ),
                 // Unreachable in practice: `Focus::Map` is only ever set while
                 // the inspector owns the right-hand pane (SQ-0599), which the
                 // arm above already handles.
@@ -1221,7 +1226,6 @@ fn draw_frame(
             state,
             &screen_model,
             story_area,
-            pane_layout.story,
             full,
             buf,
             dialog_rects_out.take(),
@@ -1309,7 +1313,7 @@ fn draw_frame(
 
     // The draw closure runs exactly once, so the overlay ladder always ran.
     let overlay_rects = overlay_rects.expect("draw_frame closure runs exactly once");
-    Ok(PaneRects { map: map_area, story: story_area, boundaries: pane_layout_out.boundary_zones(), pane_layout: pane_layout_out, room_rects: room_rects_out, map_marker_rects: map_marker_rects_out, map_view: map_control_view, room_tab: if state.room_tab_visible() && state.debug.is_none() { pane_layout_out.journal_body } else { Rect::default() }, journal_tabs: journal_tabs_out, map_card_buttons: map_card_buttons_out, room_dock_tabs: room_dock_tabs_out, room_dock_room: room_dock_room_out, room_dock_body_total: room_dock_body_total_out, room_dock_body_viewport: room_dock_body_viewport_out, room_menu_area: room_menu_area_out, room_menu_items: room_menu_items_out, layer_tabs: layer_tabs_out, border_controls: border_controls_out, debug_tabs: debug_tabs_out, dialog: overlay_rects.dialog, aux_dialog: overlay_rects.aux_dialog, history_prompt: overlay_rects.history_prompt, font_check: overlay_rects.font_check, fetch_keep: overlay_rects.fetch_keep, reset_dialog: overlay_rects.reset_dialog, region_prompt: overlay_rects.region_prompt, game_over: overlay_rects.game_over, save_name_dialog: overlay_rects.save_name_dialog, text_entry: overlay_rects.text_entry, confirm_delete: overlay_rects.confirm_delete, confirm_overwrite: overlay_rects.confirm_overwrite, confirm_spoiler: overlay_rects.confirm_spoiler, quit_dialog: overlay_rects.quit_dialog, launch_dialog: overlay_rects.launch_dialog, hints_panel: overlay_rects.hints_panel, command_band: band_hits, inventory_dock: inv_hits, palette: palette_hits, transcript_links: transcript_links_out, win_rects: win_rects_out, transcript_max_scroll, transcript_viewport_rows, transcript_prompt_rows, transcript_total_rows, transcript_surface, transcript_top_anchored_fits, modal_list_viewport })
+    Ok(PaneRects { map: map_area, story: story_area, boundaries: pane_layout_out.boundary_zones(), pane_layout: pane_layout_out, room_rects: room_rects_out, map_marker_rects: map_marker_rects_out, map_view: map_control_view, room_tab: if state.room_tab_visible() && state.debug.is_none() { pane_layout_out.journal_body } else { Rect::default() }, journal_tabs: journal_tabs_out, map_card_buttons: map_card_buttons_out, room_dock_tabs: room_dock_tabs_out, room_dock_room: room_dock_room_out, room_dock_body_total: room_dock_body_total_out, room_dock_body_viewport: room_dock_body_viewport_out, room_menu_area: room_menu_area_out, room_menu_items: room_menu_items_out, layer_tabs: layer_tabs_out, border_controls: border_controls_out, debug_tabs: debug_tabs_out, dialog: overlay_rects.dialog, aux_dialog: overlay_rects.aux_dialog, history_prompt: overlay_rects.history_prompt, font_check: overlay_rects.font_check, fetch_keep: overlay_rects.fetch_keep, reset_dialog: overlay_rects.reset_dialog, region_prompt: overlay_rects.region_prompt, game_over: overlay_rects.game_over, save_name_dialog: overlay_rects.save_name_dialog, text_entry: overlay_rects.text_entry, confirm_delete: overlay_rects.confirm_delete, confirm_overwrite: overlay_rects.confirm_overwrite, confirm_spoiler: overlay_rects.confirm_spoiler, quit_dialog: overlay_rects.quit_dialog, launch_dialog: overlay_rects.launch_dialog, command_band: band_hits, inventory_dock: inv_hits, palette: palette_hits, transcript_links: transcript_links_out, win_rects: win_rects_out, transcript_max_scroll, transcript_viewport_rows, transcript_prompt_rows, transcript_total_rows, transcript_surface, transcript_top_anchored_fits, modal_list_viewport })
 }
 
 // ── Command-band mouse routing ───────────────────────────────────────────────
@@ -2107,6 +2111,15 @@ fn run_event_loop(boot: startup::BootResult, launched_from_library: bool) -> Run
         needs_redraw |= loop_tick::poll_style_watch(&mut state, &style_watcher, &mut watch_dirty);
         needs_redraw |= loop_tick::poll_documents(&mut state);
         needs_redraw |= app::documents_tab::refresh_if_needed(&mut state, &story_path);
+        // The Hints tab (SQ-1685): the keyboard cannot sit in a hint window that is
+        // not on screen; the session starts the first time its tab is shown; a
+        // finished download asks for the file to be found again.
+        if state.focus == Focus::Hints && !state.hints_have_keyboard() {
+            state.focus = Focus::Game;
+            needs_redraw = true;
+        }
+        needs_redraw |= app::hints_tab::ensure_started(&mut state, &story_path, &ifid);
+        needs_redraw |= app::hints_tab::poll_download(&mut state);
         loop_tick::sync_theme_colours(&state, &mut *session);
         needs_redraw |= loop_tick::poll_glulx_resize(
             &mut *session,
@@ -2862,105 +2875,20 @@ fn run_event_loop(boot: startup::BootResult, launched_from_library: bool) -> Run
             continue;
         }
 
-        // ── Hints panel intercept — before normal action routing ──────────────
-        // When the hints panel is open, route keyboard/mouse directly here and
-        // continue (swallowing events the panel does not handle).
-        if state.overlays.hints.is_some() {
-            match &event {
-                Event::Key(k) if k.kind == KeyEventKind::Press => {
-                    match hint_key_routes(k.code) {
-                        HintKeyKind::Close => {
-                            state.overlays.hints = None;
-                        }
-                        HintKeyKind::Scroll(delta) => {
-                            // PageUp/PageDown scroll the clue window (mirrors the
-                            // wheel below); other keys reach the companion VM.
-                            let max = last_panes.hints_panel.as_ref().map_or(0, |hp| hp.max_scroll);
-                            let anim = state.config.animation.clone();
-                            if let Some(hs) = &mut state.overlays.hints {
-                                hs.scroll_by(delta, max, &anim);
-                            }
-                        }
-                        HintKeyKind::ToSession => {
-                            if let Some(ref mut hs) = state.overlays.hints {
-                                // The companion VM's pending input mode decides routing:
-                                // a `read_char` (InvisiClues menu) forwards the keypress
-                                // to the VM; a line read edits the local input buffer.
-                                let kind = {
-                                    let app::state::HintSource::Zcode(ref vm) = hs.source;
-                                    vm.pending_input()
-                                };
-                                // Owned result of whichever submit ran (None when the key
-                                // was buffered or ignored), folded in after the VM borrow
-                                // ends so the borrow checker allows `hs.apply_turn`.
-                                let result: Option<TurnResult> = match hint_input_action(kind, k.code) {
-                                    HintInputAct::ForwardKey => {
-                                        // Menu navigation: map the crossterm key with the
-                                        // SAME converter the main event loop uses (arrows,
-                                        // Enter, letters map identically), then drive the VM.
-                                        // Do not buffer into `hs.input`. (Esc is handled by
-                                        // the separate Close arm and never reaches here.)
-                                        app::engine::key_event_to_input(*k).and_then(|ki| {
-                                            let app::state::HintSource::Zcode(ref mut vm) = hs.source;
-                                            vm.submit_key(ki)
-                                        })
-                                    }
-                                    HintInputAct::SubmitLine => {
-                                        let line = std::mem::take(&mut hs.input);
-                                        let app::state::HintSource::Zcode(ref mut vm) = hs.source;
-                                        Some(vm.submit(&line))
-                                    }
-                                    HintInputAct::BufferPop => {
-                                        hs.input.pop();
-                                        None
-                                    }
-                                    HintInputAct::BufferPush(c) => {
-                                        hs.input.push(c);
-                                        None
-                                    }
-                                    HintInputAct::Ignore => None,
-                                };
-                                if let Some(result) = result {
-                                    let quit = result.quit;
-                                    hs.apply_turn(&result);
-                                    // An InvisiClues file can @quit — close the panel.
-                                    if quit {
-                                        state.overlays.hints = None;
-                                    }
-                                }
-                            }
-                        }
-                    }
+        // ── Hints tab keyboard (SQ-1685) — before normal action routing ───────
+        // While the hint session holds the keyboard (a click inside its window, or
+        // Tab from the story), every key goes to the hint VM — arrows and single
+        // characters included, for InvisiClues' read_char menus — except Ctrl/Alt
+        // chords, which keep their usual meaning. The tab is not a modal: the
+        // overlays above still outrank it.
+        if state.hints_have_keyboard() {
+            if let Event::Key(k) = &event {
+                if k.kind == KeyEventKind::Press
+                    && app::hints_tab::on_key(&mut state, *k) == app::hints_tab::KeyOutcome::Handled
+                {
+                    continue;
                 }
-                Event::Mouse(m) => {
-                    use crossterm::event::{MouseButton, MouseEventKind};
-                    if m.kind == MouseEventKind::Down(MouseButton::Left) {
-                        let pt = ratatui::layout::Position { x: m.column, y: m.row };
-                        if let Some(hp) = &last_panes.hints_panel {
-                            let in_close = hp.close.is_some_and(|r| r.contains(pt))
-                                || hp.close_button.is_some_and(|r| r.contains(pt));
-                            if in_close {
-                                state.overlays.hints = None;
-                            }
-                            // Clicks inside the dialog but not on close: swallow.
-                        }
-                    } else if let Some(d) = app::input::wheel_delta(m.kind, state.config.mouse_wheel_invert) {
-                        // Wheel drives the hint transcript's own scroll. The panel
-                        // is intercepted before mouse_to_action, so resolve the
-                        // direction (and mouse_wheel_invert) via the shared helper.
-                        let max = last_panes.hints_panel.as_ref().map_or(0, |hp| hp.max_scroll);
-                        let anim = state.config.animation.clone();
-                        if let Some(hs) = &mut state.overlays.hints {
-                            // Wheel up (d < 0) → older content (increase scroll),
-                            // matching the story transcript's wheel direction.
-                            hs.scroll_by(if d < 0 { 1 } else { -1 }, max, &anim);
-                        }
-                    }
-                }
-                Event::Resize(_, _) => { clear_terminal(&mut terminal, &state); continue; }
-                _ => {}
             }
-            continue;
         }
 
         // ── Search-nav intercept — before normal action routing ───────────────
@@ -3686,6 +3614,26 @@ fn run_event_loop(boot: startup::BootResult, launched_from_library: bool) -> Run
                     }
                     continue 'event_loop;
                 }
+                // Hints tab (SQ-1685): a click inside the running hint window gives it
+                // the keyboard; the wheel scrolls it whoever holds the keyboard; the
+                // download button runs its registry command.
+                if let Some(hm) = app::hints_tab::on_mouse(&mut state, &m) {
+                    if let app::hints_tab::HintMouse::Command(cmd) = hm {
+                        let outcome = slash::parse_in_context(
+                            cmd, state.config.command_prefix, Context::Global,
+                        );
+                        let should_break = dispatch_slash_outcome(
+                            outcome, &mut state, &mut mapper, &mut *session, &mut style_watcher,
+                            &game_dir, &ifid, &arc_file, &quick_save_file, &story_bytes, &story_path,
+                            last_panes.map, last_panes.story, true,
+                        );
+                        lifecycle::flush_pending_config_write(&mut state);
+                        if should_break {
+                            break 'event_loop state.exit_target.into();
+                        }
+                    }
+                    continue 'event_loop;
+                }
                 // Map tab's room card (SQ-1688): owns every mouse event inside its
                 // rect. A left-click on a button runs what the room's right-click
                 // menu item runs (Details switches to the Room tab); anything else
@@ -4235,11 +4183,7 @@ fn run_event_loop(boot: startup::BootResult, launched_from_library: bool) -> Run
 
             // ── Open hints panel ──────────────────────────────────────────────
             Action::OpenHints => {
-                let sp = story_path.clone();
-                let id = ifid.clone();
-                let title = state.title.clone();
-                let ud = state.config.user_dir.clone();
-                open_hints(&mut state, &sp, &id, &title, &ud);
+                app::hints_tab::show(&mut state, &mut mapper, &story_path, &ifid);
             }
 
             // Page the transcript by one screenful. Resolved here because it needs
@@ -4440,45 +4384,6 @@ fn is_slash(input: &str, prefix: char) -> bool {
 }
 
 // ── Quit dialog helpers ───────────────────────────────────────────────────────
-
-// ── Hints open helper ─────────────────────────────────────────────────────────
-
-/// Open the hints panel for the current story.
-///
-/// If a panel is already open this is a no-op. Resolution, VM boot and the
-/// InvisiClues narrow-screen banner skip all live in
-/// [`app::host::hints::open`] now (SQ-1586) — this is the TUI's own caller,
-/// turning that `Result` into the status-message behaviour the TUI has always
-/// had: `Ok(None)` (nothing resolves automatically) shows
-/// [`app::host::hints::NO_HINT_MESSAGE`]; `Err` shows the failure's own text.
-///
-/// TODO: wire the file browser to pick a hint file (.z3/.z5/.z8) for the
-/// `Ok(None)` case, then call `save_hint_assoc(user_dir, ifid, &picked)` and
-/// retry.
-fn open_hints(
-    state: &mut AppState,
-    story_path: &std::path::Path,
-    ifid: &str,
-    title: &str,
-    user_dir: &std::path::Path,
-) {
-    if state.overlays.hints.is_some() {
-        return;
-    }
-
-    let index = hints::load_hint_index(user_dir);
-    match app::host::hints::open(story_path, ifid, title, &index, &state.dict_words, &state.config) {
-        Ok(Some(session)) => {
-            state.overlays.hints = Some(session);
-        }
-        Ok(None) => {
-            state.set_status(app::host::hints::NO_HINT_MESSAGE);
-        }
-        Err(e) => {
-            state.set_status(e.to_string());
-        }
-    }
-}
 
 /// Return true when a quit attempt should show the "Save state before quitting?" dialog.
 ///

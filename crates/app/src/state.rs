@@ -1951,6 +1951,10 @@ impl PaletteState {
 pub enum Focus {
     Game,
     Map,
+    /// The Journal's Hints tab holds the keyboard: keys go to the hint session's
+    /// input row (SQ-1685). Only ever set while that tab is on screen with a
+    /// session running; use [`AppState::hints_have_keyboard`] to ask.
+    Hints,
 }
 
 // ── Text-entry prompt kinds ─────────────────────────────────────────────────
@@ -3555,6 +3559,9 @@ pub struct AppState {
     pub journal_tab: crate::journal::JournalTab,
     /// The Journal's Documents tab: the game's documents folder and its viewer (SQ-1681).
     pub documents_tab: crate::documents_tab::DocumentsTab,
+    /// The Journal's Hints tab: whether its session has started, why not, and the
+    /// in-flight hint download (SQ-1685). The session itself is `overlays.hints`.
+    pub hints_tab: crate::hints_tab::HintsTab,
     /// Locked player object number once detected by the heuristic. None until
     /// the player moves between two rooms and exactly one object follows.
     pub player_obj: Option<u16>,
@@ -4013,6 +4020,7 @@ impl Default for AppState {
             data_roots: None,
             journal_tab: crate::journal::JournalTab::default(),
             documents_tab: crate::documents_tab::DocumentsTab::default(),
+            hints_tab: crate::hints_tab::HintsTab::default(),
             player_obj: None,
             inventory_fallback: Vec::new(),
             inventory_click_words: Vec::new(),
@@ -4133,6 +4141,22 @@ impl AppState {
         self.journal_tab == crate::journal::JournalTab::Documents && self.layout == Layout::Split
     }
 
+    /// True while the Journal's Hints tab is on screen (SQ-1685). The inspector
+    /// takes the Journal's slot while it is open, so it hides the tab too.
+    pub fn hints_tab_visible(&self) -> bool {
+        self.journal_tab == crate::journal::JournalTab::Hints
+            && self.layout == Layout::Split
+            && self.debug.is_none()
+    }
+
+    /// True when the hint session is what typed keys reach (SQ-1685): focus is on
+    /// it AND it is actually on screen to show that. Everything that routes a key,
+    /// draws a caret or dims an input row asks this, never `focus` alone — so the
+    /// keyboard can never be in a window the player cannot see (SQ-0599's rule).
+    pub fn hints_have_keyboard(&self) -> bool {
+        self.focus == Focus::Hints && self.hints_tab_visible() && self.overlays.hints.is_some()
+    }
+
     /// Show `tab` in the Journal, revealing the Journal first if the layout had
     /// hidden it (SQ-1684). Selecting a tab the Journal is already on is a no-op
     /// apart from that reveal.
@@ -4142,6 +4166,16 @@ impl AppState {
             // The image view's upload is freed while its tab is away; the
             // re-draw re-places it when the tab is back.
             crate::documents_tab::release_image(self);
+        }
+        if tab != JournalTab::Hints && self.focus == Focus::Hints {
+            // Leaving the tab gives the keyboard back to the story.
+            self.focus = Focus::Game;
+        }
+        if tab == JournalTab::Hints
+            && self.journal_tab != JournalTab::Hints
+            && self.hints_tab.phase == crate::hints_tab::Phase::Ended
+        {
+            self.hints_tab.phase = crate::hints_tab::Phase::NotStarted; // a quit session starts afresh
         }
         if tab == JournalTab::Documents && self.journal_tab != JournalTab::Documents {
             self.documents_tab.mark_dirty(); // read the folder when the tab is shown
@@ -4663,7 +4697,8 @@ impl AppState {
             || self.overlays.aux_prompt
             || self.overlays.quit_dialog
             || self.overlays.launch_dialog
-            || self.overlays.hints.is_some()
+            // NOT the hint session (SQ-1685): it lives in a Journal tab now, not
+            // over the story, so it neither hides the prompt nor swallows keys.
             || self.overlays.replay.is_some()
             || self.overlays.region_prompt.is_some()
             || self.overlays.room_menu.is_some()
@@ -4831,7 +4866,6 @@ impl AppState {
         if self.overlays.aux_prompt { v.push("aux_prompt"); }
         if self.overlays.quit_dialog { v.push("quit_dialog"); }
         if self.overlays.launch_dialog { v.push("launch_dialog"); }
-        if self.overlays.hints.is_some() { v.push("hints"); }
         if self.overlays.replay.is_some() { v.push("replay"); }
         if self.resize_mode { v.push("resize_mode"); }
         v
@@ -5077,9 +5111,10 @@ impl AppState {
 
     /// Cycle keyboard focus one step forward (`forward = true`, Tab) or back
     /// (Shift-Tab). The stops are **per window**, not per sub-tab: the story
-    /// pane, then — when the debug inspector is open — each of its windows in
-    /// turn (story → debug 0 → 1 → 2 → story). With the inspector closed there
-    /// is nowhere else to go and Tab does nothing.
+    /// pane, then the hint session's input while the Journal's Hints tab is on
+    /// screen with a session running (SQ-1685), then — when the debug inspector
+    /// is open — each of its windows in turn (story → hints → debug 0 → 1 → 2 →
+    /// story). With neither there is nowhere else to go and Tab does nothing.
     ///
     /// The map pane is deliberately NOT a stop (SQ-0599). It used to be, and
     /// that made the same keystroke mean two different things depending on a
@@ -5088,25 +5123,30 @@ impl AppState {
     /// which. The map is now driven entirely modelessly: Shift+Arrow pans and
     /// the mouse does the rest, from wherever you are.
     pub fn cycle_focus(&mut self, forward: bool) {
-        // Focus stops after the story pane (position 0) — the inspector's
-        // windows, and nothing else.
+        // Stops after the story pane (position 0): the hint session's input while
+        // the Hints tab is on screen (SQ-1685), then the inspector's windows.
+        let hints = self.hints_tab_visible() && self.overlays.hints.is_some();
         let extra = if self.debug.is_some() {
             crate::debug_panel::WINDOW_TABS.len() // one stop per debug window
         } else {
             0
         };
-        let total = extra + 1;
+        let hint_stops = usize::from(hints);
+        let total = hint_stops + extra + 1;
         let cur = match self.focus {
             Focus::Game => 0,
-            Focus::Map => 1 + self.debug.as_ref().map_or(0, |p| p.focus),
+            Focus::Hints => if hints { 1 } else { 0 },
+            Focus::Map => hint_stops + 1 + self.debug.as_ref().map_or(0, |p| p.focus),
         };
         let next = if forward { (cur + 1) % total } else { (cur + total - 1) % total };
         if next == 0 {
             self.focus = Focus::Game;
+        } else if hints && next == 1 {
+            self.focus = Focus::Hints;
         } else {
             self.focus = Focus::Map;
             if let Some(p) = &mut self.debug {
-                p.focus = next - 1;
+                p.focus = next - hint_stops - 1;
             }
         }
     }
@@ -8474,33 +8514,16 @@ mod tests {
         assert!(!s.any_overlay_open(), "quit_dialog false => any_overlay_open false");
     }
 
+    /// The hint session lives in a Journal tab (SQ-1685), so it is NOT an overlay: a
+    /// running session must neither hide the story prompt nor swallow input.
     #[test]
-    fn hints_panel_counts_as_overlay() {
+    fn a_running_hint_session_is_not_an_overlay() {
         let mut s = AppState::default();
         assert!(!s.any_overlay_open());
-
-        // Build a minimal HintSession using the minizork fixture (same approach as
-        // the reset test in input.rs). If the fixture is absent we skip.
-        let fixture_path = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
-            .join("tests/fixtures/stories/minizork-r34-s871124.z3");
-        if !fixture_path.exists() {
-            return; // fixture absent — skip
-        }
-        let story_bytes = std::fs::read(&fixture_path).expect("read minizork.z3");
-        let session = crate::session::GameSession::new(story_bytes, true, false, None).expect("GameSession::new");
-        s.overlays.hints = Some(HintSession {
-            source: HintSource::Zcode(session),
-            transcript: vec![],
-            scroll: 0,
-            clear_anchor: None,
-            scroll_anim: None,
-            input: String::new(),
-            label: "Hints: Test".to_string(),
-            builtin_hint: false,
-        });
-        assert!(s.any_overlay_open(), "hints open => any_overlay_open true");
-        s.overlays.hints = None;
-        assert!(!s.any_overlay_open(), "hints closed => any_overlay_open false");
+        let Some(hs) = make_hint_session() else { return }; // fixture absent — skip
+        s.overlays.hints = Some(hs);
+        assert!(!s.any_overlay_open(), "the hint session is a tab, not a modal");
+        assert!(!s.any_modal_overlay_open());
     }
 
     #[test]

@@ -68,6 +68,13 @@ version = 1   # style schema version — do not remove; lets lanthorn flag an ou
 # "journal.map.card.description" = { parent = "text" }
 # "journal.map.card.seen" = { parent = "muted" }
 # "journal.map.card.button" = { parent = "accent", bold = true, reversed = true }
+# "journal.hints.transcript" = { parent = "text" }
+# "journal.hints.input" = { parent = "text" }
+# "journal.hints.input:unfocused" = { parent = "muted", dim = true }
+# "journal.hints.builtin" = { parent = "muted", italic = true }
+# "journal.hints.nohint" = { parent = "muted" }
+# "journal.hints.button" = { parent = "accent", bold = true, reversed = true }
+# "journal.hints.tab:focused" = { parent = "accent", bold = true }
 # "journal.docs.row" = { parent = "text" }
 # "journal.docs.row:selected" = { parent = "accent", reversed = true }
 # "journal.docs.meta" = { parent = "muted" }

@@ -58,6 +58,8 @@ mod nameonly_room_corroboration;
 mod retired_exit_surfaces;
 #[path = "suites/journal_tabs.rs"]
 mod journal_tabs;
+#[path = "suites/journal_hints_tab.rs"]
+mod journal_hints_tab;
 #[path = "suites/journal_room_tab.rs"]
 mod journal_room_tab;
 #[path = "suites/journal_map_card.rs"]

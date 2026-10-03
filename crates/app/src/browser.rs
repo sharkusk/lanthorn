@@ -121,6 +121,7 @@ pub fn action_for_command(command: &str) -> Option<BrowserAction> {
         SlashOutcome::Browser(a) => Some(a),
         SlashOutcome::DownloadDocuments => Some(BrowserAction::DownloadDocuments),
         SlashOutcome::CreateDocumentsFolder => Some(BrowserAction::CreateDocumentsFolder),
+        SlashOutcome::DownloadHints => Some(BrowserAction::DownloadHints),
         _ => None,
     }
 }

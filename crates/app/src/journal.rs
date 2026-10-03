@@ -22,15 +22,23 @@ pub enum JournalTab {
     Room,
     /// The inventory panel: what is carried and where everything else was seen.
     Inventory,
+    /// The story's hint file (InvisiClues), run as a Z-machine companion in the
+    /// tab's own window (SQ-1685). Between Inventory and Documents.
+    Hints,
     /// The current game's documents folder: manuals, maps and feelies, read in
-    /// place (SQ-1681). A Hints tab (SQ-1685) will go between this and Inventory.
+    /// place (SQ-1681).
     Documents,
 }
 
 impl JournalTab {
     /// Every tab, in display order.
-    pub const ALL: [JournalTab; 4] =
-        [JournalTab::Map, JournalTab::Room, JournalTab::Inventory, JournalTab::Documents];
+    pub const ALL: [JournalTab; 5] = [
+        JournalTab::Map,
+        JournalTab::Room,
+        JournalTab::Inventory,
+        JournalTab::Hints,
+        JournalTab::Documents,
+    ];
 
     /// The command argument and sidecar spelling.
     pub fn name(self) -> &'static str {
@@ -38,6 +46,7 @@ impl JournalTab {
             JournalTab::Map => "map",
             JournalTab::Room => "room",
             JournalTab::Inventory => "inventory",
+            JournalTab::Hints => "hints",
             JournalTab::Documents => "documents",
         }
     }
@@ -48,6 +57,7 @@ impl JournalTab {
             JournalTab::Map => "Map",
             JournalTab::Room => "Room",
             JournalTab::Inventory => "Inventory",
+            JournalTab::Hints => "Hints",
             JournalTab::Documents => "Documents",
         }
     }
@@ -58,6 +68,7 @@ impl JournalTab {
             JournalTab::Map => "Map",
             JournalTab::Room => "Rm",
             JournalTab::Inventory => "Inv",
+            JournalTab::Hints => "Hint",
             JournalTab::Documents => "Docs",
         }
     }
@@ -69,6 +80,7 @@ impl JournalTab {
             "map" => Some(JournalTab::Map),
             "room" => Some(JournalTab::Room),
             "inventory" | "inv" | "items" => Some(JournalTab::Inventory),
+            "hints" | "hint" => Some(JournalTab::Hints),
             "documents" | "docs" => Some(JournalTab::Documents),
             _ => None,
         }
@@ -146,12 +158,18 @@ pub fn tab_bar_cells(width: u16, active: JournalTab) -> Vec<TabBarCell> {
     ]
 }
 
+/// The mark drawn before the Hints tab's label while the hint session has the
+/// keyboard (SQ-1685).
+pub const HINTS_FOCUS_MARK: char = '\u{25b8}';
+
 /// Draw the tab bar into the one-row `area` and return each cell's hit rect.
-/// Selectors: `journal.tabbar` (the row's fill), `journal.tab`, and
-/// `journal.tab:active`.
+/// Selectors: `journal.tabbar` (the row's fill), `journal.tab`,
+/// `journal.tab:active`, and — on the Hints label while the hint session holds
+/// the keyboard — `journal.hints.tab:focused`.
 pub fn draw_tab_bar(
     area: Rect,
     active: JournalTab,
+    hints_focused: bool,
     colors: &ColorScheme,
     buf: &mut Buffer,
 ) -> Vec<(TabBarHit, Rect)> {
@@ -161,6 +179,7 @@ pub fn draw_tab_bar(
     let bar: Style = colors.theme.get("journal.tabbar").style;
     let tab: Style = colors.theme.get("journal.tab").style;
     let on: Style = colors.theme.get("journal.tab:active").style;
+    let focused: Style = colors.theme.get("journal.hints.tab:focused").style;
     for x in area.x..area.right() {
         if let Some(cell) = buf.cell_mut((x, area.y)) {
             cell.set_symbol(" ").set_style(bar);
@@ -168,12 +187,22 @@ pub fn draw_tab_bar(
     }
     let mut hits = Vec::new();
     for c in tab_bar_cells(area.width, active) {
+        let marked = hints_focused && c.hit == TabBarHit::Tab(JournalTab::Hints);
         let style = match c.hit {
             TabBarHit::Tab(t) if t == active => on,
             _ => tab,
         };
+        let style = if marked { style.patch(focused) } else { style };
         let x = area.x + c.col;
-        crate::render::draw_str_clipped(buf, x, area.y, &c.text, style, area);
+        // The focus marker takes the label's leading pad cell, so nothing shifts.
+        let text = if marked {
+            let mut t = c.text.clone();
+            t.replace_range(0..1, &HINTS_FOCUS_MARK.to_string());
+            t
+        } else {
+            c.text.clone()
+        };
+        crate::render::draw_str_clipped(buf, x, area.y, &text, style, area);
         let w = (c.text.chars().count() as u16).min(area.right().saturating_sub(x));
         if w > 0 {
             hits.push((c.hit, Rect::new(x, area.y, w, 1)));
@@ -195,25 +224,34 @@ mod tests {
         assert_eq!(JournalTab::Documents.next(), JournalTab::Map);
         assert_eq!(JournalTab::Map.prev(), JournalTab::Documents);
         assert_eq!(JournalTab::ALL.last(), Some(&JournalTab::Documents), "Documents is the last tab");
+        assert_eq!(
+            JournalTab::ALL,
+            [JournalTab::Map, JournalTab::Room, JournalTab::Inventory, JournalTab::Hints, JournalTab::Documents],
+            "Hints sits between Inventory and Documents"
+        );
+        assert_eq!(JournalTab::Hints.index(), 3, "Alt+4 is the fourth tab");
+        assert_eq!(JournalTab::Inventory.next(), JournalTab::Hints);
+        assert_eq!(JournalTab::Documents.prev(), JournalTab::Hints);
         assert_eq!(JournalTab::from_name("docs"), Some(JournalTab::Documents));
         assert_eq!(JournalTab::from_name("INV"), Some(JournalTab::Inventory));
-        assert_eq!(JournalTab::from_name("hints"), None);
+        assert_eq!(JournalTab::from_name("hints"), Some(JournalTab::Hints));
     }
 
     #[test]
     fn wide_bar_shows_full_labels_in_order() {
         let cells = tab_bar_cells(40, JournalTab::Map);
         let text: Vec<&str> = cells.iter().map(|c| c.text.as_str()).collect();
-        assert_eq!(text, [" Map ", " Room ", " Inventory ", " Documents "]);
+        assert_eq!(text, [" Map ", " Room ", " Inventory ", " Hints ", " Documents "]);
         assert_eq!(cells[1].col, 5);
     }
 
     #[test]
     fn narrower_bar_abbreviates_then_collapses_to_the_active_tab() {
-        let short = tab_bar_cells(20, JournalTab::Map);
+        let short = tab_bar_cells(26, JournalTab::Map);
         assert_eq!(short[2].text, " Inv ");
-        assert_eq!(short[3].text, " Docs ", "the extra tab abbreviates too");
-        let narrow = tab_bar_cells(19, JournalTab::Room);
+        assert_eq!(short[3].text, " Hint ", "Hints abbreviates too");
+        assert_eq!(short[4].text, " Docs ");
+        let narrow = tab_bar_cells(25, JournalTab::Room);
         let kinds: Vec<TabBarHit> = narrow.iter().map(|c| c.hit).collect();
         assert_eq!(
             kinds,

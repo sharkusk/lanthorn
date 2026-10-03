@@ -331,8 +331,10 @@ impl Default for KeyMap {
         bind!(alt('1'), "journal-tab map", Context::Global);
         bind!(alt('2'), "journal-tab room", Context::Global);
         bind!(alt('3'), "journal-tab inventory", Context::Global);
-        // Alt+4 is RESERVED for the Hints tab (SQ-1685), which goes between Inventory
-        // and Documents; Documents keeps Alt+5 so the digit does not move when Hints lands.
+        // Alt+4 is the Hints tab (SQ-1685), between Inventory and Documents (Alt+5).
+        // Like the tab click and `/open-hints`, it SHOWS the tab and leaves the
+        // keyboard where it was; only a click inside the hint window takes it.
+        bind!(alt('4'), "journal-tab hints", Context::Global);
         bind!(alt('5'), "journal-tab documents", Context::Global);
 
         // ── Map ───────────────────────────────────────────────────────────────
@@ -1250,7 +1252,7 @@ mod tests {
     #[test]
     fn alt_digits_select_journal_tabs_by_default() {
         let km = KeyMap::default();
-        for (digit, cmd) in [('1', "journal-tab map"), ('2', "journal-tab room"), ('3', "journal-tab inventory"), ('5', "journal-tab documents")] {
+        for (digit, cmd) in [('1', "journal-tab map"), ('2', "journal-tab room"), ('3', "journal-tab inventory"), ('4', "journal-tab hints"), ('5', "journal-tab documents")] {
             let spec = KeySpec { code: KeyCode::Char(digit), ctrl: false, shift: false, alt: true };
             assert_eq!(km.lookup(&spec, Context::Global), Some(cmd), "Alt+{digit}");
         }

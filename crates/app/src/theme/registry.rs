@@ -508,6 +508,17 @@ pub static REGISTRY: std::sync::LazyLock<Vec<RegRow>> = std::sync::LazyLock::new
     // kind/size column, the spoiler marker, the folder line and the buttons under
     // it, the empty-folder hint; the pager's text, its title line and its
     // truncation notice.
+    // ── The Hints tab (SQ-1685): the hint session's window. `input:unfocused` is the
+    // dim the unfocused input row wears (the hint input while the story has the
+    // keyboard, and the story's prompt row while the hint session has it);
+    // `tab:focused` marks the tab label while the session holds the keyboard.
+    row("journal.hints.transcript", Section::Elements, Kind::Style, Some("text"), Delta::EMPTY),
+    row("journal.hints.input", Section::Elements, Kind::Style, Some("text"), Delta::EMPTY),
+    row("journal.hints.input:unfocused", Section::Elements, Kind::Style, Some("muted"), Delta { dim: Some(true), ..Delta::EMPTY }),
+    row("journal.hints.builtin", Section::Elements, Kind::Style, Some("muted"), mods(false, true, false, false)),
+    row("journal.hints.nohint", Section::Elements, Kind::Style, Some("muted"), Delta::EMPTY),
+    row("journal.hints.button", Section::Elements, Kind::Style, Some("accent"), mods(true, false, false, true)),
+    row("journal.hints.tab:focused", Section::Elements, Kind::Style, Some("accent"), mods(true, false, false, false)),
     row("journal.docs.row", Section::Elements, Kind::Style, Some("text"), Delta::EMPTY),
     row("journal.docs.row:selected", Section::Elements, Kind::Style, Some("accent"), mods(false, false, false, true)),
     row("journal.docs.meta", Section::Elements, Kind::Style, Some("muted"), Delta::EMPTY),
@@ -873,6 +884,13 @@ mod tests {
         "journal.map.card.description",
         "journal.map.card.seen",
         "journal.map.card.button",
+        "journal.hints.transcript",
+        "journal.hints.input",
+        "journal.hints.input:unfocused",
+        "journal.hints.builtin",
+        "journal.hints.nohint",
+        "journal.hints.button",
+        "journal.hints.tab:focused",
         "journal.docs.row",
         "journal.docs.row:selected",
         "journal.docs.meta",
