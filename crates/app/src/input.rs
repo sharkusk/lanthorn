@@ -2241,6 +2241,14 @@ fn end_map_click(
 ) {
     use crate::state::MapClick;
     let last = state.last_map_room_click.take();
+    // SQ-1692: a habitual double-click on a ghost must not undo the jump. The recentre moved the
+    // room from under the cursor, so inside the window the second click would unpin or select
+    // whatever is there now; it is swallowed instead.
+    if let Some((_, t)) = state.last_ghost_jump.take() {
+        if click.is_some() && now.duration_since(t) < MAP_DOUBLE_CLICK {
+            return;
+        }
+    }
     match click {
         Some(MapClick::Room(id)) => {
             // SQ-1692: a cross-layer GHOST's rect carries the REAL room's id, so a room whose
@@ -2249,7 +2257,7 @@ fn end_map_click(
             let jumped = follow_to_room_layer(state, &mapper.graph, id);
             let double = matches!(last, Some((r, t)) if r == id && now.duration_since(t) < MAP_DOUBLE_CLICK);
             if jumped {
-                state.last_map_room_click = Some((id, now));
+                state.last_ghost_jump = Some((id, now));
                 let view = state.room_dock_view;
                 pin_room_dock(state, mapper, id, view);
             } else if double {
@@ -7722,7 +7730,7 @@ mod tests {
     }
 
     /// SQ-1692: clicking a cross-layer ghost (its rect carries the REAL room's id) switches the
-    /// map to that room's layer and pins the real room; double-click lands on the Room tab; Esc
+    /// map to that room's layer and pins the real room; Esc
     /// unpins; a click on a room of the viewed layer is unchanged.
     #[test]
     fn clicking_a_ghost_jumps_to_the_real_rooms_layer() {
@@ -7755,18 +7763,43 @@ mod tests {
         apply_action(Action::UnpinRoomDock, &mut s, &mut m);
         assert_eq!(s.selected_room, None);
 
-        // Double-click on a ghost (second click lands on the now-real room).
-        let mut s = AppState::default();
-        end_map_click(&mut s, &m, Some(MapClick::Room(2)), t0);
-        end_map_click(&mut s, &m, Some(MapClick::Room(2)), t0 + Duration::from_millis(200));
-        assert_eq!((s.active_layer(&m.graph), s.selected_room, s.journal_tab), (cellar, Some(2), JournalTab::Room));
-
         // A real room on the viewed layer: no layer change, pins as before.
         let mut s = AppState::default();
         end_map_click(&mut s, &m, Some(MapClick::Room(1)), t0);
         assert_eq!(s.active_layer(&m.graph), mapper::layer::MAIN_LAYER);
         assert_eq!(s.selected_room, Some(1));
         assert_eq!(s.viewed_layer, None, "no override set by an ordinary click");
+    }
+
+    /// SQ-1692: after a ghost jump the room is no longer under the cursor, so a second click at
+    /// the same screen spot (now empty space) inside the window is swallowed; after the window it
+    /// behaves normally (empty space unpins).
+    #[test]
+    fn second_click_after_a_ghost_jump_is_swallowed() {
+        use crate::journal::JournalTab;
+        use crate::state::MapClick;
+        use std::time::{Duration, Instant};
+        let mut m = Mapper::default();
+        m.observe(1, "Hall", None);
+        m.observe(2, "Cellar", Some(Direction::Down));
+        let mut s0 = AppState::default();
+        apply_action(Action::MoveRegion("new".into()), &mut s0, &mut m);
+        let cellar = m.graph.layer_of(2);
+        m.observe(1, "Hall", Some(Direction::Up));
+        let t0 = Instant::now();
+
+        let mut s = AppState::default();
+        end_map_click(&mut s, &m, Some(MapClick::Room(2)), t0);
+        end_map_click(&mut s, &m, Some(MapClick::Empty), t0 + Duration::from_millis(200));
+        assert_eq!(s.selected_room, Some(2), "the REAL room stays pinned");
+        assert_eq!(m.graph.layer_of(s.selected_room.unwrap()), s.active_layer(&m.graph));
+        assert_eq!(s.active_layer(&m.graph), cellar);
+        assert_eq!(s.journal_tab, JournalTab::Map, "no Room-tab switch for a ghost");
+
+        let mut s = AppState::default();
+        end_map_click(&mut s, &m, Some(MapClick::Room(2)), t0);
+        end_map_click(&mut s, &m, Some(MapClick::Empty), t0 + Duration::from_millis(900));
+        assert_eq!(s.selected_room, None, "after the window an empty click unpins");
     }
 
     /// SQ-0692: a left-click on a room used to open a floating Room Info popup.
