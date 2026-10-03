@@ -237,3 +237,30 @@ fn the_per_game_switch_restores_cell_mode() {
     assert_eq!(glk_layout(off.session.as_mut()).unwrap().screen.size, (640, 480));
     let _ = &mut b;
 }
+
+/// A click in a stretched graphics window reports DESIGN pixels inside it, the
+/// inverse of the stretch: Photopia's top frame (design 640x58) drawn over
+/// 100x4 cells at 100x37, clicked at cell (50,2) -> ((50+.5)*6.4, (2+.5)*14.5).
+#[test]
+fn a_click_in_a_stretched_graphics_window_reports_design_pixels() {
+    let Some(path) = story("photo201.blb") else { return };
+    let mut b = boot(path);
+    let r = frame(&mut b, 100, 37);
+    let top = r.iter().find(|(_, k, rc)| *k == WinKind::Graphics && *rc == Rect::new(0, 0, 100, 4)).copied().expect("top frame");
+    let gs = b.session.as_any_mut().downcast_mut::<app::glulx_session::GlulxSession>().unwrap();
+    let design_px = gs.design_graphics_px();
+    assert!(design_px.contains(&(top.0, (640, 58))), "non-vacuity: {design_px:?}");
+    let story_rect = (0, 0, 100, 37);
+    let click = |sub| {
+        app::glulx_session::glk_mouse_target_design(false, 50, 2, story_rect, &[top.0], &r, (8, 16), sub, &design_px)
+    };
+    assert_eq!(click(None), Some((top.0, 323, 36)));
+    assert_eq!(click(Some((4, 8))), Some((top.0, 323, 36)));
+    assert_eq!(click(Some((0, 0))), Some((top.0, 320, 29)));
+    // Last cell of the window stays inside the canvas.
+    let last = app::glulx_session::glk_mouse_target_design(false, 99, 3, story_rect, &[top.0], &r, (8, 16), Some((7, 15)), &design_px);
+    assert!(matches!(last, Some((_, x, y)) if x < 640 && y < 58 && x > 630 && y > 50), "{last:?}");
+    // Cell mode (no design table) is the old cells-times-char_px answer.
+    let old = app::glulx_session::glk_mouse_target(false, 50, 2, story_rect, &[top.0], &r, (8, 16), None);
+    assert_eq!(old, Some((top.0, 50 * 8 + 4, 2 * 16 + 8)));
+}

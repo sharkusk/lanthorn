@@ -513,10 +513,12 @@ floor(px / text_cell)`; the edge rule can give a text window one cell more
 at least `floor(d)`). A text window is therefore drawn with exactly the told
 count and the at-most-one surplus column/row (far side) is a filler painted in
 the window's own background; `glk_cfg`'s sweep test and `sq1703_glk_stretch`
-pin it. The text margin is not carved out of a stretched text window. Not yet
-done: the window mask (`WindowMask`, P4: coverage-classify these same cell
-rects) and raster mode; a click in a graphics window still reports cell-times-
-`char_px` coordinates rather than design pixels.
+pin it. The text margin is not carved out of a stretched text window. A click
+in a stretched graphics window reports the inverse-stretched DESIGN-pixel
+position inside the window (`glk_cfg::cell_offset_to_design_px`, via
+`glk_mouse_target_design`); grid windows still report cells (drawn == told) and
+cell mode is unchanged. Not yet done: the window mask (`WindowMask`, P4:
+coverage-classify these same cell rects) and raster mode.
 
 **And we answer for it.** A game can ask the interpreter what colour it actually
 paints a given style — and at least one game asks in order to find out whether

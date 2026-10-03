@@ -175,6 +175,19 @@ pub fn design_px_to_cell_edge(px: u32, design: u32, cells: u32) -> u32 {
     ((px * cells as u64 * 2 + design) / (design * 2)) as u32
 }
 
+/// The inverse of the stretch, for a click: a position `rel` whole cells plus
+/// `frac` (0..1) of a cell into a window drawn `window_cells` cells wide (or
+/// tall) maps back to the design-pixel offset inside that window, whose canvas
+/// is `window_px` design pixels on that axis and was stretched over exactly
+/// those cells. Always `< window_px` (a window one pixel wide hears 0).
+pub fn cell_offset_to_design_px(rel: u32, frac: f64, window_cells: u32, window_px: u32) -> u32 {
+    if window_cells == 0 || window_px == 0 {
+        return 0;
+    }
+    let t = ((rel as f64 + frac.clamp(0.0, 1.0)) * window_px as f64 / window_cells as f64).floor();
+    (t as u32).min(window_px - 1)
+}
+
 /// A design-pixel rect `(left, top, width, height)` as the terminal-cell rect
 /// `(left, top, width, height)` it covers, via [`design_px_to_cell_edge`] on
 /// both edges of each axis. `cells` is the pane `(cols, rows)`.

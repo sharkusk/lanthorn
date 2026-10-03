@@ -3465,7 +3465,8 @@ fn run_event_loop(boot: startup::BootResult, launched_from_library: bool) -> Run
                         let windows = gs.mouse_windows();
                         if !windows.is_empty() {
                             let s = last_panes.story;
-                            let target = app::glulx_session::glk_mouse_target(
+                            let design_px = gs.design_graphics_px();
+                            let target = app::glulx_session::glk_mouse_target_design(
                                 state.any_overlay_open(),
                                 m.column, m.row,
                                 (s.x, s.y, s.width, s.height),
@@ -3473,6 +3474,7 @@ fn run_event_loop(boot: startup::BootResult, launched_from_library: bool) -> Run
                                 &last_panes.win_rects,
                                 gs.char_pixels(),
                                 mouse_sub_px,
+                                &design_px,
                             );
                             if let Some((win, vx, vy)) = target {
                                 let result = gs.deliver_mouse(win, vx, vy);

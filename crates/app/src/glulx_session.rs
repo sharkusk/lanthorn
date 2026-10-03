@@ -2744,6 +2744,20 @@ impl GlulxSession {
         self.appglk().char_pixels()
     }
 
+    /// In stretch design mode, every graphics window's `(id, (width, height))`
+    /// in design pixels, for [`glk_mouse_target_design`]; empty in cell mode.
+    pub fn design_graphics_px(&mut self) -> Vec<(u32, (u32, u32))> {
+        let l = self.glk_layout();
+        if l.screen.unit_px != (1, 1) {
+            return Vec::new();
+        }
+        l.windows
+            .iter()
+            .filter(|w| w.wintype == gvm::glk::WinType::Graphics)
+            .map(|w| (w.id, (w.rect.width, w.rect.height)))
+            .collect()
+    }
+
     /// Take what the app's input line should hold for the newest line-input request,
     /// if one has appeared since the last call (Glk spec §4.2 `initlen`). One-shot
     /// per request; `Some("")` means "start empty", which is how the app learns the
@@ -2909,6 +2923,28 @@ pub fn glk_mouse_target(
     char_px: (u32, u32),
     sub_px: Option<(u16, u16)>,
 ) -> Option<(u32, u32, u32)> {
+    glk_mouse_target_design(overlay_open, col, row, story, requested, win_rects, char_px, sub_px, &[])
+}
+
+/// [`glk_mouse_target`] for stretch design mode (SQ-1703 P3). A graphics
+/// window listed in `design_px` (`(win, (width, height))` in design pixels,
+/// from [`GlulxSession::design_graphics_px`]) was stretched over its cell rect,
+/// so a click reports the INVERSE-stretched design-pixel position inside it
+/// ([`crate::glk_cfg::cell_offset_to_design_px`]) instead of cells times
+/// `char_px`. Any window not listed (every window in cell mode, and every grid
+/// window, whose cells are exactly the characters told) is answered exactly as
+/// [`glk_mouse_target`] always has.
+pub fn glk_mouse_target_design(
+    overlay_open: bool,
+    col: u16,
+    row: u16,
+    story: (u16, u16, u16, u16),
+    requested: &[u32],
+    win_rects: &[(u32, crate::engine::WinKind, ratatui::layout::Rect)],
+    char_px: (u32, u32),
+    sub_px: Option<(u16, u16)>,
+    design_px: &[(u32, (u32, u32))],
+) -> Option<(u32, u32, u32)> {
     if overlay_open {
         return None;
     }
@@ -2922,7 +2958,20 @@ pub fn glk_mouse_target(
         .find(|&&(id, _, r)| requested.contains(&id) && r.contains(pt))?;
     let rel_x = (col - rect.x) as u32;
     let rel_y = (row - rect.y) as u32;
-    let (vx, vy) = if kind == crate::engine::WinKind::Graphics {
+    let stretched = design_px.iter().find(|(id, _)| *id == win).map(|&(_, px)| px);
+    let (vx, vy) = if let (Some((pw, ph)), true) = (stretched, kind == crate::engine::WinKind::Graphics) {
+        let (fx, fy) = match sub_px {
+            Some((x, y)) => (
+                (x as f64 / char_px.0.max(1) as f64).min(0.999),
+                (y as f64 / char_px.1.max(1) as f64).min(0.999),
+            ),
+            None => (0.5, 0.5),
+        };
+        (
+            crate::glk_cfg::cell_offset_to_design_px(rel_x, fx, rect.width as u32, pw),
+            crate::glk_cfg::cell_offset_to_design_px(rel_y, fy, rect.height as u32, ph),
+        )
+    } else if kind == crate::engine::WinKind::Graphics {
         // The kitty render scales the canvas to exactly the window's cell rect
         // (`render_kitty_virtual`), so cells and canvas pixels stay in proportion
         // and a cell offset converts straight to a canvas pixel. Clamped inside
