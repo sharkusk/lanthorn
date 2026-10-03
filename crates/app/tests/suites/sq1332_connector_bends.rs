@@ -205,7 +205,9 @@ fn zork1_spends_no_more_turns_than_its_budget() {
     assert!(n > 100, "Zork I must draw a real number of connectors, got {n}");
     // SQ-1669..1672: 81 -> 70. The tidy's repair stage now slides and group-moves rooms the
     // radius-3 ring could not reach, and the connectors between them need fewer forced turns.
-    assert_eq!(opt, 70, "the anchor optimum is a property of the LAYOUT, not the router");
+    // SQ-1693: 70 -> 67. The repair stage now also moves rooms to remove crossings of Up/Down
+    // connectors, so fewer connectors have to detour around one another.
+    assert_eq!(opt, 67, "the anchor optimum is a property of the LAYOUT, not the router");
     assert!(bends <= 145, "Zork I draws {bends} turns against a budget of 145 (was 153)");
 }
 

@@ -3959,6 +3959,46 @@ fn updown_stack(graph: &mapper::graph::MapGraph, id: mapper::graph::RoomId) -> V
     seen
 }
 
+/// SQ-1693: the rooms at either end of a clean `┼` crossing in which at least one of the two
+/// connectors is an Up/Down passage — the only rooms a crossing-driven repair move is tried on.
+fn updown_crossing_rooms(
+    graph: &mapper::graph::MapGraph,
+) -> std::collections::BTreeSet<mapper::graph::RoomId> {
+    use std::collections::{BTreeMap, BTreeSet};
+    let rm = mapper::render::render(graph);
+    let (cols, rows) = boxes_axes(&rm.plan, rm.bounds);
+    let plan = &rm.plan;
+    let mut owners: BTreeMap<(i32, i32), BTreeMap<usize, u8>> = BTreeMap::new();
+    for (ci, conn) in plan.connectors.iter().enumerate() {
+        if let Some(plot) = plot_connector(conn, &cols, &rows, None) {
+            for (c, mask) in &plot.cells {
+                *owners.entry(*c).or_default().entry(ci).or_insert(0) |= *mask;
+            }
+        }
+    }
+    let is_updown = |a: mapper::graph::RoomId, b: mapper::graph::RoomId| {
+        graph.connections().iter().any(|c| {
+            matches!(c.dir, Direction::Up | Direction::Down)
+                && ((c.origin == a && c.dest == b) || (c.origin == b && c.dest == a))
+        })
+    };
+    let mut out = BTreeSet::new();
+    for per_conn in owners.values() {
+        if per_conn.len() != 2 {
+            continue;
+        }
+        let cs: Vec<&mapper::route::RoutedConnector> =
+            per_conn.keys().map(|&ci| &plan.connectors[ci]).collect();
+        if cs.iter().any(|c| is_updown(c.origin, c.dest)) {
+            for c in cs {
+                out.insert(c.origin);
+                out.insert(c.dest);
+            }
+        }
+    }
+    out
+}
+
 /// Nudge rooms to satisfy currently-VIOLATED directional hints — e.g. a one-way `W` edge whose dest
 /// ended up east of its origin because a post-solve stage (contiguity ejection, collision spiral)
 /// moved a room across it. Sibling to [`cleanup_overlaps`]; runs after it in the Retidy flow.
@@ -3968,6 +4008,11 @@ fn updown_stack(graph: &mapper::graph::MapGraph, id: mapper::graph::RoomId) -> V
 /// (a) not introducing any illegal connector overlap and (b) not breaking any exact row/column
 /// alignment the moved room currently holds (`room_alignment_score`, so it never undoes the chain
 /// alignment relayout/cleanup established). Only strict improvements are taken, so it converges.
+///
+/// SQ-1693: the order is lexicographic — hint score, then bent edges, then connector crossings.
+/// A move that changes neither of the first two but strictly removes a crossing (and adds no
+/// overlap) is also taken, for rooms at either end of a crossing that involves an Up/Down
+/// connector. Every accepted move strictly improves that triple, which is bounded, so it ends.
 pub(crate) fn repair_directional_hints(graph: &mut mapper::graph::MapGraph, radius: i32, max_passes: usize) {
     repair_directional_hints_observed(graph, radius, max_passes, None);
 }
@@ -4068,6 +4113,7 @@ pub(crate) fn repair_directional_hints_observed(
         members: &[mapper::graph::RoomId],
         dx: i32,
         dy: i32,
+        crossing_candidate: bool,
     ) -> Option<Trial> {
         // A reciprocal N/S room is column-locked (X fixed), an E/W room row-locked (Y fixed) —
         // unless its whole run travels with it, which keeps the run aligned.
@@ -4110,7 +4156,10 @@ pub(crate) fn repair_directional_hints_observed(
         // alone — so only a candidate that is already a hint/straightness win without losing
         // alignment gets one. A skipped render is reported as "unboundedly many overlaps", which
         // the caller's acceptance test rejects exactly as the real answer would have been.
-        let viable = (score > base.0 || (score == base.0 && bent < base.1)) && align_trial >= align_orig;
+        // SQ-1693: a crossing candidate that ties on both is rendered too, to read its crossings.
+        let viable = (score > base.0
+            || (score == base.0 && (bent < base.1 || (bent == base.1 && crossing_candidate))))
+            && align_trial >= align_orig;
         let s = if viable { render_overlap_stats(graph) } else { (usize::MAX, usize::MAX) };
         for &(m, p) in &origs {
             graph.set_pos(m, p);
@@ -4123,6 +4172,12 @@ pub(crate) fn repair_directional_hints_observed(
         let base_score = mapper::layout::directional_hint_score(graph);
         let base_bent = bent_edges(graph);
         let (group_base_score, group_base_bent) = reliable_scores(graph, &unreliable);
+        // SQ-1693: rooms a crossing-only move may be tried on (empty when nothing crosses).
+        let crossing_rooms = if base.1 > 0 {
+            updown_crossing_rooms(graph)
+        } else {
+            std::collections::BTreeSet::new()
+        };
 
         let room_ids: Vec<mapper::graph::RoomId> =
             graph.rooms().filter(|r| r.pos.is_some()).map(|r| r.id).collect();
@@ -4156,7 +4211,10 @@ pub(crate) fn repair_directional_hints_observed(
             let Some((moved, s, score, bent, align_orig, align_trial)) = res else { return };
             // Lexicographic (SQ-1672): a strict hint gain, or — at an equal hint score — strictly
             // fewer bent compass edges. Both strictly improve a bounded pair, so the loop ends.
-            let better = score > base_score || (score == base_score && bent < base_bent);
+            // SQ-1693: or, at equal score and bent count, strictly fewer crossings (an unrendered
+            // candidate reads `usize::MAX` crossings and so never qualifies).
+            let better = score > base_score
+                || (score == base_score && (bent < base_bent || s.1 < base.1));
             if better && s.0 <= base.0 && align_trial >= align_orig {
                 let gain = score - base_score;
                 let straightened = base_bent.saturating_sub(bent);
@@ -4186,7 +4244,7 @@ pub(crate) fn repair_directional_hints_observed(
                     continue;
                 }
                 trials_tried += 1;
-                let res = trial_group(graph, &chains, None, (base_score, base_bent), &[id], dx, dy);
+                let res = trial_group(graph, &chains, None, (base_score, base_bent), &[id], dx, dy, crossing_rooms.contains(&id));
                 consider(&mut best, res, id, degree, move_idx, false);
             }
             let mut slide_idx = moves.len();
@@ -4205,7 +4263,7 @@ pub(crate) fn repair_directional_hints_observed(
                     }
                     if dist > radius {
                         trials_tried += 1;
-                        let res = trial_group(graph, &chains, None, (base_score, base_bent), &[id], sx * dist, sy * dist);
+                        let res = trial_group(graph, &chains, None, (base_score, base_bent), &[id], sx * dist, sy * dist, crossing_rooms.contains(&id));
                         consider(&mut best, res, id, degree, slide_idx, false);
                         slide_idx += 1;
                     }
@@ -4261,7 +4319,8 @@ pub(crate) fn repair_directional_hints_observed(
             .collect();
         for members in groups {
             // A hint between two group members cannot change under a rigid move either.
-            if !violated.iter().any(|(a, b)| members.contains(a) != members.contains(b)) {
+            let crossing_group = members.iter().any(|m| crossing_rooms.contains(m));
+            if !crossing_group && !violated.iter().any(|(a, b)| members.contains(a) != members.contains(b)) {
                 continue;
             }
             let id = members[0];
@@ -4272,7 +4331,7 @@ pub(crate) fn repair_directional_hints_observed(
             let mut move_idx = moves.len() + 4 * MAX_SLIDE as usize * 2;
             for (sx, sy) in [(0, -1), (0, 1), (-1, 0), (1, 0)] {
                 for dist in 1..=extent {
-                    let res = trial_group(graph, &chains, Some(&unreliable), (group_base_score, group_base_bent), &members, sx * dist, sy * dist);
+                    let res = trial_group(graph, &chains, Some(&unreliable), (group_base_score, group_base_bent), &members, sx * dist, sy * dist, crossing_group);
                     let blocked = res.is_none();
                     if !blocked {
                         trials_tried += 1;

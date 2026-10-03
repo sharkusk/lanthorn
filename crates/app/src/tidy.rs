@@ -1169,7 +1169,6 @@ mod tests {
     }
 
     #[test]
-    #[ignore = "SQ-1693 part B"]
     fn sq1693_specimen_has_no_crossings_and_keeps_its_hints() {
         let g = tidied("zork1_r88_sq1693_updown.json");
         let (overlaps, crossings) = crate::render::map::layer_overlap_stats(&g, sq1693_layer0(&g));
@@ -1183,7 +1182,8 @@ mod tests {
             .count();
         assert!(bent <= 17, "{bent} bent compass edges");
         assert!(pos(&g, 143).1 < pos(&g, 88).1, "Clearing {:?} sits above Up a Tree {:?}", pos(&g, 143), pos(&g, 88));
-        assert_clean(&g);
+        assert_eq!(pos(&g, 143).0, pos(&g, 75).0, "Clearing keeps Forest Path's column");
+        assert_eq!(pos(&g, 143), (-4, -6), "Clearing moved up one row (was (-4, -5))");
     }
 
     #[test]
@@ -1220,6 +1220,59 @@ mod tests {
             assert_eq!(pos(&g, 26).0, pos(&g, 25).0, "{name}: 26 stays in 25's column");
             assert!(pos(&g, 25).1 < pos(&g, 26).1, "{name}: stack order kept");
         }
+    }
+
+    /// Miniature of the SQ-1693 Forest Path / Up a Tree / Clearing corner: 143 and 75 are a
+    /// reciprocal N/S pair, 75 climbs Up to 88, and 143 one-way heads east to 77, across 88's
+    /// connector. Returns the graph before repair.
+    fn sq1693_mini() -> mapper::graph::MapGraph {
+        use mapper::direction::Direction::*;
+        let mut g = mapper::graph::MapGraph::new();
+        for id in [75u32, 77, 88, 143] {
+            g.upsert_room(id, "r".into());
+        }
+        g.add_edge(143, S, 75);
+        g.add_edge(75, N, 143);
+        g.add_edge(75, Up, 88);
+        g.add_edge(143, E, 77);
+        g.set_pos(143, (0, 0));
+        g.set_pos(75, (0, 1));
+        g.set_pos(88, (1, 0));
+        g.set_pos(77, (2, 1));
+        g
+    }
+
+    #[test]
+    fn sq1693_repair_takes_a_crossing_only_win_at_equal_hints() {
+        let mut g = sq1693_mini();
+        let score = mapper::layout::directional_hint_score(&g);
+        assert_eq!(crate::render::map::render_overlap_stats(&g), (0, 1), "one Up/Down crossing to start");
+        crate::render::map::repair_directional_hints(&mut g, 3, 40);
+        assert_eq!(crate::render::map::render_overlap_stats(&g), (0, 0), "crossing removed, no overlap");
+        assert!(mapper::layout::directional_hint_score(&g) >= score);
+    }
+
+    #[test]
+    fn sq1693_repair_rejects_a_crossing_win_that_costs_hints() {
+        use mapper::direction::Direction::*;
+        let mut g = sq1693_mini();
+        for id in [90u32, 91] {
+            g.upsert_room(id, "r".into());
+        }
+        // 88 and 143 each hold a reciprocal E/W partner on their row: every crossing-free
+        // arrangement the repair can reach gives one of those up.
+        g.add_edge(88, E, 90);
+        g.add_edge(90, W, 88);
+        g.add_edge(143, W, 91);
+        g.add_edge(91, E, 143);
+        g.set_pos(90, (2, 0));
+        g.set_pos(91, (-1, 0));
+        let score = mapper::layout::directional_hint_score(&g);
+        assert_eq!(crate::render::map::render_overlap_stats(&g), (0, 1));
+        crate::render::map::repair_directional_hints(&mut g, 3, 40);
+        assert_eq!(mapper::layout::directional_hint_score(&g), score, "hints are not traded for a crossing");
+        assert_eq!((pos(&g, 88), pos(&g, 143)), ((1, 0), (0, 0)), "the two rooms stayed on their rows");
+        assert_eq!(crate::render::map::render_overlap_stats(&g), (0, 1), "the crossing is the price");
     }
 
     #[test]

@@ -269,15 +269,12 @@ fn zork1_has_no_diagonal_glyph_overlaps() {
         failures.len(),
         failures.join("\n")
     );
-    // Non-vacuity: the House layer's West of House/Stone Barrow slope really does cross the
-    // Strange Passage/Living Room connector (the shape SQ-1331 was filed against), so this
-    // fixture must exercise the yield path at least once, not merely fail to find a bug because
-    // nothing ever collided.
-    assert!(
-        !yields.is_empty(),
-        "expected at least one slope to yield on the Zork I map (e.g. West of House↔Stone \
-         Barrow crossing Strange Passage↔Living Room) — the fixture may have changed shape"
-    );
+    // SQ-1693: this used to assert `!yields.is_empty()` — the House layer's West of House/Stone
+    // Barrow slope crossed the Strange Passage/Living Room connector. The tidy's repair stage now
+    // moves rooms to remove crossings of Up/Down connectors, and that crossing is gone from the
+    // map (an improvement: nothing left to yield). The yield path keeps its real-map
+    // non-vacuity on Counterfeit Monkey's park corner below.
+    let _ = yields;
 }
 
 /// The same on Counterfeit Monkey, whose park corner is the one place on either fixture where two
