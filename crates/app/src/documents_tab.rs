@@ -765,15 +765,22 @@ fn draw_list(state: &AppState, tab: &DocumentsTab, st: &Styles, area: Rect, buf:
         }
     }
     y += 1;
-    // Buttons.
+    // Buttons, one unstyled cell apart; the second wraps to its own row when
+    // both do not fit across the pane.
+    let mut bx = x;
     if y < area.bottom() {
-        let mut bx = x;
         if matches!(tab.location, Location::Missing(_)) {
             let r = put(buf, area, y, bx, CREATE_LABEL, st.button);
             hits.create = Some(r);
-            bx += r.width;
+            bx += r.width + 1;
+            if bx + crate::textwidth::str_cells(DOWNLOAD_LABEL) as u16 > area.right() {
+                bx = x;
+                y += 1;
+            }
         }
-        hits.download = Some(put(buf, area, y, bx, DOWNLOAD_LABEL, st.button));
+        if y < area.bottom() {
+            hits.download = Some(put(buf, area, y, bx, DOWNLOAD_LABEL, st.button));
+        }
     }
     finish_list(tab, st, area, buf, hits, y + 2, true);
     let _ = state;
@@ -1025,6 +1032,33 @@ mod tests {
         assert!(flagged[0].contains("walkthrough.txt"));
         assert!(out.contains("Download documents"), "{out}");
         assert!(!out.contains("Create documents folder"), "folder exists: {out}");
+    }
+
+    #[test]
+    fn the_two_header_buttons_have_an_unstyled_gap_between_them() {
+        let mut t = DocumentsTab::default();
+        t.set_location(Location::Missing(PathBuf::from("/lib/documents/Zork [x]")));
+        let s = state_with(t);
+        let buf = render(&s, 70, 10);
+        let h = s.documents_tab.hits();
+        let (c, d) = (h.create.unwrap(), h.download.unwrap());
+        assert_eq!(c.y, d.y, "both fit on one row at 70 columns");
+        assert!(d.x > c.right(), "a gap cell between the hit-rects: {c:?} {d:?}");
+        let gap = &buf[(c.right(), c.y)];
+        assert_ne!(gap.style(), buf[(c.x, c.y)].style(), "the gap is not button-styled");
+        assert_ne!(gap.style(), buf[(d.x, d.y)].style(), "the gap is not button-styled");
+    }
+
+    #[test]
+    fn narrow_header_buttons_wrap_instead_of_overlapping() {
+        let mut t = DocumentsTab::default();
+        t.set_location(Location::Missing(PathBuf::from("/lib/documents/Zork [x]")));
+        let s = state_with(t);
+        let _ = render(&s, 40, 10);
+        let h = s.documents_tab.hits();
+        let (c, d) = (h.create.unwrap(), h.download.unwrap());
+        assert!(d.y > c.y, "the second button wraps to its own row: {c:?} {d:?}");
+        assert!(d.right() <= 40 && c.right() <= 40);
     }
 
     #[test]
