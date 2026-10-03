@@ -83,6 +83,9 @@ lanthorn make each linked game's folder as it finds it, and `documents_dir = "..
 to keep them somewhere other than `~/.lanthorn/documents`. Both are read from the
 shared `config.toml` only, so a named player's file cannot move or switch them.
 A story that is not linked to IFDB has no documents folder; the panel says so.
+Once the folder has files in it, the panel lists them under it (name, kind, size,
+and a *spoiler* mark on walkthroughs); click one to open it, the same way the Documents
+tab does: images and text show right there, anything else goes to your system's viewer.
 
 **Fetching what IFDB lists.** IFDB's page for a game often links its manual, a
 map, a transcript of the original packaging, or a walkthrough. Press `Shift+D`

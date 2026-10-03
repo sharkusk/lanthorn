@@ -57,12 +57,17 @@ struct ResourceRef {
     kind: PreviewKind,
     number: u32,
     label: String,
+    /// A row of the Documents section (SQ-1700): the file to open, with
+    /// `kind == PreviewKind::Document`. `None` for a blorb resource.
+    doc: Option<app::documents::DocEntry>,
 }
 
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 enum PreviewKind {
     Image,
     Sound,
+    /// A file in the story's documents folder (SQ-1700).
+    Document,
 }
 
 /// A bundled resource being shown in the picker's preview modal (SQ-0347): a
@@ -87,6 +92,9 @@ struct ResourcePreview {
     status: Option<String>,
     /// Current zoom (SQ-0486): `Fit` on open; `+`/`-`/wheel step it.
     zoom: PreviewZoom,
+    /// A text document (SQ-1700), paged with the Documents tab's own pager; the
+    /// keys and the wheel scroll it instead of zooming.
+    text: Option<app::documents_tab::Pager>,
 }
 
 /// Image-preview zoom (SQ-0486). `Fit` scales the image (up or down, at
@@ -1521,6 +1529,10 @@ pub(crate) fn run_story_picker(
     let mut preview_close_rect: Option<Rect> = None;
     let mut preview_button_rects: Vec<(app::render::dialog::ButtonId, Rect)> = Vec::new();
     let mut preview_area = Rect::new(0, 0, 0, 0);
+    // A spoiler-flagged document awaiting the "open it?" answer (SQ-1700), with
+    // the focused button (0 = Open it, 1 = Cancel) and where the last draw put it.
+    let mut doc_confirm: Option<(app::documents::DocEntry, usize)> = None;
+    let mut doc_confirm_rects: Option<app::render::confirm_spoiler_dialog::ConfirmSpoilerDialogRects> = None;
 
     // Async cover decode: a background worker decodes off the main loop; results
     // are drained into `cover` each iteration. `requested` tracks in-flight paths
@@ -1756,6 +1768,11 @@ pub(crate) fn run_story_picker(
                 app::documents_chooser::draw_documents(&ds.chooser, area, &cs, buf);
             }
 
+            // The spoiler question for a Documents row (SQ-1700).
+            doc_confirm_rects = doc_confirm.as_ref().and_then(|(e, focus)| {
+                app::render::confirm_spoiler_dialog::draw_spoiler_confirm(&e.id, *focus, &cs, area, buf)
+            });
+
             // Launch-options dialog (SQ-0789): topmost of all, since it is the
             // last thing between the user and a booting story.
             if let Some(lo) = &launch_opts {
@@ -1829,6 +1846,12 @@ pub(crate) fn run_story_picker(
             if list.selected != last_sel {
                 last_sel = list.selected;
                 sel_changed_at = Instant::now();
+                // Re-selecting a story re-reads its documents folder (SQ-1700), so
+                // a file dropped in by hand appears — the rest of the aux (medium
+                // scans) stays cached.
+                if let (Some(Some(a)), Some(e)) = (aux_cache.get_mut(list.selected), stories.get(list.selected)) {
+                    app::picker::refresh_doc_files(a, roots, e);
+                }
             }
             // Settle-debounce: only request once the selection has been stable, so a
             // fling through the list costs one decode instead of one per row.
@@ -2252,6 +2275,21 @@ pub(crate) fn run_story_picker(
                 // The key reference (SQ-1227) captures all keys while open: Esc,
                 // `?` again, `q` or Enter close it, everything else is swallowed
                 // rather than acting on the list behind it.
+                } else if let Some((entry, focus)) = doc_confirm.as_mut() {
+                    // The spoiler question (SQ-1700), same keys as the Journal's.
+                    use app::render::confirm_spoiler_dialog::{confirm_spoiler_key_focused, ConfirmSpoilerAction};
+                    match k.code {
+                        Tab | BackTab | Left | Right => *focus = 1 - *focus,
+                        code => match confirm_spoiler_key_focused(code, *focus) {
+                            ConfirmSpoilerAction::Open => {
+                                let entry = entry.clone();
+                                doc_confirm = None;
+                                run_document_row(&entry, &mut preview, &mut progress_line);
+                            }
+                            ConfirmSpoilerAction::Cancel => doc_confirm = None,
+                            ConfirmSpoilerAction::None => {}
+                        },
+                    }
                 } else if keys_dialog {
                     if matches!(k.code, Esc | Enter | Char('q') | Char('?')) {
                         keys_dialog = false;
@@ -2296,6 +2334,22 @@ pub(crate) fn run_story_picker(
                         }
                         Char('0') => {
                             preview.as_mut().unwrap().zoom = PreviewZoom::Fit;
+                        }
+                        // A text document scrolls (SQ-1700); the draw clamps.
+                        Up | Down | PageUp | PageDown | Home | End
+                            if preview.as_ref().is_some_and(|p| p.text.is_some()) =>
+                        {
+                            if let Some(t) = preview.as_ref().and_then(|p| p.text.as_ref()) {
+                                let cur = t.scroll.get();
+                                t.scroll.set(match k.code {
+                                    Up => cur.saturating_sub(1),
+                                    Down => cur + 1,
+                                    PageUp => cur.saturating_sub(10),
+                                    PageDown => cur + 10,
+                                    Home => 0,
+                                    _ => usize::MAX / 2,
+                                });
+                            }
                         }
                         Esc | Enter | Char('q') | Char(' ') => {
                             // Free the modal's upload before dropping the struct
@@ -2493,6 +2547,7 @@ pub(crate) fn run_story_picker(
                         && docs_session.is_none()
                         && preview.is_none()
                         && !keys_dialog
+                        && doc_confirm.is_none()
                     {
                         let hit = row_rects
                             .iter()
@@ -2507,7 +2562,22 @@ pub(crate) fn run_story_picker(
                     }
                 } else if let MouseEventKind::Down(MouseButton::Left) = m.kind {
                     let pt = ratatui::layout::Position { x: m.column, y: m.row };
-                    if keys_dialog {
+                    if doc_confirm.is_some() {
+                        // The spoiler question (SQ-1700): a button answers it, the
+                        // ✕ or a click outside cancels, a click inside is swallowed.
+                        let hit = |r: Option<Rect>| r.is_some_and(|r| r.contains(pt));
+                        let (open, cancel, close, inside) = doc_confirm_rects.as_ref().map_or(
+                            (false, false, false, true),
+                            |r| (hit(r.open), hit(r.cancel), hit(r.close), r.area.contains(pt)),
+                        );
+                        if open {
+                            if let Some((entry, _)) = doc_confirm.take() {
+                                run_document_row(&entry, &mut preview, &mut progress_line);
+                            }
+                        } else if cancel || close || !inside {
+                            doc_confirm = None;
+                        }
+                    } else if keys_dialog {
                         // The key reference (SQ-1227): ✕, Done, or a click
                         // outside closes it; a click inside is swallowed.
                         let on_close = keys_close_rect.is_some_and(|r| r.contains(pt));
@@ -2625,7 +2695,17 @@ pub(crate) fn run_story_picker(
                     } else if let Some((_, rref)) = panel_resource_rects.iter().find(|(r, _)| r.contains(pt)) {
                         // Click on a previewable Pict/Snd resource row (SQ-0347):
                         // open its modal (image renders / sound plays).
-                        preview = Some(open_resource_preview(rref, &mut audio, cfg.volume));
+                        if let Some(doc) = &rref.doc {
+                            // A Documents row (SQ-1700): opens as the Journal's
+                            // Documents tab opens it, asking first for a spoiler.
+                            if app::documents_tab::needs_spoiler_confirm(doc) {
+                                doc_confirm = Some((doc.clone(), 1));
+                            } else {
+                                run_document_row(doc, &mut preview, &mut progress_line);
+                            }
+                        } else {
+                            preview = Some(open_resource_preview(rref, &mut audio, cfg.volume));
+                        }
                     } else if let Some((_, url)) = panel_link_rects.iter().find(|(r, _)| r.contains(pt)) {
                         // Click on an info-panel OSC 8 link (SQ-0367): the terminal
                         // can't act on it while we hold mouse capture, so open it —
@@ -2683,7 +2763,7 @@ pub(crate) fn run_story_picker(
                     let pt = ratatui::layout::Position { x: m.column, y: m.row };
                     match wheel_target(
                         launch_opts.is_some(),
-                        keys_dialog,
+                        keys_dialog || doc_confirm.is_some(),
                         story_menu.is_some(),
                         search_modal.is_some() || docs_session.is_some(),
                         preview.is_some(),
@@ -2706,7 +2786,11 @@ pub(crate) fn run_story_picker(
                         // scrolling the list behind it (SQ-0486; a no-op prior to
                         // that, per SQ-0347): up zooms in, down zooms out.
                         WheelTarget::PreviewZoom => {
-                            if let Some(pv) = preview.as_mut() {
+                            if let Some(t) = preview.as_ref().and_then(|p| p.text.as_ref()) {
+                                // A text document scrolls instead (SQ-1700).
+                                let cur = t.scroll.get() as isize;
+                                t.scroll.set((cur + 3 * d).max(0) as usize);
+                            } else if let Some(pv) = preview.as_mut() {
                                 pv.zoom = if d < 0 { pv.zoom.step_in() } else { pv.zoom.step_out() };
                             }
                         }
@@ -3955,6 +4039,26 @@ fn draw_info_panel(
             }
         }
     }
+    // The folder's files (SQ-1700), like Resources lists a blorb's chunks. The list
+    // is the Documents tab's own (`documents_tab::entries_for`, cached in the aux);
+    // each row is the tab's wording, clickable, and opens as the tab opens it.
+    if let Some(a) = aux.filter(|a| !a.doc_files.is_empty()) {
+        lines.push((format!("Documents ({})", a.doc_files.len()), story_info_label));
+        for e in &a.doc_files {
+            let flag = if app::documents_tab::is_spoiler(e) { app::documents_tab::SPOILER_FLAG } else { "" };
+            resource_refs.push((
+                lines.len(),
+                ResourceRef {
+                    blorb_path: e.path.clone(),
+                    kind: PreviewKind::Document,
+                    number: 0,
+                    label: e.id.clone(),
+                    doc: Some(e.clone()),
+                },
+            ));
+            lines.push((format!(" {} \u{2014} {}{flag}", e.id, app::documents_tab::row_meta(e)), story_info_link));
+        }
+    }
     // features line (present badges only).
     let feats = feature_words(&meta.features, aux, meta.scott_pictures);
     if !feats.is_empty() {
@@ -4109,6 +4213,7 @@ fn draw_info_panel(
                             kind,
                             number: c.number,
                             label: format!("{} #{}", resource_usage_label(&c.usage), c.number),
+                            doc: None,
                         },
                     ));
                     lines.push((line, story_info_link));
@@ -4338,15 +4443,70 @@ fn open_resource_preview(
             let status = image
                 .is_none()
                 .then(|| "Can't preview this image (unsupported format).".to_string());
-            ResourcePreview { title: rref.label.clone(), image, proto: None, status, zoom: PreviewZoom::Fit }
+            ResourcePreview { title: rref.label.clone(), image, proto: None, status, zoom: PreviewZoom::Fit, text: None }
         }
         PreviewKind::Sound => {
             let status = play_preview_sound(blorb.as_ref(), rref.number, audio, volume);
             ResourcePreview {
                 title: rref.label.clone(), image: None, proto: None, status: Some(status),
-                zoom: PreviewZoom::Fit,
+                zoom: PreviewZoom::Fit, text: None,
             }
         }
+        // Opened by `open_document_row`, never through a blorb.
+        PreviewKind::Document => ResourcePreview {
+            title: rref.label.clone(), image: None, proto: None,
+            status: Some("Nothing to preview.".to_string()), zoom: PreviewZoom::Fit, text: None,
+        },
+    }
+}
+
+/// Open a Documents row (SQ-1700) the way the Journal's Documents tab does:
+/// `documents_tab::decide_open` picks the viewer, so an image or text file opens
+/// in the preview modal, a hint program only says where it opens, and anything
+/// else goes to the system opener (never in web mode). The spoiler question is
+/// the caller's (`needs_spoiler_confirm`). Returns the preview to show, or the
+/// status line to print.
+fn open_document_row(
+    entry: &app::documents::DocEntry,
+    web: bool,
+    opener: &mut dyn FnMut(&str),
+) -> Result<ResourcePreview, String> {
+    use app::documents_tab::{decide_open, OpenDecision};
+    let blank = |image, text| ResourcePreview {
+        title: entry.id.clone(), image, proto: None, status: None, zoom: PreviewZoom::Fit, text,
+    };
+    match decide_open(entry) {
+        OpenDecision::HintProgram(_) => Err(format!(
+            "{} is a hint program \u{2014} it opens in the Hints tab of a running game",
+            entry.id
+        )),
+        OpenDecision::Text(p) => Ok(blank(None, Some(p))),
+        OpenDecision::Image(img) => Ok(blank(Some(img), None)),
+        OpenDecision::External { note } => {
+            if web {
+                Err(format!("Cannot open {} here: {}", entry.id, entry.path.display()))
+            } else {
+                opener(&entry.path.to_string_lossy());
+                Err(match note {
+                    Some(n) => format!("Opened {} with the system viewer. {n}", entry.id),
+                    None => format!("Opened {} with the system viewer", entry.id),
+                })
+            }
+        }
+        OpenDecision::Failed(why) => Err(why),
+    }
+}
+
+/// [`open_document_row`] with the real opener and web check, putting the result
+/// into the loop's `preview` / status line.
+fn run_document_row(
+    entry: &app::documents::DocEntry,
+    preview: &mut Option<ResourcePreview>,
+    progress_line: &mut Option<String>,
+) {
+    match open_document_row(entry, app::opener::is_web_mode(), &mut |t| app::opener::open(t)) {
+        Ok(pv) => *preview = Some(pv),
+        Err(msg) => *progress_line = Some(msg),
     }
 }
 
@@ -4414,6 +4574,18 @@ fn draw_resource_preview(
     let rects = draw_dialog(buf, area, &spec, &st);
 
     let content = rects.content;
+    // A text document (SQ-1700): the Documents tab's pager, wrapped to the modal.
+    if let Some(p) = &pv.text {
+        let lines = p.wrapped_for(content.width);
+        let max = lines.len().saturating_sub(content.height as usize);
+        let top = p.scroll.get().min(max);
+        p.scroll.set(top);
+        let style = cs.theme.get("story_info_value").style;
+        for (i, l) in lines.iter().skip(top).take(content.height as usize).enumerate() {
+            draw_str_clipped(buf, content.x, content.y + i as u16, l, style, content);
+        }
+        return rects;
+    }
     // Render the image fitted (or zoomed) + centred, else the status line centred.
     let mut drew_image = false;
     if let (Some(picker), Some(img)) = (picker, pv.image.as_ref()) {
@@ -6018,6 +6190,7 @@ mod tests {
             disk_fonts: Vec::new(),
             system_fonts: Vec::new(),
             documents: Default::default(),
+            doc_files: Vec::new(),
         };
         // Wide enough that the resource detail suffix and the save-summary row aren't clipped.
         let area = Rect::new(0, 0, 100, 25);
@@ -6872,6 +7045,7 @@ mod tests {
             disk_fonts: Vec::new(),
             system_fonts: Vec::new(),
             documents: Default::default(),
+            doc_files: Vec::new(),
         };
         let area = Rect::new(0, 0, 60, 16);
         let mut buf = Buffer::empty(area);
@@ -6920,6 +7094,7 @@ mod tests {
             disk_fonts: Vec::new(),
             system_fonts: Vec::new(),
             documents: Default::default(),
+            doc_files: Vec::new(),
         };
         // Tall enough that the block is on screen without scrolling.
         let area = Rect::new(0, 0, 62, 40);
@@ -6991,6 +7166,7 @@ mod tests {
             ],
             system_fonts: Vec::new(),
             documents: Default::default(),
+            doc_files: Vec::new(),
         };
         let area = Rect::new(0, 0, 62, 40);
         let mut buf = Buffer::empty(area);
@@ -7047,6 +7223,7 @@ mod tests {
             disk_sounds: Vec::new(),
             disk_fonts: Vec::new(),
             documents: Default::default(),
+            doc_files: Vec::new(),
             system_fonts: vec![
                 app::system_fonts::SystemFace {
                     disk: "MacOS_6.0.8_System_Startup.img".into(),
@@ -7160,6 +7337,7 @@ mod tests {
             disk_fonts: Vec::new(),
             system_fonts: Vec::new(),
             documents: Default::default(),
+            doc_files: Vec::new(),
         };
         let area = Rect::new(0, 0, 62, 40);
         let mut buf = Buffer::empty(area);
@@ -7200,6 +7378,7 @@ mod tests {
             disk_fonts: Vec::new(),
             system_fonts: Vec::new(),
             documents: Default::default(),
+            doc_files: Vec::new(),
         };
         let area = Rect::new(0, 0, 62, 30);
         let mut buf = Buffer::empty(area);
@@ -7248,7 +7427,7 @@ mod tests {
             game_dir: std::path::PathBuf::from("/tmp/docs-aux"),
             qzl_saves: vec![], auto_saves: vec![], sidecars: vec![],
             art_candidates: vec![], art_in_use: None, disk_sounds: vec![],
-            disk_fonts: vec![], system_fonts: vec![], documents,
+            disk_fonts: vec![], system_fonts: vec![], documents, doc_files: Vec::new(),
         }
     }
 
@@ -7356,6 +7535,124 @@ mod tests {
         assert!(none.contains("Link this game to IFDB"), "{none}");
         assert_eq!(std::fs::read_dir(&manuals).unwrap().count(), 1, "an unlinked game makes nothing");
         let _ = std::fs::remove_dir_all(&home);
+    }
+
+    /// A documents folder with a PDF, a PNG, and a spoiler-named text file.
+    fn docs_folder_with_three_files(tag: &str) -> std::path::PathBuf {
+        let dir = app::scratch_dir(tag);
+        std::fs::write(dir.join("manual.pdf"), b"%PDF-1.4\n").unwrap();
+        image::RgbImage::new(4, 4).save(dir.join("map.png")).unwrap();
+        std::fs::write(dir.join("walkthrough.txt"), "go north\nthen east\n").unwrap();
+        dir
+    }
+
+    /// Render the info panel for `aux`, answering the text and the clickable doc rows.
+    fn panel_for_docs(aux: &app::picker::StoryAux) -> (String, Vec<(ratatui::layout::Rect, super::ResourceRef)>) {
+        use ratatui::{buffer::Buffer, layout::Rect};
+        let cs = app::colors::ColorScheme::terminal_default();
+        let area = Rect::new(0, 0, 80, 20);
+        let mut buf = Buffer::empty(area);
+        let mut cover = app::cover::CoverState::default();
+        let mut rects = Vec::new();
+        super::draw_info_panel(
+            "Game", "game.z5", &minimal_story_meta(), Some(aux), 0, area, None, &mut cover,
+            std::path::Path::new("game.z5"), std::path::Path::new("game.z5"), false,
+            &app::picker::HintStatus::None, &cs, &mut buf, &mut Vec::new(), &mut rects,
+        );
+        (buffer_to_string(&buf, area), rects)
+    }
+
+    /// SQ-1700: the panel lists the folder's files with the Documents tab's wording
+    /// (name, kind, size, spoiler marker); a missing or empty folder has no section.
+    #[test]
+    fn info_panel_lists_the_documents_folder_files_and_omits_the_section_when_empty() {
+        use app::documents::Location;
+        let dir = docs_folder_with_three_files("docs-panel-list");
+        let mut aux = docs_aux(Location::Exists(dir.clone()));
+        aux.doc_files = app::picker::doc_files_of(&aux.documents);
+        let (text, rects) = panel_for_docs(&aux);
+        assert!(text.contains("Documents (3)"), "{text}");
+        assert!(text.contains("manual.pdf") && text.contains("PDF"), "{text}");
+        assert!(text.contains("map.png") && text.contains("image"), "{text}");
+        let wt = text.lines().find(|l| l.contains("walkthrough.txt")).expect("row");
+        assert!(wt.contains("text") && wt.contains("spoiler"), "{wt}");
+        assert!(!text.lines().find(|l| l.contains("manual.pdf")).unwrap().contains("spoiler"));
+        assert_eq!(rects.iter().filter(|(_, r)| r.kind == super::PreviewKind::Document).count(), 3, "clickable rows");
+
+        let empty = app::scratch_dir("docs-panel-empty");
+        let mut aux = docs_aux(Location::Exists(empty));
+        aux.doc_files = app::picker::doc_files_of(&aux.documents);
+        assert!(!panel_for_docs(&aux).0.contains("Documents ("), "empty folder: no section");
+        let aux = docs_aux(Location::Missing(dir.join("nope")));
+        assert!(!panel_for_docs(&aux).0.contains("Documents ("), "missing folder: no section");
+        let aux = docs_aux(Location::Unlinked);
+        assert!(!panel_for_docs(&aux).0.contains("Documents ("), "unlinked: no section");
+    }
+
+    /// SQ-1700: a file that lands in the folder (a download, or one dropped in by
+    /// hand) appears once the aux's documents are re-read.
+    #[test]
+    fn a_new_file_appears_after_the_documents_are_refreshed() {
+        use app::documents::Location;
+        let home = app::scratch_dir("docs-panel-refresh");
+        let settings = app::data_roots::DocumentsSettings { dir: Some(home.join("manuals")), auto_create: false };
+        let roots = app::data_roots::DataRoots::resolve(&home, None, None, &settings);
+        let hint_index = app::hints::load_hint_index(&home);
+        let mut linked = scott_entry_with_pictures(std::path::Path::new("/tmp/lib/linked.prg"), None);
+        linked.title = "Zork: I".into();
+        linked.meta.ifdb_tuid = Some("tuid9".into());
+        let stories = vec![linked];
+        let mut cache: Vec<Option<app::picker::StoryAux>> = vec![None];
+        super::ensure_aux(&mut cache, &stories, 0, &roots, &hint_index);
+        let _ = super::create_documents_folder(&roots, &stories, 0, &mut cache, &hint_index);
+        let Location::Exists(dir) = cache[0].as_ref().unwrap().documents.clone() else { panic!("created") };
+        assert!(cache[0].as_ref().unwrap().doc_files.is_empty());
+        std::fs::write(dir.join("hints.txt"), "x").unwrap();
+        // Re-selecting the row.
+        app::picker::refresh_doc_files(cache[0].as_mut().unwrap(), &roots, &stories[0]);
+        assert_eq!(cache[0].as_ref().unwrap().doc_files.len(), 1);
+        // The download path drops the whole aux cache and resolves again.
+        std::fs::write(dir.join("map.txt"), "y").unwrap();
+        cache = vec![None];
+        super::ensure_aux(&mut cache, &stories, 0, &roots, &hint_index);
+        assert_eq!(cache[0].as_ref().unwrap().doc_files.len(), 2);
+        assert!(panel_for_docs(cache[0].as_ref().unwrap()).0.contains("Documents (2)"));
+    }
+
+    /// SQ-1700: a clicked row opens as the Documents tab opens it — images and
+    /// text in the preview, a PDF through the opener (never in web mode), a
+    /// spoiler asks first, a hint program only says where it opens.
+    #[test]
+    fn a_documents_row_opens_in_app_or_through_the_opener() {
+        use app::documents::Location;
+        let dir = docs_folder_with_three_files("docs-panel-open");
+        let entries = app::picker::doc_files_of(&Location::Exists(dir));
+        let by = |id: &str| entries.iter().find(|e| e.id == id).unwrap().clone();
+
+        let mut opened: Vec<String> = Vec::new();
+        let pv = super::open_document_row(&by("map.png"), false, &mut |t| opened.push(t.to_string()))
+            .expect("image previews in-app");
+        assert!(pv.image.is_some() && pv.text.is_none() && opened.is_empty());
+        let pv = super::open_document_row(&by("walkthrough.txt"), false, &mut |t| opened.push(t.to_string()))
+            .expect("text previews in-app");
+        assert!(pv.text.is_some() && opened.is_empty());
+
+        let pdf = by("manual.pdf");
+        let msg = super::open_document_row(&pdf, false, &mut |t| opened.push(t.to_string())).err().expect("status");
+        assert_eq!(opened, vec![pdf.path.to_string_lossy().to_string()], "{msg}");
+        let mut web_opened = Vec::new();
+        let msg = super::open_document_row(&pdf, true, &mut |t| web_opened.push(t.to_string())).err().expect("status");
+        assert!(web_opened.is_empty() && msg.contains("Cannot open"), "{msg}");
+
+        assert!(app::documents_tab::needs_spoiler_confirm(&by("walkthrough.txt")), "a spoiler asks first");
+        assert!(!app::documents_tab::needs_spoiler_confirm(&pdf));
+        let mut hint = by("map.png");
+        hint.kind = app::documents::DocKind::HintProgram;
+        hint.spoiler = true;
+        let mut none = Vec::new();
+        let msg = super::open_document_row(&hint, false, &mut |t| none.push(t.to_string())).err().expect("status");
+        assert!(none.is_empty() && msg.contains("Hints tab"), "{msg}");
+        assert!(!app::documents_tab::needs_spoiler_confirm(&hint));
     }
 
     /// A folder made by hand is found even with auto-creation off, and a failure
@@ -8023,7 +8320,7 @@ mod tests {
         let path = dir.join(format!("lanthorn-preview-{}.blb", std::process::id()));
         std::fs::write(&path, blorb_with_pict(&tiny_png())).unwrap();
 
-        let rref = super::ResourceRef {
+        let rref = super::ResourceRef { doc: None,
             blorb_path: path.clone(),
             kind: super::PreviewKind::Image,
             number: 1,
@@ -8039,7 +8336,7 @@ mod tests {
 
     #[test]
     fn open_preview_of_a_missing_blorb_yields_a_status_not_a_panic() {
-        let rref = super::ResourceRef {
+        let rref = super::ResourceRef { doc: None,
             blorb_path: std::path::PathBuf::from("/no/such/file.blb"),
             kind: super::PreviewKind::Image,
             number: 1,
@@ -8055,7 +8352,7 @@ mod tests {
 
     #[test]
     fn open_resource_preview_starts_at_fit_zoom() {
-        let rref = super::ResourceRef {
+        let rref = super::ResourceRef { doc: None,
             blorb_path: std::path::PathBuf::from("/no/such/file.blb"),
             kind: super::PreviewKind::Image,
             number: 1,

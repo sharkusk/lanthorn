@@ -625,6 +625,25 @@ pub struct StoryAux {
     /// the `create-documents-folder` command do the creating and then drop this
     /// aux so it is read again.
     pub documents: crate::documents::Location,
+    /// The files in that folder (SQ-1700), for the panel's "Documents (N)" list.
+    /// Read here, never per frame; empty unless the folder exists. Refreshed by
+    /// [`refresh_doc_files`] when the row is re-selected (a file dropped in by
+    /// hand), and rebuilt with the whole aux after a download or a create.
+    pub doc_files: Vec<crate::documents::DocEntry>,
+}
+
+/// The files of a documents folder: the Documents tab's own listing
+/// ([`crate::documents_tab::entries_for`]), so the panel cannot disagree with it.
+pub fn doc_files_of(location: &crate::documents::Location) -> Vec<crate::documents::DocEntry> {
+    crate::documents_tab::entries_for(location)
+}
+
+/// Re-read the documents folder of an already-resolved aux, cheaply: the folder
+/// location is looked up again (it may have been created) and its files listed,
+/// without redoing the medium scans the rest of the aux holds.
+pub fn refresh_doc_files(aux: &mut StoryAux, roots: &DataRoots, entry: &StoryEntry) {
+    aux.documents = crate::documents::locate(roots, entry.meta.ifdb_tuid.as_deref(), &entry.title);
+    aux.doc_files = doc_files_of(&aux.documents);
 }
 
 /// Resolve the lazy aux for one story. `roots` is the storage bases
@@ -722,6 +741,7 @@ pub fn resolve_aux(
     } else {
         Vec::new()
     };
+    let documents = crate::documents::locate(roots, entry.meta.ifdb_tuid.as_deref(), &entry.title);
     StoryAux {
         assoc_blorb,
         saves,
@@ -735,7 +755,8 @@ pub fn resolve_aux(
         disk_sounds,
         disk_fonts,
         system_fonts,
-        documents: crate::documents::locate(roots, entry.meta.ifdb_tuid.as_deref(), &entry.title),
+        doc_files: doc_files_of(&documents),
+        documents,
     }
 }
 

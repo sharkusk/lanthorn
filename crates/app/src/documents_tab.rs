@@ -267,6 +267,45 @@ pub struct DocHits {
     pub path_link: Option<(Rect, String)>,
 }
 
+/// How one document is to be shown, decided once from its kind (SQ-1700). The
+/// Journal's Documents tab and the story browser's info panel both open a file
+/// through this, so what is paged, what is drawn, what goes to the system
+/// opener and what is left to the Hints tab cannot drift between them. The
+/// spoiler question stays with each caller: it needs a dialog of its own.
+pub enum OpenDecision {
+    /// A hint program: never shown as a document; the Hints tab is its viewer.
+    HintProgram(PathBuf),
+    /// Text, read (capped) into a pager.
+    Text(Pager),
+    /// An image this build can decode.
+    Image(image::DynamicImage),
+    /// Hand to the system opener (PDF, other, or an image that cannot be shown
+    /// here); `note` says why when it is not obvious from the kind.
+    External { note: Option<String> },
+    /// The file could not be read.
+    Failed(String),
+}
+
+/// Decide how `entry` opens, reading what it needs from disk.
+pub fn decide_open(entry: &DocEntry) -> OpenDecision {
+    match entry.kind {
+        DocKind::HintProgram => OpenDecision::HintProgram(entry.path.clone()),
+        DocKind::Text => match read_capped(&entry.path, TEXT_CAP) {
+            Ok((bytes, truncated)) => OpenDecision::Text(Pager::new(&entry.id, &bytes, truncated)),
+            Err(e) => OpenDecision::Failed(format!("Could not read {}: {e}", entry.id)),
+        },
+        DocKind::Image => match read_capped(&entry.path, IMAGE_CAP) {
+            Ok((bytes, false)) => match crate::cover::decode(&bytes) {
+                Some(img) => OpenDecision::Image(img),
+                None => OpenDecision::External { note: Some("lanthorn cannot show this image format.".into()) },
+            },
+            Ok((_, true)) => OpenDecision::External { note: Some("This image is too large to show here.".into()) },
+            Err(e) => OpenDecision::Failed(format!("Could not read {}: {e}", entry.id)),
+        },
+        DocKind::Pdf | DocKind::Other => OpenDecision::External { note: None },
+    }
+}
+
 /// What opening a row came to.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum OpenOutcome {
@@ -337,6 +376,31 @@ pub fn is_spoiler(entry: &DocEntry) -> bool {
     entry.spoiler
 }
 
+/// Whether opening `entry` must first ask "open a spoiler?": flagged, and not a
+/// hint program (the Hints tab shows nothing until the player asks it something).
+pub fn needs_spoiler_confirm(entry: &DocEntry) -> bool {
+    is_spoiler(entry) && entry.kind != DocKind::HintProgram
+}
+
+/// The files of a resolved documents folder: `documents::list` when it exists,
+/// nothing otherwise. The one listing the Documents tab and the story browser's
+/// info panel (SQ-1700) both read, so they cannot disagree.
+pub fn entries_for(location: &Location) -> Vec<DocEntry> {
+    match location {
+        Location::Exists(dir) => crate::documents::list(dir).unwrap_or_default(),
+        _ => Vec::new(),
+    }
+}
+
+/// The marker appended to a spoiler-flagged row (tab and info panel alike).
+pub const SPOILER_FLAG: &str = " spoiler";
+
+/// A row's kind and size column: `PDF     2.1 MB`. Shared by the tab's list and
+/// the info panel's Documents section.
+pub fn row_meta(e: &DocEntry) -> String {
+    format!("{:<5} {:>7}", e.kind.label(), crate::ifdb_documents::format_size(e.size))
+}
+
 fn read_capped(path: &Path, cap: u64) -> std::io::Result<(Vec<u8>, bool)> {
     use std::io::Read;
     let mut buf = Vec::new();
@@ -361,10 +425,7 @@ impl DocumentsTab {
     /// same file when it is still there. Clears the dirty flag.
     pub fn set_location(&mut self, location: Location) {
         let keep = self.entries.get(self.selected).map(|e| e.id.clone());
-        self.entries = match &location {
-            Location::Exists(dir) => crate::documents::list(dir).unwrap_or_default(),
-            _ => Vec::new(),
-        };
+        self.entries = entries_for(&location);
         self.location = location;
         self.selected = keep
             .and_then(|id| self.entries.iter().position(|e| e.id == id))
@@ -431,54 +492,37 @@ impl DocumentsTab {
         opener: &mut dyn FnMut(&str),
     ) -> OpenOutcome {
         let Some(entry) = self.entries.get(idx).cloned() else { return OpenOutcome::Nothing };
-        if !confirmed && is_spoiler(&entry) && entry.kind != DocKind::HintProgram {
+        if !confirmed && needs_spoiler_confirm(&entry) {
             return OpenOutcome::NeedsConfirm(entry.id);
         }
         self.selected = idx;
-        let external = |note: Option<String>| {
-            DocView::External(ExternalView { name: entry.id.clone(), path: entry.path.clone(), note, web })
-        };
-        match entry.kind {
-            // Never paged and never spoiler-asked: the Hints tab is the viewer, and
-            // a hint program shows nothing until the player asks it something.
-            DocKind::HintProgram => OpenOutcome::HintProgram(entry.path.clone()),
-            DocKind::Text => match read_capped(&entry.path, TEXT_CAP) {
-                Ok((bytes, truncated)) => {
-                    self.view = DocView::Text(Pager::new(&entry.id, &bytes, truncated));
-                    OpenOutcome::Opened
-                }
-                Err(e) => OpenOutcome::Failed(format!("Could not read {}: {e}", entry.id)),
-            },
-            DocKind::Image => match read_capped(&entry.path, IMAGE_CAP) {
-                Ok((bytes, false)) => match crate::cover::decode(&bytes) {
-                    Some(img) => {
-                        self.view = DocView::Image(ImageView {
-                            name: entry.id.clone(),
-                            img: Arc::new(img),
-                            proto: RefCell::new(None),
-                            placed: Cell::new(None),
-                            last_rect: Cell::new(Rect::default()),
-                        });
-                        OpenOutcome::Opened
-                    }
-                    None => {
-                        self.view = external(Some("lanthorn cannot show this image format.".into()));
-                        self.launch(web, opener);
-                        OpenOutcome::Opened
-                    }
-                },
-                Ok((_, true)) => {
-                    self.view = external(Some("This image is too large to show here.".into()));
-                    self.launch(web, opener);
-                    OpenOutcome::Opened
-                }
-                Err(e) => OpenOutcome::Failed(format!("Could not read {}: {e}", entry.id)),
-            },
-            DocKind::Pdf | DocKind::Other => {
-                self.view = external(None);
+        match decide_open(&entry) {
+            OpenDecision::HintProgram(path) => OpenOutcome::HintProgram(path),
+            OpenDecision::Text(pager) => {
+                self.view = DocView::Text(pager);
+                OpenOutcome::Opened
+            }
+            OpenDecision::Image(img) => {
+                self.view = DocView::Image(ImageView {
+                    name: entry.id.clone(),
+                    img: Arc::new(img),
+                    proto: RefCell::new(None),
+                    placed: Cell::new(None),
+                    last_rect: Cell::new(Rect::default()),
+                });
+                OpenOutcome::Opened
+            }
+            OpenDecision::External { note } => {
+                self.view = DocView::External(ExternalView {
+                    name: entry.id.clone(),
+                    path: entry.path.clone(),
+                    note,
+                    web,
+                });
                 self.launch(web, opener);
                 OpenOutcome::Opened
             }
+            OpenDecision::Failed(why) => OpenOutcome::Failed(why),
         }
     }
 
@@ -842,8 +886,8 @@ fn finish_list(tab: &DocumentsTab, st: &Styles, area: Rect, buf: &mut Buffer, hi
         let base = if on { st.selected } else { st.row };
         fill(buf, row, base);
         let spoiler = is_spoiler(e);
-        let meta = format!("{:<5} {:>7}", e.kind.label(), crate::ifdb_documents::format_size(e.size));
-        let flag = if spoiler { " spoiler" } else { "" };
+        let meta = row_meta(e);
+        let flag = if spoiler { SPOILER_FLAG } else { "" };
         let right_w = crate::textwidth::str_cells(&meta) + flag.len() + 1;
         let name_w = (area.width as usize).saturating_sub(right_w + 2);
         let name = crate::textwidth::clip_to_cols_ellipsis(&e.id, name_w);

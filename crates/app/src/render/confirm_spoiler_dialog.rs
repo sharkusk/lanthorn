@@ -26,12 +26,24 @@ pub struct ConfirmSpoilerDialogRects {
 /// Draw the dialog centred over `area`; `None` when it is not open or `area` is too small.
 pub fn draw_confirm_spoiler_dialog(state: &AppState, area: Rect, buf: &mut Buffer) -> Option<ConfirmSpoilerDialogRects> {
     let name = state.overlays.confirm_spoiler_document.as_ref()?;
+    draw_spoiler_confirm(name, state.overlays.dialog_focus, &state.colors, area, buf)
+}
+
+/// The same dialog for a caller with no `AppState` (the story browser's info
+/// panel, SQ-1700): `focus` is 0 = Open it, 1 = Cancel.
+pub fn draw_spoiler_confirm(
+    name: &str,
+    focus: usize,
+    colors: &crate::colors::ColorScheme,
+    area: Rect,
+    buf: &mut Buffer,
+) -> Option<ConfirmSpoilerDialogRects> {
     let modal_w = DIALOG_W.min(area.width.saturating_sub(4));
     let modal_h = DIALOG_H.min(area.height.saturating_sub(2));
     if modal_w < MIN_W || modal_h < MIN_H {
         return None;
     }
-    let st = DialogStyle::from_colors(&state.colors);
+    let st = DialogStyle::from_colors(colors);
     let buttons = &[
         DialogButton { id: ButtonId::Ok, label: "Open it" },
         DialogButton { id: ButtonId::Cancel, label: "Cancel" },
@@ -42,12 +54,12 @@ pub fn draw_confirm_spoiler_dialog(state: &AppState, area: Rect, buf: &mut Buffe
         buttons,
         show_close: true,
         default: Some(ButtonId::Cancel),
-        focus: Some(state.overlays.dialog_focus),
+        focus: Some(focus),
         field: None,
     };
     let rects = draw_dialog(buf, area, &spec, &st);
     let content = rects.content;
-    let body = state.colors.theme.get("dialog.background").style;
+    let body = colors.theme.get("dialog.background").style;
     if content.height >= 1 {
         let quoted = crate::textwidth::clip_to_cols_ellipsis(&format!("\"{name}\""), content.width as usize);
         crate::render::draw_str_clipped(buf, content.x, content.y, &quoted, body, content);
