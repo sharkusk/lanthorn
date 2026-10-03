@@ -502,6 +502,46 @@ fn boot_resolves_the_fit_and_the_design_switch_per_game_over_global() {
     let _ = std::fs::remove_file(app::styles::per_game_config_path(&dir));
 }
 
+fn design_off_returns_the_running_session_to_cell_layout(name: &str, design: (u32, u32), masked: bool) {
+    let Some(path) = story(name) else { return };
+    let mut b = boot(path, GlkFitMode::Stretch);
+    assert_first_prompt(&b, design, GlkFitMode::Stretch);
+    let dir = b.game_dir.clone();
+    let _ = render(&mut b, 100, 40);
+    // Non-vacuity: design mode is really on in the session.
+    assert!(app::host::screen::glk_fit(b.session.as_mut()).is_some());
+    assert_eq!(glk_layout(b.session.as_mut()).unwrap().screen.size, design);
+    let had_mask = b.state.glk_mask.is_some();
+    assert!(had_mask || !masked, "non-vacuity: this story's mask loads");
+
+    b.state.config.glk_design = false;
+    assert!(!apply_glk_design(b.session.as_mut(), &mut b.state, &dir));
+    assert!(!b.state.glk_stretch);
+    assert!(b.state.glk_mask.is_none());
+    assert!(app::host::screen::glk_fit(b.session.as_mut()).is_none(), "session left design mode");
+    let _ = render(&mut b, 100, 40);
+    let l = glk_layout(b.session.as_mut()).unwrap();
+    assert_eq!(l.screen.size, (100, 40), "cell tree: layout units are the pane's cells");
+    assert_eq!(l.screen.text_cell, (1.0, 1.0));
+
+    b.state.config.glk_design = true;
+    assert!(apply_glk_design(b.session.as_mut(), &mut b.state, &dir));
+    assert!(b.state.glk_stretch);
+    assert_eq!(b.state.glk_mask.is_some(), had_mask, "the mask returns with design mode");
+    let _ = render(&mut b, 100, 40);
+    assert_eq!(glk_layout(b.session.as_mut()).unwrap().screen.size, design, "design mode returns");
+}
+
+#[test]
+fn photopia_design_off_returns_to_cell_layout() {
+    design_off_returns_the_running_session_to_cell_layout("photo201.blb", (640, 480), false);
+}
+
+#[test]
+fn narcolepsy_design_off_returns_to_cell_layout_and_clears_the_mask() {
+    design_off_returns_the_running_session_to_cell_layout("narco.blorb", (800, 600), true);
+}
+
 // ── /set-glk-fit ────────────────────────────────────────────────────────────
 
 #[test]

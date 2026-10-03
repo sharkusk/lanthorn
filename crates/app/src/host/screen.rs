@@ -149,10 +149,20 @@ pub fn apply_glk_design(session: &mut dyn Engine, state: &mut AppState, game_dir
         _ => None,
     };
     let fit = crate::glk_cfg::resolve_fit_mode(pg.glk_design_fit, state.config.glk_design_fit);
+    let was_design = glk_fit(session).is_some();
     let on = match session.as_any_mut().downcast_mut::<GlulxSession>() {
         Some(gs) if design.is_some() => {
             gs.set_glk_design_fit(design, fit);
             true
+        }
+        // Design layout switched OFF on a re-apply (`glk_design = false` while
+        // the session is already in design mode): return it to cell layout, and
+        // only then, so a cell-mode story sees no extra relayout. `set_glk_design`
+        // leaves the mask alone, so it is cleared here too.
+        Some(gs) if was_design => {
+            gs.set_glk_design_fit(None, fit);
+            gs.set_glk_mask(None);
+            false
         }
         _ => false,
     };
