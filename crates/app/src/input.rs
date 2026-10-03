@@ -2223,6 +2223,46 @@ pub fn cycle_panel(state: &mut AppState, mapper: &mut Mapper) {
     }
 }
 
+/// Same window as the story list's launch double-click.
+const MAP_DOUBLE_CLICK: std::time::Duration = BandClickTracker::WINDOW;
+
+/// Resolve a plain (no-motion) click on the map (SQ-1325). A second click on the
+/// SAME room within [`MAP_DOUBLE_CLICK`] is a double-click: it pins the room (never
+/// the single click's unpin toggle) and switches the Journal to the Room tab
+/// (SQ-1684). Everything else keeps the single-click behaviour.
+fn end_map_click(
+    state: &mut AppState,
+    mapper: &Mapper,
+    click: Option<crate::state::MapClick>,
+    now: std::time::Instant,
+) {
+    use crate::state::MapClick;
+    let last = state.last_map_room_click.take();
+    match click {
+        Some(MapClick::Room(id)) => {
+            let double = matches!(last, Some((r, t)) if r == id && now.duration_since(t) < MAP_DOUBLE_CLICK);
+            if double {
+                let view = state.room_dock_view;
+                pin_room_dock(state, mapper, id, view);
+                state.set_journal_tab(crate::journal::JournalTab::Room);
+            } else if state.selected_room == Some(id) {
+                state.last_map_room_click = Some((id, now));
+                state.selected_room = None;
+                state.room_path.clear();
+            } else {
+                state.last_map_room_click = Some((id, now));
+                let view = state.room_dock_view;
+                pin_room_dock(state, mapper, id, view);
+            }
+        }
+        Some(MapClick::Empty) => {
+            state.selected_room = None;
+            state.room_path.clear();
+        }
+        None => {}
+    }
+}
+
 /// Pin the Room tab on `id` in `view`, the shared body
 /// of both `Action::PinRoomDock` (left click) and `Action::OpenRoomMenu`
 /// (right click, SQ-1265) — the two gestures pin the same way, so the panel
@@ -3166,23 +3206,7 @@ fn apply_action_inner(action: Action, state: &mut AppState, mapper: &mut Mapper)
         // set, so this is a no-op for both.
         Action::EndDragPan => {
             let click = state.drag.take().filter(|d| !d.moved).and_then(|d| d.map_click);
-            match click {
-                Some(crate::state::MapClick::Room(id))
-                    if state.selected_room == Some(id) =>
-                {
-                    state.selected_room = None;
-                    state.room_path.clear();
-                }
-                Some(crate::state::MapClick::Room(id)) => {
-                    let view = state.room_dock_view;
-                    pin_room_dock(state, mapper, id, view);
-                }
-                Some(crate::state::MapClick::Empty) => {
-                    state.selected_room = None;
-                    state.room_path.clear();
-                }
-                None => {}
-            }
+            end_map_click(state, mapper, click, std::time::Instant::now());
         }
 
         Action::StartSelection(col, row) => {
@@ -7616,6 +7640,42 @@ mod tests {
         let sc = &s.overlays.config_screen.as_ref().unwrap().scroll;
         assert_eq!(sc.target_offset(), 1, "the settings list scrolled");
         assert_eq!(sc.selected, 2, "…under a cursor that stayed put");
+    }
+
+    /// SQ-1684: a double-click on a map room pins it AND opens the Room tab; a
+    /// single click pins and stays on the Map; empty space never switches.
+    #[test]
+    fn double_click_on_a_room_opens_the_room_tab() {
+        use crate::journal::JournalTab;
+        use crate::state::MapClick;
+        use std::time::{Duration, Instant};
+        let m = Mapper::default();
+        let t0 = Instant::now();
+
+        let mut s = AppState::default();
+        end_map_click(&mut s, &m, Some(MapClick::Room(1)), t0);
+        assert_eq!((s.selected_room, s.journal_tab), (Some(1), JournalTab::Map), "single click pins, stays on Map");
+        end_map_click(&mut s, &m, Some(MapClick::Room(1)), t0 + Duration::from_millis(200));
+        assert_eq!((s.selected_room, s.journal_tab), (Some(1), JournalTab::Room), "double click pins and opens Room");
+
+        // Too slow, or a different room: not a double.
+        let mut s = AppState::default();
+        end_map_click(&mut s, &m, Some(MapClick::Room(1)), t0);
+        end_map_click(&mut s, &m, Some(MapClick::Room(1)), t0 + Duration::from_millis(900));
+        assert_eq!(s.journal_tab, JournalTab::Map);
+        end_map_click(&mut s, &m, Some(MapClick::Room(2)), t0 + Duration::from_millis(1000));
+        assert_eq!(s.journal_tab, JournalTab::Map);
+
+        // Empty space, even twice, never switches.
+        let mut s = AppState::default();
+        end_map_click(&mut s, &m, Some(MapClick::Empty), t0);
+        end_map_click(&mut s, &m, Some(MapClick::Empty), t0 + Duration::from_millis(100));
+        assert_eq!(s.journal_tab, JournalTab::Map);
+        // A click on a room, then empty space, then the room again is not a double.
+        end_map_click(&mut s, &m, Some(MapClick::Room(1)), t0);
+        end_map_click(&mut s, &m, Some(MapClick::Empty), t0 + Duration::from_millis(100));
+        end_map_click(&mut s, &m, Some(MapClick::Room(1)), t0 + Duration::from_millis(200));
+        assert_eq!(s.journal_tab, JournalTab::Map);
     }
 
     /// SQ-0692: a left-click on a room used to open a floating Room Info popup.

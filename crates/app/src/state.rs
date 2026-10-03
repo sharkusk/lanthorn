@@ -2989,6 +2989,8 @@ pub struct AppState {
     pub room_dock_view: RoomDockView,
     /// Middle-button drag-pan state. `Some` while a drag gesture is in progress.
     pub drag: Option<DragState>,
+    /// The last plain click on a map room, for double-click detection (SQ-1684).
+    pub last_map_room_click: Option<(RoomId, std::time::Instant)>,
     /// A left-press over the drawn v6 image that the game may want (SQ-1378).
     /// `Some` between that Down and whatever ends the gesture — a drag (which
     /// makes it a text selection instead), the release (which delivers it), or
@@ -3940,6 +3942,7 @@ impl Default for AppState {
             viewed_layer: None,
             room_dock_view: RoomDockView::Info,
             drag: None,
+            last_map_room_click: None,
             pending_v6_click: None,
             selection: None,
             selection_edge: 0,
