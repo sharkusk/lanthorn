@@ -37,6 +37,11 @@ pub struct TurnRecord {
     /// e.g. "Turn 6: east · Kitchen" via [`TurnSummary`] without reaching
     /// into `TurnRecord` or the mapper directly.
     pub location_name: Option<String>,
+    /// Whether the game cleared the primary window during this turn (SQ-1713),
+    /// so a rewind can re-pin the cleared screen instead of reviving scrollback
+    /// the game had wiped. Set by the per-turn capture site after
+    /// [`record_turn`]; `false` for every other caller.
+    pub cleared: bool,
 }
 
 /// Append a record for a completed turn. The caller computes `map_changed`
@@ -73,6 +78,7 @@ pub fn record_turn(
         transcript: transcript.to_string(),
         location,
         location_name,
+        cleared: false,
     }));
 }
 
@@ -186,6 +192,25 @@ pub fn rebuild_transcript(
         }
     }
     (lines, kinds)
+}
+
+/// Where the game's last screen clear within records `[0..=idx]` sits in the
+/// transcript [`rebuild_transcript`] produces for the same range (SQ-1713): the
+/// line index just after that record's echoed command, `None` when no turn
+/// cleared. Everything before it is scrollback the game wiped.
+pub fn rebuild_clear_anchor(history: &[Arc<TurnRecord>], idx: usize) -> Option<usize> {
+    let mut len = 0usize;
+    let mut anchor = None;
+    for rec in history.iter().take(idx + 1) {
+        if !rec.command.is_empty() {
+            len += 1;
+        }
+        if rec.cleared {
+            anchor = Some(len);
+        }
+        len += rec.transcript.split('\n').count();
+    }
+    anchor
 }
 
 #[cfg(all(test, feature = "t-persist"))]
@@ -360,6 +385,22 @@ mod tests {
         assert!(hist[1].map_snapshot.is_none(), "only the new oldest record gets the carried-forward baseline");
     }
 
+    /// SQ-1713: a rewind re-pins the game's last clear at the same place the live
+    /// transcript had it -- just after that turn's echoed command.
+    #[test]
+    fn rebuild_clear_anchor_points_after_the_clearing_turns_echo() {
+        let m = mapper_with(1);
+        let mut hist = Vec::new();
+        record_turn(&mut hist, 1, "wake up", vec![1], &m, true, "a\nb");
+        record_turn(&mut hist, 2, "", vec![2], &m, false, "c\nd");
+        record_turn(&mut hist, 3, "look", vec![3], &m, false, "e");
+        assert_eq!(rebuild_clear_anchor(&hist, 2), None, "no turn cleared");
+        Arc::get_mut(&mut hist[1]).unwrap().cleared = true;
+        // lines: "> wake up", a, b, [c, d] ... -> the clear sits at 3 (no echo for "").
+        assert_eq!(rebuild_clear_anchor(&hist, 2), Some(3));
+        assert_eq!(rebuild_clear_anchor(&hist, 0), None, "rewinding before the clear drops it");
+    }
+
     /// When the drained prefix carries no snapshot at all, `cap_history` is a
     /// no-op on the new oldest record's `map_snapshot` — nothing to carry
     /// forward is not an error.
@@ -375,6 +416,7 @@ mod tests {
                     transcript: String::new(),
                     location: None,
                     location_name: None,
+                    cleared: false,
                 })
             })
             .collect();

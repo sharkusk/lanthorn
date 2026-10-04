@@ -2451,13 +2451,14 @@ pub type PendingResume =
     Option<(crate::engine::EngineSave, Vec<String>, Vec<TranscriptKind>, Option<zvm::screen::ScreenState>)>;
 
 /// Transcript bundle loaded from an archive at startup: (lines, kinds, per-line
-/// style runs, per-line paragraph layout, per-line inline image).
+/// style runs, per-line paragraph layout, per-line inline image, clear anchors).
 pub type LoadedTranscript = Option<(
     Vec<String>,
     Vec<TranscriptKind>,
     Vec<Vec<StyleRun>>,
     Vec<ParaFmt>,
     Vec<Option<crate::inline_image::InlineImage>>,
+    crate::archive::ClearAnchors,
 )>;
 
 /// The cached map render model for the live graph, keyed by graph generation and

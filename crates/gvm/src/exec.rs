@@ -6742,6 +6742,12 @@ impl Machine {
         self.backend.flush();
     }
 
+    /// Shared access to the display backend, for a host that must READ its
+    /// window contents while serializing (`&self`) a snapshot.
+    pub fn backend(&self) -> &dyn GlkBackend {
+        &*self.backend
+    }
+
     /// Mutable access to the display backend (e.g. to downcast in tests/host).
     pub fn backend_mut(&mut self) -> &mut dyn GlkBackend {
         &mut *self.backend

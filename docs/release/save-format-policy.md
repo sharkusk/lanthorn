@@ -46,7 +46,7 @@ Pre-beta there is still **no obligation to read old files** (see the standing
 | Glulx-Quetzal (`@save`) | `game.glksave` inside `<slug>.lanthorn` (app); bare `<slug>.qzl` (`gvm-cli`) | `gvm/src/exec.rs` `save_quetzal` | none — spec-defined `FORM IFZS` | Public spec (Glulx §1.8) | `exec::tests::save_quetzal_is_a_wellformed_ifzs_container`, `…omits_greg_and_glk_chunks` |
 | Host Save State — Z-machine | inside `.lanthorn` `game.qzl` | `zvm/src/quetzal.rs` (+ archive) | via archive `format_version` | Frozen (0.x) | archive round-trip tests |
 | Host Save State — Glulx | inside `.lanthorn` `game.glksave` | `gvm/src/exec.rs` `save_state` (adds `GReg` + `Glk `) | `Glk ` chunk: `GLK_SNAPSHOT_VERSION = 7` | Frozen (0.x) | `glk::tests::snapshot_version_constant_is_frozen`, `…serialize_stamps_current_snapshot_version`, `…deserialize_rejects_future_snapshot_version`, `exec::tests::save_state_is_the_same_container_plus_our_own_chunks` |
-| `.lanthorn` archive (map + save + transcript + screen + v6 paint log + history + pictures + painted ground) | `<ifid>.lanthorn` (ZIP) | `app/src/archive.rs` | `Meta.format_version = 10` | Frozen (0.x) | `archive::tests::format_version_constant_is_frozen`, `…unknown_format_version_returns_err`, `…save_trigger_wire_names_are_pinned_and_round_trip`, archive round-trip tests |
+| `.lanthorn` archive (map + save + transcript + screen + v6 paint log + history + pictures + painted ground) | `<ifid>.lanthorn` (ZIP) | `app/src/archive.rs` | `Meta.format_version = 11` | Frozen (0.x) | `archive::tests::format_version_constant_is_frozen`, `…unknown_format_version_returns_err`, `…save_trigger_wire_names_are_pinned_and_round_trip`, archive round-trip tests |
 | Z-machine aux data (v5 `@save`/`@restore` table) | `default.aux` | `app/src/aux_store.rs` + `zvm-cli/src/auxiliary.rs` | `ZAUX` magic + `VERSION = 1` | Frozen (0.x), cross-host | `aux_store::tests::version_constant_is_frozen`, `…decode_rejects_bumped_version`, `…encodes_canonical_zaux_bytes` |
 | Glk file VFS sidecar | `default.glkvfs` | `gvm/src/glk.rs` `encode_files`/`decode_files` (path: `app/src/vfs_store.rs`) | `GVFS` magic + `u32` version `1` | Frozen (0.x) | `glk::tests::encode_files_roundtrips_and_skips_temp`, `…decode_files_rejects_bumped_gvfs_version` |
 | Debug-coverage PC set | `default.pcs` | `app/src/pcset_store.rs` | `ZPCS` magic + `VERSION = 1` | Frozen (0.x) | `pcset_store::tests::version_constant_is_frozen`, `…decode_rejects_bumped_version`, `…codec_round_trips` |
@@ -57,6 +57,21 @@ Pre-beta there is still **no obligation to read old files** (see the standing
 
 ## Version history
 
+- **Archive 10 → 11 (SQ-1713).** `transcript.json` also carries the primary
+  window's clear anchors (`anchors.clear` / `anchors.top`, line indices into the
+  file's filtered transcript), and each rewind-history index entry carries a
+  `cleared` flag. Before, a restore reset the anchors and the scrollback the game
+  had cleared (Narcolepsy's pre-wake dream text) reappeared. *Accepted break, no
+  migration (pre-release):* a version-10 archive still loads, with no anchors, i.e.
+  today's behaviour; version 11 is rejected by older builds.
+- **Glulx host snapshot: extra `LtWc` chunk (SQ-1712).** After the gvm chunks the
+  app appends one chunk of JSON (`{"v":1,"windows":[...]}`) carrying what the
+  NON-primary Glk windows show: each text buffer's styled log (newest 256
+  entries / 32 KiB of text; inline pictures by Blorb resource number), each text
+  grid's cells, each graphics window's draw-op list (newest 1024 ops; a
+  canvas-wide erase collapses it). The recipe, never pixels. An unknown chunk is
+  skipped by any reader and a snapshot without it restores as before, so the
+  gvm `Glk ` version is unchanged.
 - **Glk chunk 6 → 7 (SQ-1616).** A window's line-input terminator set
   (`glk_set_terminators_line_event`) and echo-line flag
   (`glk_set_echo_line_event`) are now persisted. Before this bump,

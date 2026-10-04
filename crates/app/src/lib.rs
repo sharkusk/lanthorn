@@ -86,6 +86,7 @@ pub mod native_font;
 pub mod garglk_ini;
 pub mod glk_cfg;
 pub mod glk_backend;
+pub(crate) mod glk_contents;
 pub mod glulx_debug;
 pub mod glulx_playerlock;
 pub mod glulx_roomlock;

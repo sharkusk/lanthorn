@@ -422,8 +422,11 @@ pub fn resume_from_turn(
     state.history.truncate(idx + 1);
     let (lines, kinds) = crate::history::rebuild_transcript(&state.history, idx);
     state.transcript = lines;
-    state.clear_anchor = None;
-    state.top_anchor = None;
+    // History replay carries the game's clears as a flag per turn, so the rewound
+    // transcript keeps the same scrollback hidden (SQ-1713).
+    let anchor = crate::history::rebuild_clear_anchor(&state.history, idx);
+    state.clear_anchor = anchor;
+    state.top_anchor = anchor;
     state.transcript_kinds = kinds;
     // History replay carries no style runs; keep the parallel vecs length-synced
     // (unstyled, left rows).

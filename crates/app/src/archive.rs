@@ -238,9 +238,13 @@ const ENTRY_TRANSCRIPT_IMG_PREFIX: &str = "transcript-img/";
 /// beside the window canvases — the `erase_window` fills and the canvas anchors
 /// ([`V6LayersDto`]).
 ///
+/// Version 11 was SQ-1713: `transcript.json` also carries the primary window's clear
+/// anchors ([`ClearAnchors`]), so a restore keeps the scrollback the game cleared
+/// hidden instead of reviving it.
+///
 /// Version 6 was SQ-0588: a v6 archive carries its display list, and omits the
 /// canvas PNG for every window whose replay reproduced the live canvas at save time.
-pub const CURRENT_FORMAT_VERSION: u32 = 10;
+pub const CURRENT_FORMAT_VERSION: u32 = 11;
 
 /// What asked for this archive to be written (SQ-0531). Both triggers produce the
 /// SAME `.lanthorn` container — map, transcript, screen, aux and all — so an
@@ -392,6 +396,34 @@ struct TranscriptData {
     /// loader restores a transcript with no inline art (acceptable pre-release).
     #[serde(default)]
     images: Vec<Option<InlineImageDto>>,
+    /// The primary window's clear anchors, as indices into THESE (filtered)
+    /// `lines` (SQ-1713). Absent in older archives → no anchor.
+    #[serde(default)]
+    anchors: ClearAnchors,
+}
+
+/// Where the game last cleared the primary window, as transcript line indices
+/// (SQ-1713). Everything before `top` belongs to a screen the game wiped, and the
+/// renderer hides it above a fold; a restore that forgets the anchors puts that
+/// scrollback back on the player's screen (Narcolepsy's pre-wake dream text).
+/// Mirrors `AppState::clear_anchor` / `top_anchor`.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+pub struct ClearAnchors {
+    pub clear: Option<usize>,
+    pub top: Option<usize>,
+}
+
+impl ClearAnchors {
+    /// The anchors of a live session.
+    pub fn of(state: &crate::state::AppState) -> Self {
+        ClearAnchors { clear: state.clear_anchor, top: state.top_anchor }
+    }
+
+    /// Drop an anchor that points past the end of a `len`-line transcript (a
+    /// stale or hand-edited index must not mis-anchor real content).
+    fn clamped(self, len: usize) -> Self {
+        ClearAnchors { clear: self.clear.filter(|&a| a <= len), top: self.top.filter(|&a| a <= len) }
+    }
 }
 
 /// serde mirror of the persisted fields of [`crate::inline_image::InlineImage`]
@@ -464,6 +496,9 @@ struct HistoryIndexEntry {
     location: Option<mapper::graph::RoomId>,
     #[serde(default)]
     location_name: Option<String>,
+    /// [`crate::history::TurnRecord::cleared`] (SQ-1713); absent → `false`.
+    #[serde(default)]
+    cleared: bool,
 }
 
 #[derive(Debug)]
@@ -486,6 +521,8 @@ pub struct ArchiveContents {
     /// `AppState::transcript_images` after `reset_transcript_sidecars` at every
     /// restore site so a restored transcript renders its embedded art (SQ-0518).
     pub transcript_images: Vec<Option<crate::inline_image::InlineImage>>,
+    /// The primary window's clear anchors, indices into `transcript` (SQ-1713).
+    pub anchors: ClearAnchors,
     /// Per-turn rewind/replay history (empty for archives without `history/`).
     /// `Arc`-wrapped to match `AppState::history` (SQ-1184) — see there.
     pub history: Vec<std::sync::Arc<crate::history::TurnRecord>>,
@@ -609,6 +646,8 @@ pub struct SessionRecord<'a> {
     pub runs: &'a [Vec<crate::state::StyleRun>],
     pub para: &'a [crate::state::ParaFmt],
     pub images: &'a [Option<crate::inline_image::InlineImage>],
+    /// The primary window's clear anchors (SQ-1713), indices into `transcript`.
+    pub anchors: ClearAnchors,
     /// Per-turn rewind/replay records. Empty is a legitimate value — the capture
     /// is opt-in (`record_turn_history`) — which is exactly why an omission here
     /// could not be told apart from a player who had it switched off.
@@ -627,6 +666,7 @@ impl<'a> SessionRecord<'a> {
             runs: &state.transcript_runs,
             para: &state.transcript_para,
             images: &state.transcript_images,
+            anchors: ClearAnchors::of(state),
             history: &state.history,
             command_history: &state.command_history,
         }
@@ -635,7 +675,7 @@ impl<'a> SessionRecord<'a> {
     /// A session with nothing in it — for the callers that archive a machine
     /// rather than a play session (tests, and the bare-machine writer).
     pub fn empty() -> Self {
-        SessionRecord { transcript: &[], kinds: &[], runs: &[], para: &[], images: &[], history: &[], command_history: &[] }
+        SessionRecord { transcript: &[], kinds: &[], runs: &[], para: &[], images: &[], anchors: ClearAnchors::default(), history: &[], command_history: &[] }
     }
 
     /// An owned clone of this session (SQ-1184), for handing to the background
@@ -654,6 +694,7 @@ impl<'a> SessionRecord<'a> {
             runs: self.runs.to_vec(),
             para: self.para.to_vec(),
             images: self.images.to_vec(),
+            anchors: self.anchors,
             history: self.history.to_vec(),
             command_history: self.command_history.to_vec(),
         }
@@ -671,6 +712,7 @@ pub struct OwnedSessionRecord {
     pub runs: Vec<Vec<crate::state::StyleRun>>,
     pub para: Vec<crate::state::ParaFmt>,
     pub images: Vec<Option<crate::inline_image::InlineImage>>,
+    pub anchors: ClearAnchors,
     pub history: Vec<std::sync::Arc<crate::history::TurnRecord>>,
     pub command_history: Vec<String>,
 }
@@ -685,6 +727,7 @@ impl OwnedSessionRecord {
             runs: &self.runs,
             para: &self.para,
             images: &self.images,
+            anchors: self.anchors,
             history: &self.history,
             command_history: &self.command_history,
         }
@@ -753,6 +796,7 @@ pub fn save_archive_meta(
         runs: transcript_runs,
         para: transcript_para,
         images: &[],
+        anchors: ClearAnchors::default(),
         history,
         command_history,
     };
@@ -856,6 +900,7 @@ pub fn write_cleared_resume_archive(
         runs: &[],
         para: &[],
         images: &[],
+        anchors: ClearAnchors::default(),
         history: &[],
         command_history,
     };
@@ -897,6 +942,7 @@ pub(crate) fn build_archive_bytes(
         runs: transcript_runs,
         para: transcript_para,
         images: transcript_images,
+        anchors,
         history,
         command_history,
     } = *session;
@@ -945,7 +991,17 @@ pub(crate) fn build_archive_bytes(
     // the filtered line index (SQ-0518).
     let mut images: Vec<Option<InlineImageDto>> = Vec::new();
     let mut image_blobs: Vec<(usize, std::sync::Arc<Vec<u8>>)> = Vec::new();
+    // The anchors are indices into the LIVE transcript; the file keeps only
+    // Story/Input lines, so each is re-expressed as the number of kept lines
+    // before it (SQ-1713).
+    let mut filtered_anchors = ClearAnchors::default();
     for (i, (line, &k)) in transcript.iter().zip(transcript_kinds.iter()).enumerate() {
+        if anchors.clear == Some(i) {
+            filtered_anchors.clear = Some(lines.len());
+        }
+        if anchors.top == Some(i) {
+            filtered_anchors.top = Some(lines.len());
+        }
         if matches!(k, TranscriptKind::Story | TranscriptKind::Input) {
             let fi = lines.len(); // this line's index within the filtered vecs
             lines.push(line.clone());
@@ -987,7 +1043,14 @@ pub(crate) fn build_archive_bytes(
             }
         }
     }
-    let td = TranscriptData { lines, kinds, runs, para, images };
+    // An anchor at (or past) the end of the live transcript sits after every kept line.
+    if anchors.clear.is_some_and(|a| a >= transcript.len()) {
+        filtered_anchors.clear = Some(lines.len());
+    }
+    if anchors.top.is_some_and(|a| a >= transcript.len()) {
+        filtered_anchors.top = Some(lines.len());
+    }
+    let td = TranscriptData { lines, kinds, runs, para, images, anchors: filtered_anchors };
     let transcript_json =
         serde_json::to_string_pretty(&td).expect("TranscriptData is always serializable");
     zip.start_file(ENTRY_TRANSCRIPT, options)?;
@@ -1048,6 +1111,7 @@ pub(crate) fn build_archive_bytes(
                 has_map: r.map_snapshot.is_some(),
                 location: r.location,
                 location_name: r.location_name.clone(),
+                cleared: r.cleared,
             })
             .collect();
         let index_json =
@@ -1366,7 +1430,7 @@ pub fn load_archive(path: &Path) -> io::Result<ArchiveContents> {
     // transcript.json — optional; older archives omit it, default to empty vecs.
     // `image_dtos` is the per-line inline-image metadata (SQ-0518); the pixels are
     // read from the sibling `transcript-img/NNNN.png` blobs below.
-    let (transcript, transcript_kinds, transcript_runs, transcript_para, image_dtos) = match zip.by_name(ENTRY_TRANSCRIPT) {
+    let (transcript, transcript_kinds, transcript_runs, transcript_para, image_dtos, anchors) = match zip.by_name(ENTRY_TRANSCRIPT) {
         Ok(mut entry) => {
             let mut buf = String::new();
             entry.read_to_string(&mut buf)?;
@@ -1390,12 +1454,13 @@ pub fn load_archive(path: &Path) -> io::Result<ArchiveContents> {
                     } else {
                         (0..td.lines.len()).map(|_| None).collect()
                     };
-                    (td.lines, td.kinds, runs, para, images)
+                    let anchors = td.anchors.clamped(td.lines.len());
+                    (td.lines, td.kinds, runs, para, images, anchors)
                 }
-                Err(_) => (Vec::new(), Vec::new(), Vec::new(), Vec::new(), Vec::new()),
+                Err(_) => (Vec::new(), Vec::new(), Vec::new(), Vec::new(), Vec::new(), ClearAnchors::default()),
             }
         }
-        Err(_) => (Vec::new(), Vec::new(), Vec::new(), Vec::new(), Vec::new()),
+        Err(_) => (Vec::new(), Vec::new(), Vec::new(), Vec::new(), Vec::new(), ClearAnchors::default()),
     };
 
     // transcript-img/NNNN.png — resolved pixels for the inline transcript images
@@ -1495,6 +1560,7 @@ pub fn load_archive(path: &Path) -> io::Result<ArchiveContents> {
                     transcript,
                     location: e.location,
                     location_name: e.location_name,
+                    cleared: e.cleared,
                 }));
             }
             out
@@ -1586,7 +1652,7 @@ pub fn load_archive(path: &Path) -> io::Result<ArchiveContents> {
         e.read_to_end(&mut buf).ok().map(|_| buf)
     });
 
-    Ok(ArchiveContents { mapper, save, meta, transcript, transcript_kinds, transcript_runs, transcript_para, transcript_images, history, screen, aux, command_history, engine, display, pictures, ground })
+    Ok(ArchiveContents { mapper, save, meta, transcript, transcript_kinds, transcript_runs, transcript_para, transcript_images, anchors, history, screen, aux, command_history, engine, display, pictures, ground })
 }
 
 /// Read ONLY the `meta.json` entry from a save archive — avoids `load_archive`
@@ -2012,10 +2078,10 @@ mod tests {
         let history = vec![
             std::sync::Arc::new(TurnRecord { turn: 1, command: "look".into(), save: vec![1, 2, 3],
                 map_snapshot: Some(map_json.clone()), transcript: "West of House".into(),
-                location: Some(1), location_name: Some("West of House".into()) }),
+                location: Some(1), location_name: Some("West of House".into()), cleared: false }),
             std::sync::Arc::new(TurnRecord { turn: 2, command: "wait".into(), save: vec![4, 5, 6, 7],
                 map_snapshot: None, transcript: "Time passes.".into(),
-                location: None, location_name: None }),
+                location: None, location_name: None, cleared: false }),
         ];
 
         let path = temp_archive_path("history-rt");
@@ -2140,12 +2206,12 @@ mod tests {
             std::sync::Arc::new(TurnRecord {
                 turn: 1, command: "look".into(), save: vec![1, 2, 3],
                 map_snapshot: None, transcript: "West of House".into(),
-                location: None, location_name: None,
+                location: None, location_name: None, cleared: false,
             }),
             std::sync::Arc::new(TurnRecord {
                 turn: 2, command: "wait".into(), save: vec![4, 5, 6, 7],
                 map_snapshot: None, transcript: "Time passes.".into(),
-                location: None, location_name: None,
+                location: None, location_name: None, cleared: false,
             }),
         ];
         let path = temp_archive_path("reuse-basic");
@@ -2170,7 +2236,7 @@ mod tests {
             std::sync::Arc::new(TurnRecord {
                 turn: 3, command: "north".into(), save: vec![8, 9],
                 map_snapshot: None, transcript: "Forest".into(),
-                location: None, location_name: None,
+                location: None, location_name: None, cleared: false,
             }),
         ];
         let session2 = SessionRecord { history: &history2, ..SessionRecord::empty() };
@@ -2233,7 +2299,7 @@ mod tests {
         let history: Vec<std::sync::Arc<TurnRecord>> = vec![std::sync::Arc::new(TurnRecord {
             turn: 1, command: "look".into(), save: vec![9, 9, 9],
             map_snapshot: None, transcript: "A room.".into(),
-            location: None, location_name: None,
+            location: None, location_name: None, cleared: false,
         })];
         let session = SessionRecord { history: &history, ..SessionRecord::empty() };
 
@@ -2264,7 +2330,7 @@ mod tests {
         let other_history: Vec<std::sync::Arc<TurnRecord>> = vec![std::sync::Arc::new(TurnRecord {
             turn: 1, command: "xyzzy".into(), save: vec![1, 1, 1, 1, 1],
             map_snapshot: None, transcript: "Somewhere else entirely, a long way from here.".into(),
-            location: None, location_name: None,
+            location: None, location_name: None, cleared: false,
         })];
         let other_session = SessionRecord { history: &other_history, ..SessionRecord::empty() };
         let other_bytes = build_archive_bytes(
@@ -2330,12 +2396,12 @@ mod tests {
             std::sync::Arc::new(TurnRecord {
                 turn: 1, command: "one".into(), save: save1.clone(),
                 map_snapshot: None, transcript: "First turn text.".into(),
-                location: None, location_name: None,
+                location: None, location_name: None, cleared: false,
             }),
             std::sync::Arc::new(TurnRecord {
                 turn: 2, command: "two".into(), save: save2.clone(),
                 map_snapshot: None, transcript: "Second turn text.".into(),
-                location: None, location_name: None,
+                location: None, location_name: None, cleared: false,
             }),
         ];
         let path = temp_archive_path("reuse-rewind-replay");
@@ -2845,6 +2911,7 @@ mod tests {
                 runs: Vec::new(),
                 para: Vec::new(),
                 images: Vec::new(),
+                anchors: ClearAnchors::default(),
             };
             let transcript_json = serde_json::to_string(&td).unwrap();
             zip.start_file(ENTRY_TRANSCRIPT, options).unwrap();
@@ -2870,6 +2937,7 @@ mod tests {
             runs: vec![vec![StyleRun { start: 0, end: 1, bits: 0x02, fg: 0, bg: 0, link: 0, glk_style: 0 }], vec![]],
             para: Vec::new(),
             images: Vec::new(),
+            anchors: ClearAnchors::default(),
         };
         let json = serde_json::to_string(&td).unwrap();
         let back: TranscriptData = serde_json::from_str(&json).unwrap();
@@ -2889,6 +2957,7 @@ mod tests {
             runs: Vec::new(),
             para: vec![ParaFmt { nowrap_from: Some(11), ..ParaFmt::default() }],
             images: Vec::new(),
+            anchors: ClearAnchors::default(),
         };
         let json = serde_json::to_string(&td).unwrap();
         let back: TranscriptData = serde_json::from_str(&json).unwrap();
@@ -2952,6 +3021,33 @@ mod tests {
         assert!(ac.transcript_kinds.is_empty(), "transcript_kinds must default to empty");
     }
 
+    // SQ-1713: the clear anchors survive the archive, re-expressed in the
+    // FILTERED transcript (Meta/Warning lines are not written), and a stale
+    // index is dropped rather than mis-anchoring.
+    #[test]
+    fn clear_anchors_round_trip_through_the_filtered_transcript() {
+        let transcript: Vec<String> = ["dream", "/help output", "more dream", "Living room", "text"].iter().map(|s| s.to_string()).collect();
+        use crate::state::TranscriptKind;
+        let kinds = vec![TranscriptKind::Story, TranscriptKind::Meta, TranscriptKind::Story, TranscriptKind::Story, TranscriptKind::Story];
+        // Live anchor 3 ("Living room") sits after one dropped Meta line, so the
+        // file's index is 2.
+        let anchors = ClearAnchors { clear: Some(3), top: Some(3) };
+        let path = temp_archive_path("anchors-rt");
+        let machine = dummy_machine();
+        save_archive_meta_pics(
+            &path, &small_mapper(), &zvm_es(&machine), Some(&machine.screen), &machine.aux_data,
+            Meta { format_version: CURRENT_FORMAT_VERSION, ifid: None, name: None, turns: 0, saved_at: String::new(), location: None, score: None, trigger: SaveTrigger::HostState, source: SaveSource::default() },
+            &SessionRecord { transcript: &transcript, kinds: &kinds, anchors, ..SessionRecord::empty() },
+            &[], None, None,
+        )
+        .expect("save");
+        let ac = load_archive(&path).expect("load");
+        let _ = std::fs::remove_file(&path);
+        assert_eq!(ac.transcript, vec!["dream", "more dream", "Living room", "text"]);
+        assert_eq!(ac.anchors, ClearAnchors { clear: Some(2), top: Some(2) });
+        assert_eq!(ClearAnchors { clear: Some(9), top: Some(4) }.clamped(4), ClearAnchors { clear: None, top: Some(4) });
+    }
+
     // -------------------------------------------------------------------------
     // format freeze (docs/release/save-format-policy.md): the .lanthorn archive
     // version is frozen at 5 (bumped from 4 by SQ-0531, which added `Meta.trigger`
@@ -2960,7 +3056,7 @@ mod tests {
     // bump (update this pin + a migration/release note), never accidental drift.
     #[test]
     fn format_version_constant_is_frozen() {
-        assert_eq!(CURRENT_FORMAT_VERSION, 10, "archive format_version changed — see docs/release/save-format-policy.md");
+        assert_eq!(CURRENT_FORMAT_VERSION, 11, "archive format_version changed — see docs/release/save-format-policy.md");
     }
 
     // -------------------------------------------------------------------------
@@ -2990,6 +3086,7 @@ mod tests {
             transcript_runs: Vec::new(),
             transcript_para: Vec::new(),
             transcript_images: Vec::new(),
+            anchors: ClearAnchors::default(),
             history: Vec::new(),
             screen: None,
             display: None,

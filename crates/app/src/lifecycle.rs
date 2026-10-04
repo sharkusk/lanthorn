@@ -448,6 +448,7 @@ mod tests {
             runs: &runs,
             para: &para,
             images: &images,
+            anchors: app::archive::ClearAnchors::default(),
             history: &[],
             command_history: &state.command_history,
         };

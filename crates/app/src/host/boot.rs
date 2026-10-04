@@ -1452,7 +1452,7 @@ pub fn boot_story(req: BootRequest<'_>, hooks: &mut dyn BootHooks) -> Result<Boo
                                 ac.meta.format_version,
                                 crate::engine_helpers::is_v6_session(&*session),
                             ));
-                            startup_transcript = Some((ac.transcript, ac.transcript_kinds, ac.transcript_runs, ac.transcript_para, ac.transcript_images));
+                            startup_transcript = Some((ac.transcript, ac.transcript_kinds, ac.transcript_runs, ac.transcript_para, ac.transcript_images, ac.anchors));
                             startup_history = ac.history;
                             // Restore the turn counter from the same archive (SQ-0429):
                             // the auto_load resume path mirrors the interactive restore,
@@ -1921,10 +1921,11 @@ pub fn boot_story(req: BootRequest<'_>, hooks: &mut dyn BootHooks) -> Result<Boo
     }
 
     // If an archived transcript was loaded on startup, replace the fresh one.
-    if let Some((lines, kinds, runs, para, images)) = startup_transcript {
+    if let Some((lines, kinds, runs, para, images, anchors)) = startup_transcript {
         state.transcript = lines;
-        state.clear_anchor = None;
-        state.top_anchor = None;
+        // Auto-resume keeps the scrollback the game cleared hidden (SQ-1713).
+        state.clear_anchor = anchors.clear;
+        state.top_anchor = anchors.top;
         state.transcript_kinds = kinds;
         state.transcript_runs = runs;
         state.transcript_para = para;

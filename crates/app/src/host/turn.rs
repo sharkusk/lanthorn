@@ -726,6 +726,11 @@ fn post_turn_bookkeeping(
         // Bound retained turns (SQ-1185): `TurnRecord::save` is a full VM
         // snapshot, so left uncapped this grows without limit over an
         // arbitrarily long session.
+        // Remember a game-driven clear so a rewind can re-pin it (SQ-1713). The
+        // record was pushed a moment ago, so its `Arc` is still unique.
+        if let Some(rec) = state.history.last_mut().and_then(std::sync::Arc::get_mut) {
+            rec.cleared = result.erase_lower;
+        }
         crate::history::cap_history(&mut state.history, state.config.history_turns);
     }
 
@@ -1007,6 +1012,8 @@ pub fn apply_launch_resume(
             // What the archive is missing because it predates the screen (SQ-1401)
             // or paint-log (SQ-1403) format bump — SQ-1410.
             let mut restore_degradation: Option<crate::archive::RestoreDegradation> = None;
+            // The primary window's clear anchors from the same archive (SQ-1713).
+            let mut resumed_anchors = crate::archive::ClearAnchors::default();
             // The resumed game's map is part of its archive state — load it alongside.
             if let Ok(ac) = load_archive(arc_file) {
                 // The v6 screen: rebuilt from the archived display list under the
@@ -1022,6 +1029,7 @@ pub fn apply_launch_resume(
                 // Hand Glulx back the room it was saved in (SQ-0523); no-op for zvm.
                 crate::engine_helpers::seed_resumed_location(&mut *session, &ac.meta);
                 resumed_images = ac.transcript_images;
+                resumed_anchors = ac.anchors;
                 restore_degradation = Some(crate::archive::RestoreDegradation::from_format_version(
                     ac.meta.format_version,
                     crate::engine_helpers::is_v6_session(&*session),
@@ -1033,8 +1041,11 @@ pub fn apply_launch_resume(
                 if let Some(z) = zvm_session_opt_mut(&mut *session) { crate::session::restore_screen(z, scr); }
             }
             state.transcript = lines;
-            state.clear_anchor = None;
-            state.top_anchor = None;
+            // Same archive as the stashed lines, so its anchors index them; guard
+            // the length anyway rather than mis-anchor a mismatched transcript.
+            let anchored = resumed_images.len() == state.transcript.len();
+            state.clear_anchor = resumed_anchors.clear.filter(|_| anchored);
+            state.top_anchor = resumed_anchors.top.filter(|_| anchored);
             state.transcript_kinds = kinds;
             // The launch-resume stash carries no style runs; keep the parallel
             // vecs length-synced (unstyled, left/no-indent rows).

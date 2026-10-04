@@ -3360,7 +3360,20 @@ impl Engine for GlulxSession {
     }
 
     fn save_state(&self) -> EngineSave {
-        EngineSave::new(GLULX_ENGINE, GLULX_SAVE_FORMAT, self.machine.save_state())
+        // gvm's snapshot carries the window STRUCTURE only; the non-primary
+        // windows' contents ride along as one extra app-side chunk (SQ-1712).
+        let contents = self
+            .machine
+            .backend()
+            .as_any()
+            .downcast_ref::<AppGlk>()
+            .map(AppGlk::capture_contents)
+            .unwrap_or_default();
+        EngineSave::new(
+            GLULX_ENGINE,
+            GLULX_SAVE_FORMAT,
+            crate::glk_contents::append_chunk(self.machine.save_state(), &contents),
+        )
     }
 
     fn restore_state(&mut self, save: &EngineSave) -> Result<(), EngineError> {
@@ -3413,6 +3426,17 @@ impl Engine for GlulxSession {
         // turn first — drop the cached object-word set as `drive_turn` does, or
         // it keeps answering for the session we just left (SQ-1176). The
         // `parse_names` layout survives: same story, same compiler tables.
+        // gvm just closed and reopened every window, blank. Put the non-primary
+        // windows back as of the save BEFORE the Arrange below, so the game's own
+        // repaint lands on top (SQ-1712). A snapshot without the chunk (older,
+        // or a window-less game) leaves them blank, as it always did.
+        // Skipped for a `headless` session (the probe shadow), like the Arrange
+        // below: its screen is never rendered, so replaying the draw ops is waste.
+        if !self.headless {
+            if let Some(contents) = crate::glk_contents::find_chunk(&save.bytes) {
+                self.appglk().reinstate_contents(contents);
+            }
+        }
         self.drop_world_caches();
         // …and the room cache with them (SQ-1284). `last_room` is the room the
         // story last printed a HEADING for — a screen fact, held host-side because

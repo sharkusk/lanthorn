@@ -367,8 +367,11 @@ pub fn apply_archive_state(
     }
     *mapper = ac.mapper;
     state.transcript = ac.transcript;
-    state.clear_anchor = None;
-    state.top_anchor = None;
+    // The anchors are part of the archived transcript (SQ-1713): resetting them
+    // would put back the scrollback the game had cleared (Narcolepsy's pre-wake
+    // dream text).
+    state.clear_anchor = ac.anchors.clear;
+    state.top_anchor = ac.anchors.top;
     state.transcript_kinds = ac.transcript_kinds;
     state.transcript_runs = ac.transcript_runs;
     state.transcript_para = ac.transcript_para;
