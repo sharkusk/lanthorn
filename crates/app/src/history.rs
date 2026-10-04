@@ -37,7 +37,9 @@ pub struct TurnRecord {
     /// e.g. "Turn 6: east · Kitchen" via [`TurnSummary`] without reaching
     /// into `TurnRecord` or the mapper directly.
     pub location_name: Option<String>,
-    /// Whether the game cleared the primary window during this turn (SQ-1713),
+    /// Whether the game cleared the primary window during this turn, or in a
+    /// game-driven turn (key/timer/mouse) since the previous record (SQ-1714)
+    /// (SQ-1713),
     /// so a rewind can re-pin the cleared screen instead of reviving scrollback
     /// the game had wiped. Set by the per-turn capture site after
     /// [`record_turn`]; `false` for every other caller.
@@ -192,6 +194,14 @@ pub fn rebuild_transcript(
         }
     }
     (lines, kinds)
+}
+
+/// Whether the record being made notes a clear (SQ-1714): the turn's own, or one
+/// a game-driven turn (no record of its own) made since the previous record. Both
+/// mean the same thing to a rewind -- everything before the pin is wiped -- so
+/// several collapse into the one flag, the last winning as `clear_anchor` does.
+pub fn clear_noted(own_erase: bool, pending_from_game_driven: bool) -> bool {
+    own_erase || pending_from_game_driven
 }
 
 /// Where the game's last screen clear within records `[0..=idx]` sits in the
@@ -399,6 +409,27 @@ mod tests {
         // lines: "> wake up", a, b, [c, d] ... -> the clear sits at 3 (no echo for "").
         assert_eq!(rebuild_clear_anchor(&hist, 2), Some(3));
         assert_eq!(rebuild_clear_anchor(&hist, 0), None, "rewinding before the clear drops it");
+    }
+
+    /// SQ-1714: a clear made by a game-driven turn (no record of its own) is picked
+    /// up by the next record, whichever of several came first, and pins just after
+    /// that record's echo.
+    #[test]
+    fn a_pending_game_driven_clear_is_noted_by_the_next_record() {
+        assert!(!clear_noted(false, false));
+        assert!(clear_noted(false, true), "a pending key clear is picked up");
+        assert!(clear_noted(true, false), "the turn's own clear still counts");
+        assert!(clear_noted(true, true), "both collapse into the one flag");
+        let m = mapper_with(1);
+        let mut hist = Vec::new();
+        record_turn(&mut hist, 1, "wake up", vec![1], &m, true, "dream\nmore");
+        // a key clears, then (game-driven, unrecorded) prints; the next record carries it
+        record_turn(&mut hist, 2, "look", vec![2], &m, false, "room\nexits");
+        Arc::get_mut(&mut hist[1]).unwrap().cleared = clear_noted(false, true);
+        record_turn(&mut hist, 3, "go", vec![3], &m, false, "kitchen");
+        // lines: "> wake up", dream, more, "> look", room, exits, "> go", kitchen
+        assert_eq!(rebuild_clear_anchor(&hist, 2), Some(4), "pinned just after `> look`");
+        assert_eq!(rebuild_clear_anchor(&hist, 0), None, "rewinding before it drops the clear");
     }
 
     /// When the drained prefix carries no snapshot at all, `cap_history` is a

@@ -1925,6 +1925,7 @@ pub fn boot_story(req: BootRequest<'_>, hooks: &mut dyn BootHooks) -> Result<Boo
         state.transcript = lines;
         // Auto-resume keeps the scrollback the game cleared hidden (SQ-1713).
         state.clear_anchor = anchors.clear;
+        state.pending_clear = false;
         state.top_anchor = anchors.top;
         state.transcript_kinds = kinds;
         state.transcript_runs = runs;

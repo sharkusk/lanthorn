@@ -75,9 +75,14 @@ fn play(b: &mut BootedStory, cmd: &str) {
     finish(b, cmd, true, result);
 }
 
+/// A key through the path the TUI uses for a char event: no `TurnRecord` is made
+/// (SQ-1714). The earlier `finish_command_turn` spelling recorded the key as a
+/// turn, which is exactly what hid that a rewind revived the wiped dream text.
 fn key(b: &mut BootedStory) {
     let result = b.session.submit_key(KeyInput::Char(' ')).expect("a key turn");
-    finish(b, "", false, result);
+    let _ = app::host::turn::apply_game_driven_result(
+        &mut b.state, &mut b.mapper, &result, &b.game_dir, None, &*b.session, app::pager::Driver::PlayerInput,
+    );
 }
 
 /// The text of every non-primary text buffer in the window tree, `id:lines`.
@@ -227,10 +232,14 @@ fn rewind_brings_the_bubble_and_the_clear_back() {
     let Some(path) = story() else { return };
     let home = app::scratch_dir("sq1712-rewind");
     let mut b = boot_with(path, &home, true, true);
-    wake(&mut b); // 2 inputs
+    wake(&mut b); // 2 inputs: the key makes no record (SQ-1714)
+    assert_eq!(b.state.history.len(), 1, "premise: only `wake up` is recorded, the key is game-driven");
+    play(&mut b, "look"); // 3rd input
     let saved = bubble(&b);
-    let at = b.state.history.len() - 1; // the key turn
-    play(&mut b, "go to kitchen"); // 3rd input
+    let at = b.state.history.len() - 1; // the look turn
+    assert_eq!(at, 1, "premise: wake up, look");
+    assert!(b.state.history[at].cleared, "the look record picked up the key's clear");
+    play(&mut b, "go to kitchen"); // 4th input
     assert_ne!(bubble(&b), saved, "premise: moving changed window 2");
     assert_eq!(b.state.history.len(), at + 2, "premise: three turns recorded");
 

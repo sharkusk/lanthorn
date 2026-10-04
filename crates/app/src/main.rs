@@ -4040,6 +4040,7 @@ fn run_event_loop(boot: startup::BootResult, launched_from_library: bool) -> Run
                                 mapper = ac.mapper;
                                 state.transcript = ac.transcript;
                                 state.clear_anchor = ac.anchors.clear;
+                                state.pending_clear = false;
                                 state.top_anchor = ac.anchors.top;
                                 state.transcript_kinds = ac.transcript_kinds;
                                 state.transcript_runs = ac.transcript_runs;

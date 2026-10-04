@@ -430,6 +430,7 @@ pub fn reset_game(
             state.suggestion_active = false;
             state.transcript.clear();
             state.clear_anchor = None;
+            state.pending_clear = false;
             state.top_anchor = None;
             state.transcript_kinds.clear();
             state.transcript_runs.clear();

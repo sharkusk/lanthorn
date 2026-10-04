@@ -427,6 +427,7 @@ pub fn resume_from_turn(
     let anchor = crate::history::rebuild_clear_anchor(&state.history, idx);
     state.clear_anchor = anchor;
     state.top_anchor = anchor;
+    state.pending_clear = false;
     state.transcript_kinds = kinds;
     // History replay carries no style runs; keep the parallel vecs length-synced
     // (unstyled, left rows).

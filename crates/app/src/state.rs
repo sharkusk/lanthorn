@@ -2808,6 +2808,14 @@ pub struct AppState {
     /// replaced transcript is not merely unhelpful, it can coincide with
     /// real content and mis-anchor it).
     pub top_anchor: Option<usize>,
+    /// A clear of the primary window made by a GAME-DRIVEN turn (key, timer,
+    /// mouse, hyperlink), which records no `TurnRecord` of its own (SQ-1714). The
+    /// next recorded turn takes it over as its `cleared` flag, so a rewind past
+    /// that point re-pins the cleared screen. A bool, not a position: the
+    /// rebuilt transcript holds no lines of the game-driven turn, so a live
+    /// transcript index has no referent there. Several before one record
+    /// collapse into one (the last wins, as `clear_anchor` does).
+    pub pending_clear: bool,
     /// Monotonic transcript-content generation, bumped by every mutation of the
     /// transcript vecs (append / insert / merge / in-place edit / wholesale
     /// reset). Distinguishes a same-length content replacement (rewind / restore)
@@ -3949,6 +3957,7 @@ impl Default for AppState {
             pager: crate::pager::Pager::default(),
             last_transcript_total_rows: 0,
             clear_anchor: None,
+            pending_clear: false,
             top_anchor: None,
             transcript_gen: 0,
             transcript_edits: 0,

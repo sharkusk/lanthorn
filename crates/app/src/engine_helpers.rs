@@ -371,6 +371,7 @@ pub fn apply_archive_state(
     // would put back the scrollback the game had cleared (Narcolepsy's pre-wake
     // dream text).
     state.clear_anchor = ac.anchors.clear;
+    state.pending_clear = false;
     state.top_anchor = ac.anchors.top;
     state.transcript_kinds = ac.transcript_kinds;
     state.transcript_runs = ac.transcript_runs;

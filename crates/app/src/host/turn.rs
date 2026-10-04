@@ -709,6 +709,9 @@ fn post_turn_bookkeeping(
     // ── Rewind/replay capture (opt-in) ────────────────────────────
     // Skip the quit turn: the VM has terminated, so its snapshot has
     // no replayable state — recording it just adds a junk final turn.
+    // A clear a game-driven turn made since the last record (SQ-1714); taken
+    // whether or not this turn is recorded, so it never leaks past it.
+    let pending_clear = std::mem::take(&mut state.pending_clear);
     if state.config.record_turn_history && !result.quit {
         let map_changed = mapper.graph.struct_gen() != struct_gen_before;
         // The record owns its bytes — it outlives the turn and is serialized
@@ -729,7 +732,7 @@ fn post_turn_bookkeeping(
         // Remember a game-driven clear so a rewind can re-pin it (SQ-1713). The
         // record was pushed a moment ago, so its `Arc` is still unique.
         if let Some(rec) = state.history.last_mut().and_then(std::sync::Arc::get_mut) {
-            rec.cleared = result.erase_lower;
+            rec.cleared = crate::history::clear_noted(result.erase_lower, pending_clear);
         }
         crate::history::cap_history(&mut state.history, state.config.history_turns);
     }
@@ -1045,6 +1048,7 @@ pub fn apply_launch_resume(
             // the length anyway rather than mis-anchor a mismatched transcript.
             let anchored = resumed_images.len() == state.transcript.len();
             state.clear_anchor = resumed_anchors.clear.filter(|_| anchored);
+            state.pending_clear = false;
             state.top_anchor = resumed_anchors.top.filter(|_| anchored);
             state.transcript_kinds = kinds;
             // The launch-resume stash carries no style runs; keep the parallel
@@ -1242,6 +1246,9 @@ pub fn apply_game_driven_result(
             }
         }
         state.mark_screen_clear();
+        // No TurnRecord is made for this turn; the next recorded one carries the
+        // clear so a rewind keeps the wiped scrollback hidden (SQ-1714).
+        state.pending_clear = true;
     }
     // Whether this turn's output CONTINUED the transcript's last pre-turn row
     // instead of opening one below it — the pager needs it (below).
