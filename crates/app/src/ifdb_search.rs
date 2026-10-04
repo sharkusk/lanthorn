@@ -563,8 +563,18 @@ fn user_agent() -> String {
     format!("lanthorn/{} (+https://github.com/sharkusk/lanthorn)", env!("CARGO_PKG_VERSION"))
 }
 
+/// IFDB's `downloadable:yes` search operator (https://ifdb.org/search?help:
+/// "downloadable:yes|no — lists games that are/are not downloadable", i.e. with
+/// at least one story-file or application download link). Appended to every
+/// query so the browser does not list games with nothing to download
+/// (SQ-1716 step 1; format filtering is a later step).
+const DOWNLOADABLE_ONLY: &str = "downloadable:yes";
+
 fn search_url(query: &str) -> String {
-    format!("https://ifdb.org/search?xml&game&searchfor={}", percent_encode(query))
+    format!(
+        "https://ifdb.org/search?xml&game&searchfor={}",
+        percent_encode(&format!("{query} {DOWNLOADABLE_ONLY}"))
+    )
 }
 
 /// The "Popular on IFDB" seed query (SQ-0473) — see the module header's "(1b)"
@@ -572,7 +582,7 @@ fn search_url(query: &str) -> String {
 fn hot_url() -> String {
     format!(
         "https://ifdb.org/search?xml&game&searchfor={}&sortby=ratu",
-        percent_encode("rating:4- #ratings:10-")
+        percent_encode(&format!("rating:4- #ratings:10- {DOWNLOADABLE_ONLY}"))
     )
 }
 
@@ -1524,17 +1534,25 @@ mod tests {
     fn search_url_encodes_the_query_and_targets_the_xml_game_endpoint() {
         assert_eq!(
             search_url("Deep Space Drifter"),
-            "https://ifdb.org/search?xml&game&searchfor=Deep%20Space%20Drifter"
+            "https://ifdb.org/search?xml&game&searchfor=Deep%20Space%20Drifter%20downloadable%3Ayes"
         );
-        assert!(search_url("A&B").ends_with("searchfor=A%26B"));
+        assert!(search_url("A&B").ends_with("searchfor=A%26B%20downloadable%3Ayes"));
     }
 
     #[test]
     fn hot_url_uses_the_verified_rating_floor_and_browse_sort() {
         assert_eq!(
             hot_url(),
-            "https://ifdb.org/search?xml&game&searchfor=rating%3A4-%20%23ratings%3A10-&sortby=ratu"
+            "https://ifdb.org/search?xml&game&searchfor=rating%3A4-%20%23ratings%3A10-%20downloadable%3Ayes&sortby=ratu"
         );
+    }
+
+    #[test]
+    fn search_and_hot_urls_both_require_downloadable_games() {
+        assert!(search_url("zork").contains("zork%20downloadable%3Ayes"));
+        let hot = hot_url();
+        assert!(hot.contains("downloadable%3Ayes"));
+        assert!(hot.contains("rating%3A4-") && hot.contains("%23ratings%3A10-"));
     }
 
     #[test]
