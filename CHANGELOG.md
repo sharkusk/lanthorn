@@ -6,7 +6,7 @@ All notable changes to lanthorn are recorded here.
 [`.github/workflows/release.yml`](.github/workflows/release.yml)). A tag whose
 name contains a hyphen — `v0.1.0-beta.1`, `v0.2.0-rc.1` — is published as a
 **pre-release**; a bare `vMAJOR.MINOR.PATCH` is a full release. The workspace
-version in `Cargo.toml` (currently `0.9.0`) versions every crate and every
+version in `Cargo.toml` (currently `0.9.1`) versions every crate and every
 binary's `--version` at once, and carries any pre-release suffix so a build
 identifies itself without reading its git hash.
 
@@ -19,13 +19,29 @@ Absolute URLs or no link.
 
 ---
 
-## Unreleased
+## v0.9.1 — 2026-10-04
 
-*This section is drained when a version is cut. README.md describes the
-RELEASED build; prose for a feature that is in `main` but not yet released
-goes into the README in place, at its normal destination, marked with the
-visible tag `*Next release:*`. `release.yml` refuses to cut a release
-while any such tag, or this Unreleased section, still exists.*
+### Changed
+
+- **Saves made by 0.9.1 need 0.9.1.** The save archive has a newer version:
+  0.9.1 opens saves made by 0.9.0, but 0.9.0 cannot open saves made by 0.9.1.
+  Keep a copy of your saves before going back to an older build.
+- **`honor_game_colours = false` now themes every window.** Secondary text
+  windows and empty graphics windows follow your theme colours too; a colour
+  the game set on a window no longer wins in that mode.
+
+### Fixed
+
+- **Narcolepsy's thought bubble** is white all the way round, with smooth edges
+  clipped to the pixel, in its designed frame. Graphics windows the game has not
+  drawn into now start white, as the Glk standard says, and the bubble's margins
+  are no longer trimmed or left dark on terminals that show images.
+- **Restore State, rewind and auto-resume bring back what secondary Glulx
+  windows showed.** Narcolepsy's bubble no longer goes blank until the next
+  turn after a restore.
+- **Text the game had cleared stays cleared after a restore or rewind.** It no
+  longer reappears on screen (it is still in scrollback), including clears the
+  game made while waiting on a keypress.
 
 ## v0.9.0 — 2026-10-03
 
