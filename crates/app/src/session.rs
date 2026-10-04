@@ -3666,7 +3666,7 @@ impl GameSession {
                         win: i as u32,
                         canvas: canvas.arc(),
                         version: canvas.version,
-                        upscale: false,
+                        upscale: false, undrawn: false,
                     }),
                 }));
             }

@@ -119,7 +119,7 @@ fn build(nodes: &[(usize, PNode)], idx: &mut usize, n: usize) -> WinNode {
                 // Solid magenta so the harness exercises the graphics-as-cells path
                 // (a game's divider chrome) and it's visible in the rendered grid.
                 let img = image::RgbaImage::from_pixel(1, 1, image::Rgba([255, 0, 255, 255]));
-                WinNode::Graphics(crate::engine::GraphicsWindow { win: *id, canvas: std::sync::Arc::new(img), version: 1, upscale: false })
+                WinNode::Graphics(crate::engine::GraphicsWindow { win: *id, canvas: std::sync::Arc::new(img), version: 1, upscale: false, undrawn: false })
             }
         },
         PNode::Pair { vertical, border, split, key_bg } => {

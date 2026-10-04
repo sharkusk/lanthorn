@@ -392,6 +392,11 @@ pub struct GraphicsWindow {
     /// centering it at native size. Set for small pixel-art canvases like Scott
     /// Adams room pictures (256×96); Glulx keeps native-size centering.
     pub upscale: bool,
+    /// The canvas is still the window's untouched initial background (SQ-1711:
+    /// opaque Glk white in design/stretch mode). With `honor_game_colours` off the
+    /// renderer paints the theme's window background instead, exactly as it does
+    /// for a text window the game gave no colour.
+    pub undrawn: bool,
 }
 
 /// One window placed at an absolute cell rect within the story pane, for the

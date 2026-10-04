@@ -3324,7 +3324,7 @@ mod tests {
                     Arc::new(c)
                 },
                 version: 0,
-                upscale: false,
+                upscale: false, undrawn: false,
             }),
         };
         // A status window rasterising two text rows from its own left edge to the
@@ -3753,7 +3753,7 @@ mod tests {
         let frame = PositionedWindow {
             x: 0, y: 0, w: 1, h: 1, x_px: 0, y_px: 0, w_px: 640, h_px: 400,
             left_margin: 0, right_margin: 0,
-            node: WinNode::Graphics(GraphicsWindow { win: 7, canvas: Arc::new(art), version: 0, upscale: false }),
+            node: WinNode::Graphics(GraphicsWindow { win: 7, canvas: Arc::new(art), version: 0, upscale: false, undrawn: false }),
         };
 
         // The bar: one reversed run per character at the pen's own positions, so
@@ -3829,7 +3829,7 @@ mod tests {
         let canvas = Arc::new(image::RgbaImage::new(1, 1));
         PositionedWindow {
             x: 0, y: 0, w: 1, h: 1, x_px, y_px: 0, w_px: 8, h_px: 8, left_margin: 0, right_margin: 0,
-            node: WinNode::Graphics(GraphicsWindow { win, canvas, version: 0, upscale: false }),
+            node: WinNode::Graphics(GraphicsWindow { win, canvas, version: 0, upscale: false, undrawn: false }),
         }
     }
 
@@ -3846,7 +3846,7 @@ mod tests {
         PositionedWindow {
             x: 0, y: 0, w: 1, h: 1, x_px: x, y_px: y, w_px: w as u16, h_px: h as u16,
             left_margin: 0, right_margin: 0,
-            node: WinNode::Graphics(GraphicsWindow { win: 0, canvas, version: 0, upscale: false }),
+            node: WinNode::Graphics(GraphicsWindow { win: 0, canvas, version: 0, upscale: false, undrawn: false }),
         }
     }
 
@@ -3900,7 +3900,7 @@ mod tests {
         let plate = PositionedWindow {
             x: 0, y: 0, w: 1, h: 1, x_px: 28, y_px: 4, w_px: 584, h_px: 392,
             left_margin: 0, right_margin: 0,
-            node: WinNode::Graphics(GraphicsWindow { win: 0, canvas, version: 0, upscale: false }),
+            node: WinNode::Graphics(GraphicsWindow { win: 0, canvas, version: 0, upscale: false, undrawn: false }),
         };
         assert_eq!(story_prose_box((0, 0, 640, 400), Some(&plate), zvm::screen::V6Cell::DEFAULT), Some((0, 0, 640, 400)));
     }
@@ -3991,7 +3991,7 @@ mod tests {
             x: 0, y: 0, w: 1, h: 1, x_px: 0, y_px: 0, w_px: 640, h_px: 400,
             left_margin: 0, right_margin: 0,
             node: WinNode::Graphics(GraphicsWindow {
-                win: 0, canvas: Arc::new(canvas), version: 0, upscale: false,
+                win: 0, canvas: Arc::new(canvas), version: 0, upscale: false, undrawn: false,
             }),
         };
         assert_eq!(story_text_native(Some(&story), &empty, Some(&plate), zvm::screen::V6Cell::DEFAULT), Some((40, 100, 560, 200)));
@@ -4084,7 +4084,7 @@ mod tests {
             x: 0, y: 0, w: 1, h: 1, x_px: 0, y_px: 0,
             w_px: native.0 as u16, h_px: native.1 as u16,
             left_margin: 0, right_margin: 0,
-            node: WinNode::Graphics(GraphicsWindow { win: 7, canvas: Arc::new(c), version: 0, upscale: false }),
+            node: WinNode::Graphics(GraphicsWindow { win: 7, canvas: Arc::new(c), version: 0, upscale: false, undrawn: false }),
         }
     }
 
@@ -4543,7 +4543,7 @@ mod tests {
             w_px: 320, h_px,
             left_margin: 0, right_margin: 0,
             node: WinNode::Graphics(GraphicsWindow {
-                win: 1, canvas: Arc::new(canvas), version: 0, upscale: false,
+                win: 1, canvas: Arc::new(canvas), version: 0, upscale: false, undrawn: false,
             }),
         };
         // Box tall enough (40): both markers land 1:1 — never squashed.
@@ -4564,7 +4564,7 @@ mod tests {
     fn graphics_window(x_px: u16, y_px: u16, w: u16, h: u16, canvas: image::RgbaImage) -> PositionedWindow {
         PositionedWindow {
             x: 0, y: 0, w, h, x_px, y_px, w_px: w, h_px: h, left_margin: 0, right_margin: 0,
-            node: WinNode::Graphics(GraphicsWindow { win: 0, canvas: Arc::new(canvas), version: 0, upscale: false }),
+            node: WinNode::Graphics(GraphicsWindow { win: 0, canvas: Arc::new(canvas), version: 0, upscale: false, undrawn: false }),
         }
     }
 

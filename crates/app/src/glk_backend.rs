@@ -29,6 +29,12 @@ use crate::state::StyleRun;
 /// carrying it with the `glk_mask_outside` style and nothing else.
 pub const GLK_LETTERBOX_WIN: u32 = u32::MAX;
 
+/// A graphics window's first canvas (SQ-1711): opaque white in design/stretch
+/// mode (Glk's initial background), transparent in cell mode (SQ-0332/0338).
+fn fresh_canvas(design: bool, w: u32, h: u32) -> crate::graphics::Canvas {
+    if design { crate::graphics::Canvas::new_opaque(w, h, 0xFFFFFF) } else { crate::graphics::Canvas::new(w, h) }
+}
+
 /// Surround `inner` (the design frame, `frame` cells inside a `pane` of
 /// `(cols, rows)`) with letterbox filler buffers so the tree still covers the
 /// whole pane. A frame that IS the pane (stretch mode) is returned untouched.
@@ -1717,6 +1723,7 @@ impl AppGlk {
                         canvas: c.map(|c| c.arc()).unwrap_or_else(|| std::sync::Arc::new(image::RgbaImage::new(1, 1))),
                         version: c.map(|c| c.version).unwrap_or(0),
                         upscale: false,
+                        undrawn: c.is_some_and(|c| c.pristine),
                     })
                 }
                 WinType::Pair => unreachable!("pair windows are never tree leaves"),
@@ -1970,6 +1977,32 @@ impl GlkBackend for AppGlk {
         // `Canvas::resize` is a cheap no-op when the size is unchanged, so
         // this costs little on the frequent colour-only `sync_window_tree`
         // re-push (no structural change → no size change).
+        // SQ-1711: in design/stretch mode a graphics window the game has not
+        // drawn into yet still gets its (opaque white) canvas now, so the
+        // initial Glk background shows. Lazy here, not at `window_open`, because
+        // the design size can be set after a game's first windows open.
+        if self.design_screen().is_some() {
+            fn leaves(t: &WinTree, out: &mut Vec<u32>) {
+                match t {
+                    WinTree::Leaf { id, wintype: WinType::Graphics, .. } => out.push(*id),
+                    WinTree::Leaf { .. } => {}
+                    WinTree::Pair { first, second, .. } => {
+                        leaves(first, out);
+                        leaves(second, out);
+                    }
+                }
+            }
+            let mut gids = Vec::new();
+            if let Some(t) = &self.layout_tree {
+                leaves(t, &mut gids);
+            }
+            for id in gids {
+                if !self.graphics.contains_key(&id) {
+                    let (cw, ch) = self.canvas_size(id);
+                    self.graphics.insert(id, fresh_canvas(true, cw, ch));
+                }
+            }
+        }
         let ids: Vec<u32> = self.graphics.keys().copied().collect();
         for id in ids {
             let (cw, ch) = self.canvas_size(id);
@@ -2086,25 +2119,28 @@ impl GlkBackend for AppGlk {
 
     fn graphics_fill_rect(&mut self, win: u32, color: u32, left: i32, top: i32, w: u32, h: u32) {
         let (cw, ch) = self.canvas_size(win);
+        let design = self.design_screen().is_some();
         self.graphics
             .entry(win)
-            .or_insert_with(|| crate::graphics::Canvas::new(cw, ch))
+            .or_insert_with(|| fresh_canvas(design, cw, ch))
             .fill_rect(color, left, top, w, h);
     }
 
     fn graphics_erase_rect(&mut self, win: u32, left: i32, top: i32, w: u32, h: u32) {
         let (cw, ch) = self.canvas_size(win);
+        let design = self.design_screen().is_some();
         self.graphics
             .entry(win)
-            .or_insert_with(|| crate::graphics::Canvas::new(cw, ch))
+            .or_insert_with(|| fresh_canvas(design, cw, ch))
             .erase_rect(left, top, w, h);
     }
 
     fn graphics_set_background(&mut self, win: u32, color: u32) {
         let (cw, ch) = self.canvas_size(win);
+        let design = self.design_screen().is_some();
         self.graphics
             .entry(win)
-            .or_insert_with(|| crate::graphics::Canvas::new(cw, ch))
+            .or_insert_with(|| fresh_canvas(design, cw, ch))
             .set_background(color);
     }
 
@@ -2127,9 +2163,10 @@ impl GlkBackend for AppGlk {
         // Graphics-window target: existing canvas path.
         let Some(src) = self.picts.image(resnum) else { return false };
         let (cw, ch) = self.canvas_size(win);
+        let design = self.design_screen().is_some();
         self.graphics
             .entry(win)
-            .or_insert_with(|| crate::graphics::Canvas::new(cw, ch))
+            .or_insert_with(|| fresh_canvas(design, cw, ch))
             .draw_image(&src, x, y, scale);
         true
     }
@@ -2859,6 +2896,21 @@ mod tests {
         glk.grid_put_attr(1, 1, 0, GlkStyle::Normal, StyleColour::default(), StyleAttrs::default(), 0, "x");
         assert_eq!(glk.screen_model().grid().unwrap().cell(1, 1).link, 42, "linked cell carries its link value");
         assert_eq!(glk.screen_model().grid().unwrap().cell(1, 2).link, 0, "an unlinked cell has link 0");
+    }
+
+    // SQ-1711: design mode starts a graphics window opaque white; cell mode keeps
+    // the transparent default (SQ-0332/0338).
+    #[test]
+    fn fresh_canvas_is_white_in_design_mode_and_transparent_in_cell_mode() {
+        let d = fresh_canvas(true, 4, 4);
+        assert!(d.pristine && d.img.pixels().all(|p| p.0 == [255, 255, 255, 255]));
+        let c = fresh_canvas(false, 4, 4);
+        assert!(!c.pristine && c.img.pixels().all(|p| p.0[3] == 0));
+        let mut d = d;
+        d.fill_rect(0xFF0000, 0, 0, 1, 1);
+        assert!(!d.pristine, "any paint makes it a drawn canvas");
+        d.erase_rect(0, 0, 4, 4);
+        assert!(d.pristine && d.img.pixels().all(|p| p.0 == [255, 255, 255, 255]), "a whole erase returns to white");
     }
 
     #[test]

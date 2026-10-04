@@ -882,6 +882,16 @@ fn render_node(
             fill(area, buf, &state.colors);
             None
         }
+        WinNode::Graphics(gw) if gw.undrawn && !state.config.honor_game_colours => {
+            // SQ-1711: a graphics window the game never drew into shows its
+            // background, and with game colours off that is the theme's window
+            // background, the same style an uncoloured text window gets.
+            fill_style(area, buf, state.colors.theme.get("transcript").style);
+            if gw.win != 0 {
+                win_rects.push((gw.win, WinKind::Graphics, area));
+            }
+            None
+        }
         WinNode::Graphics(gw) => {
             // Solid/thin graphics windows (a game's chrome: panel dividers, colour
             // bars, backgrounds) render directly as cell backgrounds — exact,
@@ -2697,8 +2707,8 @@ fn render_inline_buffer(
     // This window's own Normal-style background (Glulx window colour, SQ-0328)
     // replaces the theme transcript bg when the game set one; `None` keeps the
     // theme background (today's behaviour).
-    let base = match (b.panel, b.bg) {
-        // A game-set window colour always wins.
+    let base = match (b.panel, b.bg.filter(|_| state.config.honor_game_colours)) {
+        // A game-set window colour wins while game colours are honoured.
         (_, Some(rgb)) => state.colors.theme.get("transcript").style.bg(crate::render::resolve_zcolour(zvm::screen::ZColour::True24(rgb), &state.colors)),
         // A chrome panel (Scott room panel) uses the themed `scott_room_panel`
         // colour so the split's top and bottom read as distinct regions.
@@ -13271,7 +13281,7 @@ mod tests {
         use ratatui::style::Color;
         fn gfx() -> WinNode {
             let img = image::RgbaImage::from_pixel(1, 1, image::Rgba([0, 0, 0, 255]));
-            WinNode::Graphics(crate::engine::GraphicsWindow { win: 1, canvas: std::sync::Arc::new(img), version: 1, upscale: false })
+            WinNode::Graphics(crate::engine::GraphicsWindow { win: 1, canvas: std::sync::Arc::new(img), version: 1, upscale: false, undrawn: false })
         }
         fn buf(bg: u32, primary: bool) -> WinNode {
             WinNode::Buffer(BufferWindow { win: 0, lines: vec![], runs: vec![], para: vec![], images: vec![], scroll: 0, primary, bg: Some(bg), fg: None, panel: false, px_runs: Vec::new(), reads_input: false })
@@ -14076,7 +14086,7 @@ mod tests {
             win: 1,
             canvas: std::sync::Arc::new(img),
             version: 1,
-            upscale: false,
+            upscale: false, undrawn: false,
         })
     }
 
@@ -14266,7 +14276,7 @@ mod tests {
         use ratatui::layout::Rect;
         use ratatui::buffer::Buffer;
         let img = image::RgbaImage::from_pixel(8, 8, image::Rgba([200, 50, 50, 255]));
-        let gw = crate::engine::GraphicsWindow { win: 1, canvas: std::sync::Arc::new(img), version: 1, upscale: false };
+        let gw = crate::engine::GraphicsWindow { win: 1, canvas: std::sync::Arc::new(img), version: 1, upscale: false, undrawn: false };
         let picker = ratatui_image::picker::Picker::halfblocks();
         let mut gr = crate::render::graphics::GraphicsRender::default();
         let area = Rect::new(0, 0, 12, 6);
@@ -14612,7 +14622,7 @@ mod tests {
         // those still suppress our rule (no doubling). (SQ-0340, refines SQ-0332)
         let empty_graphics = || {
             let img = image::RgbaImage::new(9, 57); // opened but never drawn → transparent
-            WinNode::Graphics(crate::engine::GraphicsWindow { win: 4, canvas: std::sync::Arc::new(img), version: 1, upscale: false })
+            WinNode::Graphics(crate::engine::GraphicsWindow { win: 4, canvas: std::sync::Arc::new(img), version: 1, upscale: false, undrawn: false })
         };
         let make = |second: WinNode| ScreenModel {
             root: WinNode::Pair {
@@ -14647,7 +14657,7 @@ mod tests {
             win: 7,
             canvas: std::sync::Arc::new(img),
             version: 1,
-            upscale: false,
+            upscale: false, undrawn: false,
         });
         let tree = WinNode::Pair {
             vertical: false,
@@ -14732,7 +14742,7 @@ mod tests {
                 win,
                 canvas: std::sync::Arc::new(image::RgbaImage::from_pixel(1, 1, image::Rgba([1, 2, 3, 255]))),
                 version: 1,
-                upscale: false,
+                upscale: false, undrawn: false,
             }),
         };
         let text = PositionedWindow { node: WinNode::Buffer(inline_buffer("STORY")), ..pw(9, 0, 8) };
@@ -14781,7 +14791,7 @@ mod tests {
                 win: 1,
                 canvas: std::sync::Arc::new(img),
                 version: 1,
-                upscale: false,
+                upscale: false, undrawn: false,
             }),
         };
 
@@ -14838,7 +14848,7 @@ mod tests {
             x: 0, y: 0, w: 40, h: 25, x_px: 0, y_px: 0, w_px: 320, h_px: 200,
             left_margin: 0, right_margin: 0,
             node: WinNode::Graphics(crate::engine::GraphicsWindow {
-                win: 7, canvas: std::sync::Arc::new(chrome_img), version: 1, upscale: false,
+                win: 7, canvas: std::sync::Arc::new(chrome_img), version: 1, upscale: false, undrawn: false,
             }),
         };
         // Story: the primary buffer at the win0 box (43,39,234,160).
@@ -14895,7 +14905,7 @@ mod tests {
             x: 0, y: 0, w: 40, h: 25, x_px: 0, y_px: 0, w_px: 320, h_px: 200,
             left_margin: 0, right_margin: 0,
             node: WinNode::Graphics(crate::engine::GraphicsWindow {
-                win: 7, canvas: std::sync::Arc::new(chrome_img), version: 1, upscale: false,
+                win: 7, canvas: std::sync::Arc::new(chrome_img), version: 1, upscale: false, undrawn: false,
             }),
         };
         // Status grid: a non-blank run at native row 6 (deep, ≥ STATUS_BAND_ROWS)
@@ -15171,7 +15181,7 @@ mod tests {
             x: 0, y: 0, w: 40, h: 25, x_px: 0, y_px: 0, w_px: 320, h_px: 200,
             left_margin: 0, right_margin: 0,
             node: WinNode::Graphics(crate::engine::GraphicsWindow {
-                win: 7, canvas: std::sync::Arc::new(frame), version: 1, upscale: false,
+                win: 7, canvas: std::sync::Arc::new(frame), version: 1, upscale: false, undrawn: false,
             }),
         };
         // The story window's OWN plate, in a colour nothing else on the screen uses:
@@ -15191,7 +15201,7 @@ mod tests {
             x: 5, y: 2, w: 15, h: 15, x_px: 40, y_px: 40, w_px: pw_px, h_px: ph_px,
             left_margin: 0, right_margin: 0,
             node: WinNode::Graphics(crate::engine::GraphicsWindow {
-                win: 0, canvas: std::sync::Arc::new(plate_img), version: 1, upscale: false,
+                win: 0, canvas: std::sync::Arc::new(plate_img), version: 1, upscale: false, undrawn: false,
             }),
         };
         let story = PositionedWindow {
@@ -15402,7 +15412,7 @@ mod tests {
             x: 0, y: 0, w: 80, h: 25, x_px: 0, y_px: 0, w_px: 640, h_px: 400,
             left_margin: 0, right_margin: 0,
             node: WinNode::Graphics(crate::engine::GraphicsWindow {
-                win: 7, canvas: std::sync::Arc::new(chrome_img), version: 1, upscale: false,
+                win: 7, canvas: std::sync::Arc::new(chrome_img), version: 1, upscale: false, undrawn: false,
             }),
         };
         let story = PositionedWindow {

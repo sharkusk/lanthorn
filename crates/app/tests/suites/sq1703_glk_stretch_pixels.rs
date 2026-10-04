@@ -219,3 +219,44 @@ fn narcolepsy_kitty_images_match_their_boxes() {
         assert_stretched("narco.blorb", ProtocolType::Kitty, c, r, 1);
     }
 }
+
+/// SQ-1711: in design mode a graphics window the game never draws into is handed
+/// to the image protocol as an opaque WHITE canvas (Glk's initial background), not
+/// a transparent one. Narcolepsy's four bubble-margin windows (ids 4, 6, 8, 10),
+/// before waking (0 inputs) and after (`wake up` + a key = 2 inputs).
+#[test]
+fn narcolepsy_undrawn_graphics_windows_hand_the_protocol_white() {
+    use app::engine::{Engine, WinNode};
+    fn undrawn(n: &WinNode, out: &mut Vec<(u32, bool, usize)>) {
+        match n {
+            WinNode::Pair { first, second, .. } => {
+                undrawn(first, out);
+                undrawn(second, out);
+            }
+            WinNode::Graphics(g) if g.undrawn => {
+                let opaque: Vec<_> = g.canvas.pixels().filter(|p| p.0[3] != 0).collect();
+                out.push((g.win, opaque.iter().all(|p| p.0 == [255, 255, 255, 255]), opaque.len()));
+            }
+            _ => {}
+        }
+    }
+    let Some(path) = story("narco.blorb") else { return };
+    for inputs in [0usize, 2] {
+        let mut b = boot(path.clone());
+        assert!(resize_glulx(b.session.as_mut(), (100, 37)));
+        if inputs == 2 {
+            let _ = Engine::submit(b.session.as_mut(), "wake up");
+            let _ = Engine::submit_key(b.session.as_mut(), app::engine::KeyInput::Char(' '));
+        }
+        let mut found = Vec::new();
+        undrawn(&b.session.screen().root, &mut found);
+        let ids: Vec<u32> = found.iter().map(|f| f.0).collect();
+        for id in [4, 6, 8, 10] {
+            assert!(ids.contains(&id), "{inputs} inputs: undrawn window {id} present in {ids:?}");
+        }
+        for (win, all_white, opaque) in found {
+            assert!(opaque > 0, "{inputs} inputs: window {win} canvas is opaque, not transparent");
+            assert!(all_white, "{inputs} inputs: window {win} canvas is white");
+        }
+    }
+}

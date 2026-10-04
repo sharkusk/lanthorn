@@ -879,7 +879,7 @@ impl Engine for ScottSession {
                     win: 1,
                     canvas: Arc::clone(canvas),
                     version: self.pic_version,
-                    upscale: true,
+                    upscale: true, undrawn: false,
                 })),
                 second: Box::new(text),
             },

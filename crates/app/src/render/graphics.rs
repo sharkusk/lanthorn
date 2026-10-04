@@ -6000,7 +6000,7 @@ mod tests {
             win,
             canvas: std::sync::Arc::new(image::RgbaImage::new(1, 1)),
             version: 1,
-            upscale: false,
+            upscale: false, undrawn: false,
         }
     }
 
@@ -6030,7 +6030,7 @@ mod tests {
             win,
             canvas: std::sync::Arc::new(image::RgbaImage::from_pixel(wpx, hpx, image::Rgba(rgba))),
             version: 1,
-            upscale: false,
+            upscale: false, undrawn: false,
         }
     }
 
@@ -6059,7 +6059,7 @@ mod tests {
         for x in 0..90 {
             img.put_pixel(x, 0, image::Rgba([200, 40, 60, 255])); // top row only
         }
-        let gw = GraphicsWindow { win: 1, canvas: std::sync::Arc::new(img), version: 1, upscale: false };
+        let gw = GraphicsWindow { win: 1, canvas: std::sync::Arc::new(img), version: 1, upscale: false, undrawn: false };
         let area = Rect::new(0, 0, 10, 1);
         let mut buf = Buffer::empty(area);
         assert!(render_graphics_as_cells(&gw, area, &mut buf, false), "thin strip → cells");
@@ -6076,7 +6076,7 @@ mod tests {
             img.put_pixel(3, y, image::Rgba([255, 255, 255, 255]));
             img.put_pixel(4, y, image::Rgba([255, 255, 255, 255]));
         }
-        let gw = GraphicsWindow { win: 1, canvas: std::sync::Arc::new(img), version: 1, upscale: false };
+        let gw = GraphicsWindow { win: 1, canvas: std::sync::Arc::new(img), version: 1, upscale: false, undrawn: false };
         let area = Rect::new(0, 0, 1, 3);
         let mut buf = Buffer::empty(area);
         assert!(render_graphics_as_cells(&gw, area, &mut buf, false));
@@ -6094,7 +6094,7 @@ mod tests {
         for (x, _y, p) in img.enumerate_pixels_mut() {
             *p = image::Rgba([(x % 256) as u8, 40, 200, 255]);
         }
-        let gw = GraphicsWindow { win: 7, canvas: std::sync::Arc::new(img), version: 3, upscale: false };
+        let gw = GraphicsWindow { win: 7, canvas: std::sync::Arc::new(img), version: 3, upscale: false, undrawn: false };
         // from_fontsize is deprecated in favor of a live stdio query, which a
         // headless test can't do — the fixed 8×18 mirrors the SQ-0520 report.
         #[allow(deprecated)]
@@ -6125,7 +6125,7 @@ mod tests {
         // Version bump with UNCHANGED pixels (a game that repaints its whole
         // window every turn): nothing is re-uploaded and nothing is deleted —
         // the same id is simply re-placed. (SQ-0564)
-        let gw2 = GraphicsWindow { win: 7, canvas: gw.canvas.clone(), version: 4, upscale: false };
+        let gw2 = GraphicsWindow { win: 7, canvas: gw.canvas.clone(), version: 4, upscale: false, undrawn: false };
         let mut buf3 = Buffer::empty(area);
         gr.render(&picker, &gw2, area, Style::default(), &mut buf3);
         let third = buf3.cell((0, 0)).unwrap().symbol().to_string();
@@ -6169,7 +6169,7 @@ mod tests {
             let mut img = image::RgbaImage::from_pixel(1104, 36, image::Rgba([220, 220, 220, 255]));
             img.put_pixel(0, 0, image::Rgba([tint, 0, 0, 255]));
             let gw =
-                GraphicsWindow { win: 2, canvas: std::sync::Arc::new(img), version, upscale: false };
+                GraphicsWindow { win: 2, canvas: std::sync::Arc::new(img), version, upscale: false, undrawn: false };
             let mut buf = Buffer::empty(area);
             gr.render(&picker, &gw, area, Style::default(), &mut buf);
             buf
@@ -6229,7 +6229,7 @@ mod tests {
                 win: 4,
                 canvas: std::sync::Arc::new(img),
                 version: u64::from(i) + 1,
-                upscale: false,
+                upscale: false, undrawn: false,
             };
             let mut buf = Buffer::empty(area);
             gr.render(&picker, &gw, area, Style::default(), &mut buf);
@@ -6263,7 +6263,7 @@ mod tests {
                 _ => image::Rgba([220, 210, 200, 255]),
             };
         }
-        let gw = GraphicsWindow { win: 1, canvas: std::sync::Arc::new(img), version: 1, upscale: false };
+        let gw = GraphicsWindow { win: 1, canvas: std::sync::Arc::new(img), version: 1, upscale: false, undrawn: false };
         let area = Rect::new(0, 0, 138, 2);
         let mut buf = Buffer::empty(area);
         assert!(
@@ -6278,7 +6278,7 @@ mod tests {
     fn thin_fully_transparent_paints_nothing() {
         // A thin window the game hasn't drawn (all transparent) leaves cells alone.
         let img = image::RgbaImage::new(90, 19);
-        let gw = GraphicsWindow { win: 1, canvas: std::sync::Arc::new(img), version: 1, upscale: false };
+        let gw = GraphicsWindow { win: 1, canvas: std::sync::Arc::new(img), version: 1, upscale: false, undrawn: false };
         let area = Rect::new(0, 0, 10, 1);
         let mut buf = Buffer::empty(area);
         buf.cell_mut((5, 0)).unwrap().set_style(Style::default().bg(Color::Rgb(1, 2, 3)));
@@ -6339,7 +6339,7 @@ mod tests {
             let on = ((x / 9) + (y / 19)) % 2 == 0;
             *p = if on { image::Rgba([255, 255, 255, 255]) } else { image::Rgba([0, 0, 0, 255]) };
         }
-        let gw = GraphicsWindow { win: 1, canvas: std::sync::Arc::new(img), version: 1, upscale: false };
+        let gw = GraphicsWindow { win: 1, canvas: std::sync::Arc::new(img), version: 1, upscale: false, undrawn: false };
         let area = Rect::new(0, 0, 10, 10);
         let mut buf = Buffer::empty(area);
         assert!(!render_graphics_as_cells(&gw, area, &mut buf, false), "detailed image → protocol, not cells");
@@ -6353,7 +6353,7 @@ mod tests {
         // garbled into artifacts (stray chars/lines) over the neighbouring
         // windows in a real terminal. (SQ-0338)
         let img = image::RgbaImage::new(90, 190); // 10×10 cells, all transparent
-        let gw = GraphicsWindow { win: 1, canvas: std::sync::Arc::new(img), version: 1, upscale: false };
+        let gw = GraphicsWindow { win: 1, canvas: std::sync::Arc::new(img), version: 1, upscale: false, undrawn: false };
         let area = Rect::new(0, 0, 10, 10);
         let mut buf = Buffer::empty(area);
         buf.cell_mut((5, 5)).unwrap().set_style(Style::default().bg(Color::Rgb(1, 2, 3)));
@@ -7048,7 +7048,7 @@ mod tests {
         for i in 0..n {
             let mut img = image::RgbaImage::from_pixel(64, 32, image::Rgba([9, 9, 9, 255]));
             img.put_pixel(0, 0, image::Rgba([i, 0, 0, 255]));
-            let gw = GraphicsWindow { win, canvas: std::sync::Arc::new(img), version: i as u64 + 1, upscale: false };
+            let gw = GraphicsWindow { win, canvas: std::sync::Arc::new(img), version: i as u64 + 1, upscale: false, undrawn: false };
             let mut buf = Buffer::empty(area);
             gr.render(picker, &gw, area, Style::default(), &mut buf);
             let sym = buf.cell((area.x, area.y)).unwrap().symbol().to_string();
@@ -7115,7 +7115,7 @@ mod tests {
             win: 2,
             canvas: std::sync::Arc::new(image::RgbaImage::from_pixel(64, 32, image::Rgba([9, 9, 9, 255]))),
             version: 9,
-            upscale: false,
+            upscale: false, undrawn: false,
         };
         gr.render(&picker, &gw, bigger, Style::default(), &mut buf);
         let sym = buf.cell((0, 0)).unwrap().symbol().to_string();
@@ -8024,7 +8024,7 @@ mod tests {
         let img = image::RgbaImage::from_fn(64, 36, |x, y| {
             image::Rgba([(x % 251) as u8, (y % 241) as u8, 0x40, 255])
         });
-        let gw = GraphicsWindow { win: 4, canvas: std::sync::Arc::new(img), version: 1, upscale: false };
+        let gw = GraphicsWindow { win: 4, canvas: std::sync::Arc::new(img), version: 1, upscale: false, undrawn: false };
         let picker = kitty_picker(8, 18);
         assert!(
             !kitty_compression(&picker),
@@ -8144,7 +8144,7 @@ mod tests {
         fn invalidating_drops_what_was_fitted_to_the_cell_and_keeps_what_was_not() {
             let img = image::RgbaImage::from_pixel(64, 32, image::Rgba([7, 7, 7, 255]));
             let gw =
-                GraphicsWindow { win: 7, canvas: std::sync::Arc::new(img), version: 1, upscale: false };
+                GraphicsWindow { win: 7, canvas: std::sync::Arc::new(img), version: 1, upscale: false, undrawn: false };
             let area = Rect::new(0, 0, 20, 4);
             let mut gr = GraphicsRender::default();
 

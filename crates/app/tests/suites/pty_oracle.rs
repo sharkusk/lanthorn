@@ -561,7 +561,7 @@ mod emitter {
         for (_, y, p) in canvas.enumerate_pixels_mut() {
             *p = image::Rgba([(y % 251) as u8, green, 200, 255]);
         }
-        GraphicsWindow { win: 1, canvas: std::sync::Arc::new(canvas), version, upscale: false }
+        GraphicsWindow { win: 1, canvas: std::sync::Arc::new(canvas), version, upscale: false, undrawn: false }
     }
 
     /// The backend's byte sink, kept on our side of the writer: ratatui-crossterm's

@@ -258,3 +258,76 @@ fn the_session_clips_graphics_window_canvases_it_hands_the_renderer() {
         assert_eq!(by_win(&with, win), by_win(&without, win), "side frame {win} untouched");
     }
 }
+
+/// SQ-1711: Narcolepsy's thought bubble is text window 2 plus four graphics
+/// windows the game never draws into. Glk's initial graphics background is
+/// white, so every mask-visible cell of the right half must match window 2's background (white when game colours are honoured, the theme's when not), both
+/// before waking (0 inputs; primary = window 2) and after (2 inputs: `wake up`
+/// plus a key; primary = window 1, navy), under both `honor_game_colours`.
+#[test]
+fn narcolepsy_undrawn_graphics_windows_are_white_before_and_after_waking() {
+    let Some(path) = story("narco.blorb") else { return };
+    for honor in [true, false] {
+        for inputs in [0usize, 2] {
+            let home = app::scratch_dir("sq1711-white");
+            let overrides = LaunchOverrides::default();
+            let req = BootRequest {
+                story_path: path.clone(),
+                disk_entry: None,
+                overrides: &overrides,
+                cfg: Config {
+                    user_dir: home.clone(),
+                    config_file: home.join("config.toml"),
+                    random_seed: Some(1),
+                    auto_save: false,
+                    honor_game_colours: honor,
+                    ..Config::default()
+                },
+                roots: app::data_roots::DataRoots::single(home.join("saves")),
+                flags: LaunchFlags::default(),
+                terminal: TerminalFacts::default(),
+                fresh_start: true,
+            };
+            let mut b = boot_story(req, &mut QuietBoot).expect("boots headlessly");
+            if inputs == 2 {
+                let _ = Engine::submit(b.session.as_mut(), "wake up");
+                let _ = Engine::submit_key(b.session.as_mut(), app::engine::KeyInput::Char(' '));
+            }
+            let buf = render(&mut b, 100, 37);
+            let mask = b.state.glk_mask.clone().unwrap();
+            // Window 2 (480,60 240x378 design px = cells 60,4 30x23): the text
+            // window of the bubble. Its bg is the reference in BOTH modes.
+            let reference = buf[(89, 25)].bg;
+            if honor {
+                assert_eq!(reference, ratatui::style::Color::Rgb(255, 255, 255), "honoured: window 2 is Glk white");
+            }
+            if !honor {
+                // The theme's window background, which every text window gets
+                // with game colours off (not the game's white).
+                assert_eq!(reference, b.state.colors.theme.get("transcript").style.bg.unwrap_or_default(), "unhonoured: window 2 is the theme's");
+            }
+            let white = reference;
+            let (mut seen, mut bad, mut navy) = (0, Vec::new(), 0);
+            for y in 0..37u16 {
+                for x in 0..100u16 {
+                    if !mask.cell_visible(x as u32, y as u32, 100, 37) {
+                        continue;
+                    }
+                    if x >= 50 {
+                        seen += 1;
+                        if buf[(x, y)].bg != white {
+                            bad.push((x, y, buf[(x, y)].bg));
+                        }
+                    } else if buf[(x, y)].bg == ratatui::style::Color::Rgb(0, 0, 0x80) {
+                        navy += 1;
+                    }
+                }
+            }
+            assert!(seen > 300, "non-vacuity: the bubble has many visible cells ({seen})");
+            assert!(bad.is_empty(), "honor={honor} inputs={inputs}: cells not matching window 2 {:?}", &bad[..bad.len().min(8)]);
+            if inputs == 2 && honor {
+                assert!(navy > 100, "non-vacuity: window 1 is navy after waking ({navy})");
+            }
+        }
+    }
+}

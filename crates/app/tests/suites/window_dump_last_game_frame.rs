@@ -31,7 +31,7 @@ fn v6_model() -> ScreenModel {
             win: 7,
             canvas: std::sync::Arc::new(chrome_img),
             version: 1,
-            upscale: false,
+            upscale: false, undrawn: false,
         }),
     };
     let story = PositionedWindow {

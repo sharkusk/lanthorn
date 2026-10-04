@@ -45,6 +45,9 @@ pub struct Canvas {
     /// (0 = never drawn). The v6 compositor sorts overlapping windows by this,
     /// so later-drawn windows paint on top. Set only on the v6 picture path.
     pub z_seq: u64,
+    /// Still wholly the opaque initial background (see [`Canvas::new_opaque`]):
+    /// cleared by any other paint, restored by a resize or a whole-canvas erase.
+    pub pristine: bool,
 }
 
 impl Canvas {
@@ -54,7 +57,16 @@ impl Canvas {
         // by a resize before the game's Arrange redraw lands) must show the pane
         // underneath, never a solid black block. Games that want an opaque
         // background set it via glk_window_set_background_color. (SQ-0332)
-        Canvas { img: Arc::new(RgbaImage::new(w.max(1), h.max(1))), bg: Rgba([0, 0, 0, 0x00]), version: 1, z_seq: 0 }
+        Canvas { img: Arc::new(RgbaImage::new(w.max(1), h.max(1))), bg: Rgba([0, 0, 0, 0x00]), version: 1, z_seq: 0, pristine: false }
+    }
+
+    /// An OPAQUE canvas filled with `bg` (0xRRGGBB), whose clears also return to
+    /// `bg`. Glk 0.7.5: "Each graphics window has a background color, which is
+    /// initially white" (SQ-1711). Used only where the host stretches a `.cfg`
+    /// design frame; the cell path keeps [`Canvas::new`]'s transparent default.
+    pub fn new_opaque(w: u32, h: u32, bg: u32) -> Canvas {
+        let bg = rgb(bg);
+        Canvas { img: Arc::new(RgbaImage::from_pixel(w.max(1), h.max(1), bg)), bg, version: 1, z_seq: 0, pristine: true }
     }
 
     /// Resize (preserving nothing — Glk redraws) if the pixel dims changed. Cleared
@@ -64,6 +76,7 @@ impl Canvas {
         if (self.img.width(), self.img.height()) != (w.max(1), h.max(1)) {
             self.img = Arc::new(RgbaImage::from_pixel(w.max(1), h.max(1), self.bg));
             self.version += 1;
+            self.pristine = self.bg.0[3] == 0xFF;
         }
     }
 
@@ -79,6 +92,7 @@ impl Canvas {
             return;
         }
         let mut grown = RgbaImage::from_pixel(nw, nh, self.bg);
+        self.pristine = false;
         image::imageops::replace(&mut grown, &*self.img, 0, 0);
         self.img = Arc::new(grown);
         self.version += 1;
@@ -92,6 +106,7 @@ impl Canvas {
         let y0 = top.max(0) as i64;
         let x1 = (left as i64 + w as i64).min(cw);
         let y1 = (top as i64 + h as i64).min(ch);
+        self.pristine = false;
         let img = Arc::make_mut(&mut self.img);
         for y in y0..y1 {
             for x in x0..x1 {
@@ -108,6 +123,8 @@ impl Canvas {
     pub fn erase_rect(&mut self, left: i32, top: i32, w: u32, h: u32) {
         let bg = self.bg;
         self.paint(bg, left, top, w, h);
+        // A whole-canvas erase returns an opaque-background canvas to untouched.
+        self.pristine = bg.0[3] == 0xFF && left <= 0 && top <= 0 && w >= self.img.width() && h >= self.img.height();
     }
 
     /// Composite `src` at `(x, y)`, optionally scaled to `(sw, sh)`, honoring alpha.
@@ -140,6 +157,7 @@ impl Canvas {
             }
             _ => src,
         };
+        self.pristine = false;
         image::imageops::overlay(Arc::make_mut(&mut self.img), view, x as i64, y as i64);
         self.version += 1;
     }
@@ -165,6 +183,7 @@ impl Canvas {
         if allow_w == 0 || allow_h == 0 {
             return;
         }
+        self.pristine = false;
         if allow_w < src.width() || allow_h < src.height() {
             let cropped = src.crop_imm(0, 0, allow_w, allow_h);
             image::imageops::overlay(Arc::make_mut(&mut self.img), &cropped, x as i64, y as i64);
