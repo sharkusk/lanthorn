@@ -1021,6 +1021,42 @@ size = "150x44"
 expect = ["Back Alley"]
 expect_art_cells = 100
 
+# ── Designed Glk frames (SQ-1703) ────────────────────────────────────────────
+#
+# Both stories ship a `.cfg` beside them naming the window the author designed
+# (Narcolepsy 800x600 with window mask 3, Photopia 640x480 with mask 39). The
+# default `/set-glk-fit stretch` lays that design out in exact pixels and fills
+# the pane with it. Neither shot is a v6 press, so `size` is not a magnification
+# here: it is picked so the pane is close to the design's 4:3 in device pixels.
+
+[[shots]]
+id = "narcolepsy-designed-frame"
+title = "Narcolepsy"
+press = "Glulx (.blorb) with its designed-window .cfg beside it"
+media = "stories/narco.blorb"
+caption = """
+*Narcolepsy* in the frame its author drew: the thought bubble is the game's own \
+window mask, and the title and blue column down the left are the artwork the \
+design reserves for them."""
+keys = "wait:6000,cr,wait:2500,text:look,cr,wait:2500"
+size = "92x37"
+expect = ["In the Sand"]
+expect_prose_cells = 60
+
+[[shots]]
+id = "photopia-designed-frame"
+title = "Photopia"
+press = "Glulx (.blb), release 2.01, with its designed-window .cfg beside it"
+media = "stories/photo201.blb"
+caption = """
+*Photopia* 2.01 in the frame its author drew: the game's own window mask and \
+artwork fill the pane, with the prose set in the text area the design leaves \
+for it."""
+keys = "wait:6000,cr,wait:2500"
+size = "92x37"
+expect = ["Would you like instructions"]
+expect_prose_cells = 60
+
 [[shots]]
 id = "scott-adams-graphics"
 title = "Golden Baton"

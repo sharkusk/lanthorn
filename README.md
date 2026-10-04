@@ -98,6 +98,14 @@ bring up the story info panel.
 |:--|
 | *A Glulx game with several Glk windows, each in the colours the story chose.* |
 
+| ![Narcolepsy in its designed Glk frame: the title and blue column down the left, the story's prose inside a thought-bubble window mask](docs/narcolepsy.png) |
+|:--|
+| *Narcolepsy in the frame its author drew: the thought bubble is the game's own window mask.* |
+
+| ![Photopia 2.01 in its designed Glk frame: a metallic title and credit frame around a white text window carrying the opening prose](docs/photopia.png) |
+|:--|
+| *Photopia 2.01 in its designed frame: the author's artwork fills the pane around the story's text.* |
+
 | ![The matrix map view: the map as a direction table — one row per room, every passage's true destination in its cell](docs/maze-grid.png) |
 |:--|
 | *The matrix view: one row per room, every exit's true destination in its cell.* |
