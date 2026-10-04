@@ -110,9 +110,7 @@ fn bubble(honor: bool, wake: bool) {
     }
     let mask = app::graphics::PictSource::resolve(&story, None).image(3).expect("mask Pict 3 decodes").to_rgba8();
     let inputs = if wake { 2 } else { 0 };
-    let user_dir = std::env::temp_dir().join(format!("lanthorn-sq1711-{}-{honor}-{wake}", std::process::id()));
-    let _ = std::fs::remove_dir_all(&user_dir);
-    std::fs::create_dir_all(&user_dir).expect("a throwaway lanthorn home");
+    let user_dir = app::scratch_dir("sq1711-bubble");
     std::fs::write(user_dir.join("config.toml"), format!("honor_game_colours = {honor}\n")).expect("seeding the colour policy");
 
     let mut spec = driver::Spec::new(env!("CARGO_BIN_EXE_lanthorn"), &story, &user_dir);
