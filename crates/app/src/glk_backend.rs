@@ -2148,9 +2148,17 @@ impl GlkBackend for AppGlk {
                 leaves(t, &mut gids);
             }
             for id in gids {
-                if !self.graphics.contains_key(&id) {
-                    let (cw, ch) = self.canvas_size(id);
-                    self.graphics.insert(id, fresh_canvas(true, cw, ch));
+                match self.graphics.get_mut(&id) {
+                    // Made before design mode took effect (or by a restore that
+                    // replayed no ops): still blank and transparent, so it becomes
+                    // the design background too.
+                    Some(c) => {
+                        c.upgrade_blank_to_opaque(0xFFFFFF);
+                    }
+                    None => {
+                        let (cw, ch) = self.canvas_size(id);
+                        self.graphics.insert(id, fresh_canvas(true, cw, ch));
+                    }
                 }
             }
         }
@@ -3073,6 +3081,19 @@ mod tests {
         assert!(!d.pristine, "any paint makes it a drawn canvas");
         d.erase_rect(0, 0, 4, 4);
         assert!(d.pristine && d.img.pixels().all(|p| p.0 == [255, 255, 255, 255]), "a whole erase returns to white");
+    }
+
+    #[test]
+    fn a_blank_transparent_canvas_upgrades_to_white_but_a_drawn_one_does_not() {
+        let mut blank = crate::graphics::Canvas::new(4, 4);
+        assert!(blank.upgrade_blank_to_opaque(0xFFFFFF));
+        assert!(blank.pristine && blank.img.pixels().all(|p| p.0 == [255, 255, 255, 255]));
+        let mut drawn = crate::graphics::Canvas::new(4, 4);
+        drawn.fill_rect(0xFF0000, 0, 0, 1, 1);
+        assert!(!drawn.upgrade_blank_to_opaque(0xFFFFFF), "painted canvas is the game's");
+        let mut set_bg = crate::graphics::Canvas::new(4, 4);
+        set_bg.set_background(0x123456);
+        assert!(!set_bg.upgrade_blank_to_opaque(0xFFFFFF), "a background the game set is kept");
     }
 
     #[test]

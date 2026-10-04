@@ -331,3 +331,73 @@ fn narcolepsy_undrawn_graphics_windows_are_white_before_and_after_waking() {
         }
     }
 }
+
+/// SQ-1711: with an image protocol the mask's cell-hiding pass leaves graphics
+/// windows alone (their pixel clip carries the shape and their placeholder cells
+/// carry the upload) but still blanks text windows and filler. 0 inputs, 100x37.
+#[test]
+fn with_an_image_protocol_the_hide_pass_spares_graphics_windows_only() {
+    let Some(path) = story("narco.blorb") else { return };
+    let mut b = booted_first_prompt(path, (800, 600));
+    b.state.game_picker = Some(app::render::graphics::kitty_picker(8, 16));
+    assert!(resize_glulx(b.session.as_mut(), (100, 37)));
+    let area = Rect::new(0, 0, 100, 37);
+    let mut buf = Buffer::empty(area);
+    let model = b.session.screen();
+    let wins = app::render::screen::render_story_pane(&model, false, None, &b.state, area, &mut buf).win_rects;
+    let mask = b.state.glk_mask.clone().unwrap();
+    let outside = b.state.colors.theme.get("glk_mask_outside").style;
+    let gfx: Vec<Rect> = wins.iter().filter(|(_, k, _)| *k == app::engine::WinKind::Graphics).map(|(_, _, r)| *r).collect();
+    let (mut kept, mut hidden) = (0, 0);
+    for y in 0..37u16 {
+        for x in 0..100u16 {
+            if mask.cell_visible(x as u32, y as u32, 100, 37) {
+                continue;
+            }
+            let c = &buf[(x, y)];
+            if gfx.iter().any(|r| r.contains(ratatui::layout::Position::new(x, y))) {
+                kept += 1;
+                assert_ne!(c.symbol(), " ", "graphics cell ({x},{y}) past the mask edge keeps its placement");
+            } else {
+                hidden += 1;
+                assert_eq!((c.symbol(), c.bg), (" ", outside.bg.unwrap_or_default()), "cell ({x},{y}) outside every graphics window is hidden");
+            }
+        }
+    }
+    // Every one of Narcolepsy's 611 mask-hidden cells (see above) lies in a graphics
+    // window, so with a protocol none is blanked and all keep their placeholder.
+    assert_eq!((kept, hidden), (611, 0));
+}
+
+/// The other half: a cell the mask hides that is NOT in a graphics window (here
+/// a block cut out of window 2, the bubble's text window) is still blanked with an
+/// image protocol present.
+#[test]
+fn with_an_image_protocol_the_hide_pass_still_blanks_text_cells() {
+    let Some(path) = story("narco.blorb") else { return };
+    let mut b = booted_first_prompt(path, (800, 600));
+    b.state.game_picker = Some(app::render::graphics::kitty_picker(8, 16));
+    // Everything visible except x 520..680, y 100..300 (inside window 2's 480,60 240x378).
+    let opaque: Vec<bool> = (0..600u32).flat_map(|y| (0..800u32).map(move |x| !((520..680).contains(&x) && (100..300).contains(&y)))).collect();
+    b.state.glk_mask = app::glk_cfg::GlkMask::from_opaque(800, 600, &opaque).map(std::sync::Arc::new);
+    assert!(b.state.glk_mask.is_some());
+    assert!(resize_glulx(b.session.as_mut(), (100, 37)));
+    let area = Rect::new(0, 0, 100, 37);
+    let mut buf = Buffer::empty(area);
+    let model = b.session.screen();
+    let wins = app::render::screen::render_story_pane(&model, false, None, &b.state, area, &mut buf).win_rects;
+    let mask = b.state.glk_mask.clone().unwrap();
+    let outside = b.state.colors.theme.get("glk_mask_outside").style;
+    let gfx: Vec<Rect> = wins.iter().filter(|(_, k, _)| *k == app::engine::WinKind::Graphics).map(|(_, _, r)| *r).collect();
+    let mut blanked = 0;
+    for y in 0..37u16 {
+        for x in 0..100u16 {
+            if mask.cell_visible(x as u32, y as u32, 100, 37) || gfx.iter().any(|r| r.contains(ratatui::layout::Position::new(x, y))) {
+                continue;
+            }
+            blanked += 1;
+            assert_eq!((buf[(x, y)].symbol(), buf[(x, y)].bg), (" ", outside.bg.unwrap_or_default()), "cell ({x},{y}) is hidden");
+        }
+    }
+    assert!(blanked > 20, "non-vacuity: a block of text-window cells is hidden ({blanked})");
+}

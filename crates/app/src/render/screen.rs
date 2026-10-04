@@ -374,9 +374,41 @@ fn render_story_pane_frame(
         // SQ-1707: in aspect mode the mask is the FRAME's shape, so it spans
         // the frame and not the letterboxed pane.
         let frame = glk_frame_rect(&model.root, inner);
+        // SQ-1711: a graphics window is clipped by the mask at PIXEL level
+        // (`convert_design_tree`), which carries the shape exactly; hiding its
+        // cells as well would trim up to half a cell off that edge and blank the
+        // kitty placeholder cells, one of which carries the image's upload. Only
+        // text windows and filler are hidden cell-wise. With no image protocol
+        // the graphics windows are drawn as cells (a cell-granular
+        // approximation of the clip), so there the cell pass still owns the edge.
+        // An undrawn window with game colours off is painted as plain cells (no
+        // image, so no pixel clip), and stays under the cell pass.
+        fn undrawn(n: &WinNode, out: &mut Vec<u32>) {
+            match n {
+                WinNode::Pair { first, second, .. } => {
+                    undrawn(first, out);
+                    undrawn(second, out);
+                }
+                WinNode::Graphics(g) if g.undrawn => out.push(g.win),
+                _ => {}
+            }
+        }
+        let mut cell_painted = Vec::new();
+        if !state.config.honor_game_colours {
+            undrawn(&model.root, &mut cell_painted);
+        }
+        let graphics: Vec<Rect> = win_rects
+            .iter()
+            .filter(|(w, k, _)| *k == WinKind::Graphics && state.game_picker.is_some() && !cell_painted.contains(w))
+            .map(|(_, _, r)| *r)
+            .collect();
         for y in 0..frame.height {
             for x in 0..frame.width {
                 if !mask.cell_visible(x as u32, y as u32, frame.width as u32, frame.height as u32) {
+                    let pos = ratatui::layout::Position::new(frame.x + x, frame.y + y);
+                    if graphics.iter().any(|r| r.contains(pos)) {
+                        continue;
+                    }
                     if let Some(c) = buf.cell_mut((frame.x + x, frame.y + y)) {
                         c.reset();
                         c.set_symbol(" ").set_style(outside);

@@ -69,6 +69,22 @@ impl Canvas {
         Canvas { img: Arc::new(RgbaImage::from_pixel(w.max(1), h.max(1), bg)), bg, version: 1, z_seq: 0, pristine: true }
     }
 
+    /// A canvas made before design mode was on (transparent background, nothing
+    /// drawn) becomes the opaque `bg` canvas a design-mode window starts as
+    /// (SQ-1711). Returns whether it changed. Anything the game painted, or a
+    /// background it set, is left alone.
+    pub fn upgrade_blank_to_opaque(&mut self, bg: u32) -> bool {
+        if self.bg.0[3] != 0 || self.img.pixels().any(|p| p.0[3] != 0) {
+            return false;
+        }
+        let (w, h) = (self.img.width(), self.img.height());
+        let z = self.z_seq;
+        *self = Canvas::new_opaque(w, h, bg);
+        self.z_seq = z;
+        self.version += 1;
+        true
+    }
+
     /// Resize (preserving nothing — Glk redraws) if the pixel dims changed. Cleared
     /// to `bg` (transparent unless the game set one), so an un-redrawn window shows
     /// the pane, not a black block.
