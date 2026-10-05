@@ -2680,7 +2680,7 @@ pub fn hint_status(entry: &StoryEntry, roots: &DataRoots, index: &hints::HintInd
             _ => {}
         }
     }
-    if hints::hint_download_for(&entry.meta.ifid).is_some() {
+    if hints::hint_download_for_with_tuid(&entry.meta.ifid, entry.meta.ifdb_tuid.as_deref()).is_some() {
         HintStatus::Downloadable
     } else {
         HintStatus::None

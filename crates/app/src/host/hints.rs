@@ -231,12 +231,13 @@ pub const ALREADY_DOWNLOADING: &str = "Already downloading hints…";
 fn launch_download(
     downloader: &mut HintDownloader,
     ifid: &str,
+    tuid: Option<&str>,
     story_path: &Path,
     disk_entry: Option<&str>,
     title: &str,
     documents: Option<&Path>,
 ) -> bool {
-    let Some(dl) = hints::hint_download_for(ifid) else {
+    let Some(dl) = hints::hint_download_for_with_tuid(ifid, tuid) else {
         return false;
     };
     let dest = HintDest::for_story(story_path, &dl.filename, documents.map(Path::to_path_buf));
@@ -264,6 +265,7 @@ pub fn start_story_download(
     if !launch_download(
         downloader,
         &entry.meta.ifid,
+        entry.meta.ifdb_tuid.as_deref(),
         &entry.path,
         entry.meta.disk_entry.as_deref(),
         &entry.title,
@@ -292,7 +294,7 @@ pub fn start_game_download(
         ALREADY_DOWNLOADING.to_string()
     } else if session_running {
         "This story already has a hint file".to_string()
-    } else if launch_download(downloader, ifid, story_path, disk_entry, title, documents) {
+    } else if launch_download(downloader, ifid, None, story_path, disk_entry, title, documents) {
         "Downloading hints…".to_string()
     } else {
         "No InvisiClues found for this story".to_string()

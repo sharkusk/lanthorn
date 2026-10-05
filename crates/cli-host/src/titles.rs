@@ -46,6 +46,30 @@ pub fn title_for_build(release: u16, serial: &str) -> Option<&'static str> {
     known_titles().get(format!("ZCODE-{release}-{serial}").as_str()).copied()
 }
 
+/// Canonical titles for the Infocom games, keyed by IFDB tuid, bundled in
+/// `infocom_tuids.tsv`. Titles are spelled as `known_titles.tsv` spells them.
+fn infocom_tuids() -> &'static HashMap<&'static str, &'static str> {
+    static TABLE: OnceLock<HashMap<&'static str, &'static str>> = OnceLock::new();
+    TABLE.get_or_init(|| {
+        include_str!("infocom_tuids.tsv")
+            .lines()
+            .filter_map(|line| {
+                let line = line.trim_end();
+                if line.is_empty() || line.starts_with('#') {
+                    return None;
+                }
+                line.split_once('\t').map(|(k, v)| (k.trim(), v.trim()))
+            })
+            .collect()
+    })
+}
+
+/// The canonical Infocom title for an IFDB tuid, or `None` for a game that is
+/// not one of the Infocom titles in `infocom_tuids.tsv`.
+pub fn title_for_tuid(tuid: &str) -> Option<&'static str> {
+    infocom_tuids().get(tuid).copied()
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -87,5 +111,22 @@ mod tests {
         assert_eq!(title_for_build(88, "840726"), known_title("ZCODE-88-840726-X"));
         assert_eq!(title_for_build(59, "851108"), Some("The Hitchhiker's Guide to the Galaxy"));
         assert_eq!(title_for_build(0, "000000"), None);
+    }
+
+    /// Every tuid row names a title `known_titles.tsv` also carries, and no tuid
+    /// is listed twice.
+    #[test]
+    fn infocom_tuids_file_names_known_titles_without_dupes() {
+        let table = infocom_tuids();
+        let lines = include_str!("infocom_tuids.tsv")
+            .lines()
+            .filter(|l| !l.trim().is_empty() && !l.trim_start().starts_with('#'))
+            .count();
+        assert_eq!(lines, table.len(), "no duplicate tuids in infocom_tuids.tsv");
+        let known: Vec<&str> = known_titles().values().copied().collect();
+        for (tuid, title) in table {
+            assert!(known.contains(title), "{tuid}: {title} is not spelled as in known_titles.tsv");
+        }
+        assert_eq!(title_for_tuid("0dbnusxunq7fw5ro"), Some("Zork I: The Great Underground Empire"));
     }
 }

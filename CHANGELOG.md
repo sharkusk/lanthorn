@@ -27,6 +27,13 @@ goes into the README in place, at its normal destination, marked with the
 visible tag `*Next release:*`. `release.yml` refuses to cut a release
 while any such tag, or this Unreleased section, still exists.*
 
+### Fixed
+
+- **InvisiClues for Infocom games whose exact release isn't recognised.** A story
+  linked to its Infocom game's IFDB page (a Zork I built from the public source,
+  say) is now offered that game's InvisiClues, and a local hint file for it is
+  recognised, even when its release isn't one lanthorn knows by name.
+
 ## v0.9.1 — 2026-10-04
 
 ### Changed

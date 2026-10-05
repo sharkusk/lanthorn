@@ -56,7 +56,7 @@ pub use storage::{
     game_dir_with_key, is_yes, known_loose_build, overwrite_warning, pick_save,
     resolve_save_input, save_list_line, story_key, story_key_at, story_key_for, StoryOrigin,
 };
-pub use titles::known_title;
+pub use titles::{known_title, title_for_tuid};
 pub use term::{
     TerminalGuard, cursor_reset, cursor_steady_bar, cursor_steady_block, cursor_steady_underline,
     end_raw_mode, osc_reset_bg, osc_reset_fg, osc_set_bg, osc_set_fg, page_bg_escape,

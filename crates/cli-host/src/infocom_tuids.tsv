@@ -1,0 +1,48 @@
+# Canonical Infocom titles, keyed by IFDB tuid (the id in ifdb.org/viewgame?id=...).
+#
+# Format: <tuid><TAB><Title>. Blank lines and lines starting with '#' are
+# ignored. Titles are spelled exactly as known_titles.tsv spells them, so the
+# same title-to-hint-key logic applies. This is the fallback identity for a
+# story whose IFID known_titles.tsv does not name (a build compiled from the
+# public ZIL source, a beta release): a story linked to the game's IFDB page
+# carries that tuid, and the tuid asserts which game it is.
+#
+# Provenance: every tuid below was checked against ifdb.org on 2026-10-05
+# (search by title, then the game's own page for its title and author).
+# Zork I Demo, Mini-Zork and the samplers are deliberately absent.
+0dbnusxunq7fw5ro	Zork I: The Great Underground Empire
+yzzm4puxyjakk8c4	Zork II: The Wizard of Frobozz
+vrsot1zgy1wfcdru	Zork III: The Dungeon Master
+17coplfu323xif76	Zork Zero: The Revenge of Megaboz
+40hswtkhap88gzvn	Zork: The Undiscovered Underground
+4h62dvooeg9ajtfa	A Mind Forever Voyaging
+zoohwv5nqye7up2t	Arthur: The Quest for Excalibur
+b0i6bx7g4rkrekgg	Ballyhoo
+9h6o1charof548ii	Beyond Zork: The Coconut of Quendor
+7epwz167lgruvm0u	Border Zone
+zjyxds3s57pgis3x	Bureaucracy
+4ao65o1u0xuvj8jf	Cutthroats
+p976o7x5ies9ltdh	Deadline
+vu4xhul3abknifcr	Enchanter
+jnfkbgdgopwfqist	Hollywood Hijinx
+anu79a4n1jedg5mm	Infidel
+2752o3sh6y05ob1p	Journey: The Quest Begins
+3p9fdt4fxr2goctw	Leather Goddesses of Phobos
+c66u816v8kx2jzm2	Moonmist
+zxb8pq3qrkvdob4i	Nord and Bert Couldn't Make Head or Tail of It
+xe6kb3cuqwie2q38	Planetfall
+ddagftras22bnz8h	Plundered Hearts
+56wb8hflec2isvzm	Seastalker
+j8lmspy4iz73mx26	Sherlock: The Riddle of the Crown Jewels
+w3pz3v8wckaw1wgb	Shogun
+lidg5nx9ig0bwk55	Sorcerer
+wqsmrahzozosu3r	Spellbreaker
+y42oje3ryqi6lohn	Starcross
+9nlbhqnlyb169uge	Stationfall
+tdbss1ekrp4ua7h4	Suspect
+t47hei9uq10xoar8	Suspended
+ouv80gvsl32xlion	The Hitchhiker's Guide to the Galaxy
+jhbd0kja1t57uop	The Lurking Horror
+6963a47vqgms8wi0	The Witness
+j18kjz80hxjtyayw	Trinity
+z02joykzh66wfhcl	Wishbringer

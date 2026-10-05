@@ -184,14 +184,26 @@ const TITLE_KEYS: &[(&str, &str)] = &[
     ("zorktheundiscoveredunderground", "ztuu"),
 ];
 
+/// The canonical title of the game a story is: the IFID's, when `known_titles.tsv`
+/// knows it, else the one its IFDB tuid names in `infocom_tuids.tsv`.
+///
+/// The ONE resolver every identity lookup here goes through. The IFID wins
+/// outright (it names the exact build); the tuid is consulted only when the IFID
+/// is unknown — a build compiled from the ZIL source, or a beta missing from the
+/// registry. A tuid is asserted identity (the story is linked to that IFDB page),
+/// not a name match; neither a filename nor a displayed title ever reaches here.
+fn identity_title(ifid: &str, tuid: Option<&str>) -> Option<&'static str> {
+    crate::session::known_title(ifid).or_else(|| tuid.and_then(cli_host::titles::title_for_tuid))
+}
+
 /// The catalog key for a story's **identity** — nothing here reads a filename.
 ///
-/// The IFID names the exact build (release + serial), `known_titles.tsv` names
+/// The IFID (or, failing that, the IFDB tuid — see [`identity_title`]) names the exact build (release + serial), `known_titles.tsv` names
 /// the game that build is, and [`TITLE_KEYS`] names the catalog key for that
 /// game. `None` when the IFID is unknown or the title spells its own key (the
 /// common case, which substring matching already handles).
-fn identity_hint_key(ifid: &str) -> Option<&'static str> {
-    let norm = normalize_ident(crate::session::known_title(ifid)?);
+fn identity_hint_key(ifid: &str, tuid: Option<&str>) -> Option<&'static str> {
+    let norm = normalize_ident(identity_title(ifid, tuid)?);
     TITLE_KEYS.iter().find(|(t, _)| *t == norm).map(|(_, k)| *k)
 }
 
@@ -200,8 +212,8 @@ fn identity_hint_key(ifid: &str) -> Option<&'static str> {
 /// Empty when the IFID names no game we know. Unlike the caller's displayed
 /// title this cannot have come from a container's filename, so it is the first
 /// thing key matching consults (SQ-0767).
-fn identity_ident(ifid: &str) -> String {
-    crate::session::known_title(ifid).map(normalize_ident).unwrap_or_default()
+fn identity_ident(ifid: &str, tuid: Option<&str>) -> String {
+    identity_title(ifid, tuid).map(normalize_ident).unwrap_or_default()
 }
 
 /// Lowercase a string keeping only ASCII alphanumerics — so `"Beyond Zork"`,
@@ -281,14 +293,20 @@ pub fn hint_matches_story(hint_file_name: &str, story_stem_or_title: &str) -> bo
 /// Empire.adf` is that floppy's InvisiClues, and no comparison of the two
 /// filenames can say so.
 pub fn hint_matches_identity(hint_file_name: &str, ifid: &str) -> bool {
+    hint_matches_identity_with_tuid(hint_file_name, ifid, None)
+}
+
+/// [`hint_matches_identity`] for a story that may carry an IFDB tuid: the tuid
+/// names the game only when the IFID is unknown (see [`identity_title`]).
+pub fn hint_matches_identity_with_tuid(hint_file_name: &str, ifid: &str, tuid: Option<&str>) -> bool {
     let Some(key) = hint_game_key(hint_file_name) else { return false };
     let k = normalize_ident(&key);
     if k.len() < 3 {
         return false;
     }
-    match identity_hint_key(ifid) {
+    match identity_hint_key(ifid, tuid) {
         Some(ik) => normalize_ident(ik) == k,
-        None => identity_ident(ifid).contains(&k),
+        None => identity_ident(ifid, tuid).contains(&k),
     }
 }
 
@@ -335,8 +353,16 @@ fn izm_url(stem: &str) -> String {
 /// fallback for games SLAG doesn't cover. Returns `None` when no catalog entry
 /// matches. A key must be ≥3 chars to match (guards against spurious hits).
 pub fn hint_download_for(ifid: &str) -> Option<HintDownload> {
-    let identity_key = identity_hint_key(ifid);
-    let canonical = identity_ident(ifid);
+    hint_download_for_with_tuid(ifid, None)
+}
+
+/// [`hint_download_for`] for a story that may carry an IFDB tuid. The IFID wins
+/// whenever `known_titles.tsv` knows it; the tuid names the Infocom game only
+/// when the IFID is unknown (see [`identity_title`]). A tuid outside
+/// `infocom_tuids.tsv` changes nothing.
+pub fn hint_download_for_with_tuid(ifid: &str, tuid: Option<&str>) -> Option<HintDownload> {
+    let identity_key = identity_hint_key(ifid, tuid);
+    let canonical = identity_ident(ifid, tuid);
     let matches = |key: &str| {
         let k = normalize_ident(key);
         if k.len() < 3 {
@@ -2447,6 +2473,41 @@ mod tests {
         assert_eq!(dl.filename, "zork2inv.z5", "identity, and only identity, decides the match");
     }
 
+    /// IFDB tuid of Zork I (ifdb.org/viewgame?id=0dbnusxunq7fw5ro).
+    const ZORK1_TUID: &str = "0dbnusxunq7fw5ro";
+    /// A build compiled from the public ZIL source: no `known_titles.tsv` entry.
+    const UNKNOWN_IFID: &str = "ZCODE-0-990101-0000";
+
+    #[test]
+    fn an_unknown_ifid_with_an_infocom_tuid_gets_that_games_invisiclues() {
+        let dl = hint_download_for_with_tuid(UNKNOWN_IFID, Some(ZORK1_TUID)).expect("tuid names Zork I");
+        assert_eq!(dl.filename, "zork1inv.z5");
+        assert!(hint_matches_identity_with_tuid("zork1inv.z5", UNKNOWN_IFID, Some(ZORK1_TUID)));
+        assert!(!hint_matches_identity_with_tuid("zork2inv.z5", UNKNOWN_IFID, Some(ZORK1_TUID)));
+    }
+
+    #[test]
+    fn an_unknown_ifid_with_a_non_infocom_tuid_gets_nothing() {
+        assert!(hint_download_for_with_tuid(UNKNOWN_IFID, Some("notaninfocomtuid")).is_none());
+        assert!(!hint_matches_identity_with_tuid("zork1inv.z5", UNKNOWN_IFID, Some("notaninfocomtuid")));
+    }
+
+    #[test]
+    fn a_known_ifid_beats_the_tuid() {
+        // Zork II's build, linked (wrongly) to Zork I's page: the IFID wins.
+        let dl = hint_download_for_with_tuid("ZCODE-48-840904-D899", Some(ZORK1_TUID)).unwrap();
+        assert_eq!(dl.filename, "zork2inv.z5");
+        assert!(hint_matches_identity_with_tuid("zork2inv.z5", "ZCODE-48-840904-D899", Some(ZORK1_TUID)));
+        assert!(!hint_matches_identity_with_tuid("zork1inv.z5", "ZCODE-48-840904-D899", Some(ZORK1_TUID)));
+    }
+
+    #[test]
+    fn an_unknown_ifid_without_a_tuid_gets_nothing() {
+        assert!(hint_download_for_with_tuid(UNKNOWN_IFID, None).is_none());
+        assert!(hint_download_for(UNKNOWN_IFID).is_none());
+        assert!(!hint_matches_identity("zork1inv.z5", UNKNOWN_IFID));
+    }
+
     /// A local sidecar sitting beside a disk image is associated by identity —
     /// comparing the two filenames cannot do it.
     #[test]
@@ -2466,9 +2527,9 @@ mod tests {
     /// clues off them.
     #[test]
     fn title_keys_match_whole_titles_so_near_namesakes_dont_collide() {
-        assert_eq!(identity_hint_key("ZCODE-88-840726-A129"), Some("zork1"));
-        assert_eq!(identity_hint_key("ZCODE-34-871124-0000"), None, "Mini-Zork I");
-        assert_eq!(identity_hint_key("ZCODE-15-840330-0000"), None, "Zork I Demo");
+        assert_eq!(identity_hint_key("ZCODE-88-840726-A129", None), Some("zork1"));
+        assert_eq!(identity_hint_key("ZCODE-34-871124-0000", None), None, "Mini-Zork I");
+        assert_eq!(identity_hint_key("ZCODE-15-840330-0000", None), None, "Zork I Demo");
     }
 
     #[test]
