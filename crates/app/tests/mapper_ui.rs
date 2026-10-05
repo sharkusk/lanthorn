@@ -148,3 +148,5 @@ mod sq1653_superluminal_phantom_screens;
 mod sq1551_host_map_editing;
 #[path = "suites/sq1562_folded_updown_layout.rs"]
 mod sq1562_folded_updown_layout;
+#[path = "suites/zilf_zapf_automap.rs"]
+mod zilf_zapf_automap;

@@ -32,6 +32,9 @@
 /unit_tests/*.z1
 /unit_tests/*.z2
 /unit_tests/*.z3
+# ...except Microsoft's MIT-licensed ZILF build of Zork I, committed on purpose
+# (SQ-1718; licence beside it, entry in unit_tests/README.md)
+!/unit_tests/zork1-mit.z3
 /unit_tests/*.z4
 /unit_tests/*.z6
 /unit_tests/*.z7

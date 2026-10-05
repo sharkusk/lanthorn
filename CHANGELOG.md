@@ -33,6 +33,9 @@ while any such tag, or this Unreleased section, still exists.*
   linked to its Infocom game's IFDB page (a Zork I built from the public source,
   say) is now offered that game's InvisiClues, and a local hint file for it is
   recognised, even when its release isn't one lanthorn knows by name.
+- **Games built with the community ZIL compiler (ZILF) now get an automap.** Their
+  rooms were being detected but never drawn, because the story's command table
+  wasn't recognised; it is now, so they map like any other parser game.
 
 ## v0.9.1 — 2026-10-04
 

@@ -199,6 +199,9 @@ const ENDIT: u8 = 0x0F;
 /// future 2-byte non-inverted index without turning a valid table into an error.
 const MAX_VERBS: u32 = 512;
 
+/// A sanity ceiling on the preposition table's entry count.
+const MAX_PREPOSITIONS: u32 = 512;
+
 /// A sanity ceiling on syntax lines per verb. Inform 6.10 allows 32; Infocom's
 /// own games stay well under. Anything larger means we are not reading a table.
 const MAX_LINES_PER_VERB: u8 = 64;
@@ -541,7 +544,10 @@ pub fn dictionary_words(mem: &Memory) -> Vec<DictionaryWord> {
 /// plausible YYMMDD *and* whose first digit is not '8' means the Inform
 /// compiler, since Infocom's own serials are all 8x. Inform 6 additionally
 /// writes its version string into the four bytes at $3C, so a '6' or later
-/// there separates Inform 6 from Inform 1–5.
+/// there separates Inform 6 from Inform 1–5 — but only when those bytes are
+/// shaped like a version (`6.31`) or are all zero (Inform 5 stamped nothing). A
+/// serial that is merely a date is not proof: ZILF's builds carry a build-date
+/// serial and ZAPF's `"ZAPF"` at $3C, and they are Infocom-shaped.
 ///
 /// GV1 versus GV2 needs the table itself and is settled in `load_classic`.
 /// True when the Dialog compiler produced this story.
@@ -588,9 +594,22 @@ pub fn detect_format(mem: &Memory) -> GrammarFormat {
         && digit(s[5], b'0', b'9')
         && s[0] != b'8';
 
-    if inform {
-        // Byte $3C is the first character of Inform 6's version string.
-        if mem.read_byte(0x3C) >= b'6' {
+    // Inform 6 writes its version as `d.dd` ("6.31") at $3C..$3F; Inform 5 era
+    // compilers wrote nothing there. Anything else in those bytes is some other
+    // compiler's stamp riding on a serial that merely LOOKS like Inform's: ZILF
+    // dates its serial with the build date, so it passes the test above, and
+    // its assembler ZAPF writes "ZAPF" at $3C — which an unconditional `>= '6'`
+    // read as an Inform version and sent down the GV1 path.
+    let v: Vec<u8> = (0x3C..0x40).map(|a| mem.read_byte(a)).collect();
+    let version_shaped = v[0].is_ascii_digit()
+        && v[1] == b'.'
+        && v[2].is_ascii_digit()
+        && v[3].is_ascii_digit();
+    let unstamped = v.iter().all(|&b| b == 0);
+
+    // A Dialog story keeps its old answer on purpose (see above).
+    if inform && (version_shaped || unstamped || is_dialog(mem)) {
+        if v[0] >= b'6' {
             GrammarFormat::InformGv1 // refined to GV2 once the table is read
         } else {
             GrammarFormat::Inform5
@@ -624,7 +643,7 @@ fn load_classic(
     detected: GrammarFormat,
     words: &[DictWord],
 ) -> Result<(GrammarFormat, Vec<Verb>, Vec<u32>), GrammarError> {
-    let layout = configure_classic(mem, detected)?;
+    let layout = configure_classic(mem, detected, words)?;
     let preps = read_preposition_table(mem, &layout)?;
 
     // Verb number → its dictionary spellings, in dictionary order.
@@ -674,7 +693,157 @@ fn load_classic(
 
 /// Locate the tables and settle the two format ambiguities (Infocom fixed vs
 /// variable, Inform GV1 vs GV2), following `showverb.c::configure_parse_tables`.
-fn configure_classic(mem: &Memory, detected: GrammarFormat) -> Result<ClassicLayout, GrammarError> {
+///
+/// The verb table is looked for at the static-memory base first, which is where
+/// Infocom's own compiler and Inform put it and is exactly the answer this
+/// function always gave. Only when that fails for an Infocom-shaped story is the
+/// table searched for ([`locate_relocated`]): the ZIL compiler ZILF's assembler
+/// puts the dictionary at the static base instead.
+fn configure_classic(
+    mem: &Memory,
+    detected: GrammarFormat,
+    words: &[DictWord],
+) -> Result<ClassicLayout, GrammarError> {
+    match configure_at_static_base(mem, detected) {
+        Err(e) if e != GrammarError::Absent && !detected.is_inform() => {
+            locate_relocated(mem, detected, words).ok_or(e)
+        }
+        other => other,
+    }
+}
+
+/// The ZAPF layout, found by experiment on a ZILF 0.11.1 build of Zork I
+/// (`unit_tests/zork1-mit.z3`; static base = dictionary = $2C18):
+///
+/// ```text
+/// preposition table   count word, then `count` x (dictionary address, index word)
+/// verb pointer table  N words, one per verb, ascending; slot i is verb 255 - i
+/// action table        A words (packed routine addresses)
+/// pre-action table    A words
+/// verb data           N tables, each `count byte + 8-byte (or variable) lines`
+/// ```
+///
+/// in that order and back to back — Infocom's own order is verb pointers, verb
+/// data, actions, pre-actions, prepositions. So the first verb's data address
+/// is `verb_table + 2N + 4A`, where N is read off the dictionary (verb numbers
+/// count down from 255) and A is the highest action number plus one; those two
+/// facts, plus every pointer leading to well-formed syntax data, are enough to
+/// find the table without being told where it is. The preposition table is the
+/// one ending exactly where the verb table begins.
+fn locate_relocated(
+    mem: &Memory,
+    detected: GrammarFormat,
+    words: &[DictWord],
+) -> Option<ClassicLayout> {
+    let lowest = words.iter().filter_map(|w| w.verb_key).filter(|&k| k <= 255).min()?;
+    let verb_count = 256 - u32::from(lowest);
+    if verb_count > MAX_VERBS {
+        return None;
+    }
+    let len = mem.len() as u32;
+    let first_slot = mem.static_mem_base() as u32;
+    let table_bytes = verb_count * 2;
+    for base in first_slot..len.saturating_sub(table_bytes + 2) {
+        let Ok(first) = read_word(mem, base) else { continue };
+        let first = first as u32;
+        if first < base + table_bytes + 4 || first >= len || !(first - base - table_bytes).is_multiple_of(4) {
+            continue;
+        }
+        let action_count = (first - base - table_bytes) / 4;
+        if action_count > 256 {
+            continue;
+        }
+        if let Some(layout) = try_relocated(mem, detected, words, base, verb_count, action_count) {
+            return Some(layout);
+        }
+    }
+    None
+}
+
+/// Check one candidate for [`locate_relocated`]: every pointer ascending and
+/// leading to syntax data whose highest action number is exactly `action_count`
+/// - 1, and a preposition table of dictionary words ending at `base`.
+fn try_relocated(
+    mem: &Memory,
+    detected: GrammarFormat,
+    words: &[DictWord],
+    base: u32,
+    verb_count: u32,
+    action_count: u32,
+) -> Option<ClassicLayout> {
+    let mut ptrs = Vec::with_capacity(verb_count as usize);
+    for i in 0..verb_count {
+        let p = read_word(mem, base + i * 2).ok()? as u32;
+        if ptrs.last().is_some_and(|&prev| p <= prev) {
+            return None;
+        }
+        ptrs.push(p);
+    }
+    let first = ptrs[0];
+    let second = ptrs.get(1).copied().unwrap_or(first);
+    let entry_count = read_byte(mem, first).ok()?;
+    let span = second - first;
+    let format = match detected {
+        GrammarFormat::InfocomFixed => {
+            if entry_count > 0 && span > 0 && span / entry_count as u32 <= 7 {
+                GrammarFormat::InfocomVariable
+            } else {
+                GrammarFormat::InfocomFixed
+            }
+        }
+        other => other,
+    };
+    let mut highest = 0u32;
+    let mut any = false;
+    for &p in &ptrs {
+        let mut cur = p;
+        let n = read_byte(mem, cur).ok()?;
+        cur += 1;
+        if n > MAX_LINES_PER_VERB {
+            return None;
+        }
+        for _ in 0..n {
+            let (action, _) = measure_classic_line(mem, format, &mut cur).ok()?;
+            highest = highest.max(u32::from(action));
+            any = true;
+        }
+    }
+    if !any || highest + 1 != action_count {
+        return None;
+    }
+
+    // The preposition table: the smallest count whose entries are all
+    // dictionary words with a small index and which ends at the verb table.
+    let addrs: std::collections::BTreeSet<u32> = words.iter().map(|w| w.address).collect();
+    let prep_table_base = (1..=MAX_PREPOSITIONS).find_map(|count| {
+        let start = base.checked_sub(2 + count * 4)?;
+        if u32::from(read_word(mem, start).ok()?) != count {
+            return None;
+        }
+        (0..count)
+            .all(|i| {
+                let e = start + 2 + i * 4;
+                let addr = read_word(mem, e).unwrap_or(0) as u32;
+                addrs.contains(&addr) && read_word(mem, e + 2).is_ok_and(|ix| ix <= 0xFF)
+            })
+            .then_some(start)
+    })?;
+
+    Some(ClassicLayout {
+        format,
+        verb_table_base: base,
+        verb_count,
+        action_table_base: base + verb_count * 2,
+        action_count,
+        prep_table_base,
+        prep_entry_form: 0,
+    })
+}
+
+fn configure_at_static_base(
+    mem: &Memory,
+    detected: GrammarFormat,
+) -> Result<ClassicLayout, GrammarError> {
     let verb_table_base = mem.static_mem_base() as u32;
     let first = read_word(mem, verb_table_base)? as u32;
     if first == 0 {

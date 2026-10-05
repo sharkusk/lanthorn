@@ -244,3 +244,14 @@ Loaded by `crates/app/tests/suites/amiga_rom_face.rs`, alongside one case that
 reads the player's own `~/.lanthorn/*.rom` and skips vacuously without one — the
 only thing in the suite that can say whether the *question* was right rather
 than whether the code answers it.
+
+## zork1-mit.z3 (committed)
+
+`zork1-mit.z3` is the one Z-machine story committed here: Zork I built with
+ZILF 0.11.1 (assembled by ZAPF) from Microsoft's MIT-licensed source,
+<https://github.com/historicalsource/zork1>, Copyright (c) 2025 Microsoft. The
+licence text is `zork1-mit.LICENSE` (it is also embedded in the game; the
+`LICENSE` verb prints it). Release 0, i.e. an unofficial build, not Infocom's
+r88. It is the specimen for the grammar reader's ZAPF table layout (SQ-1718)
+and for a real-game automap case, and it exists because a ZILF/ZAPF story is
+the one compiler family `stories/` does not carry.
