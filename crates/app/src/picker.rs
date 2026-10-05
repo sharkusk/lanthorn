@@ -2001,7 +2001,7 @@ fn associate_hint_sidecars(out: &mut Vec<StoryEntry>) {
         // nor its title can say which clues file is its own.
         let cand: Vec<&str> = sidecar_idxs.iter().map(|&s| names[s].as_str()).collect();
         let target = hints::HintTarget { stem: &stem, title: &title, ifid: &ifid };
-        let chosen = match hints::match_hint_sidecar(target, &cand) {
+        let chosen = match hints::match_hint_sidecar_with_tuid(target, out[g].meta.ifdb_tuid.as_deref(), &cand) {
             hints::HintPick::One(k) => Some(sidecar_idxs[k]),
             _ => None,
         };
@@ -2672,7 +2672,7 @@ pub fn hint_status(entry: &StoryEntry, roots: &DataRoots, index: &hints::HintInd
     }
     if let Some(dir) = entry_documents_dir(entry, roots) {
         let story = hints::HintStory::new(&entry.meta.ifid, &entry.title).with_documents(Some(&dir));
-        match hints::resolve_in_story_documents(&entry.path, story, index) {
+        match hints::resolve_in_story_documents_with_tuid(&entry.path, story, entry.meta.ifdb_tuid.as_deref(), index) {
             Some(hints::HintResolution::File(p)) => return HintStatus::File(p),
             Some(hints::HintResolution::Choose(mut files)) if !files.is_empty() => {
                 return HintStatus::File(files.swap_remove(0));

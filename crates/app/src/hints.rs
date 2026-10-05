@@ -517,8 +517,20 @@ pub enum HintPick {
 /// matches are [`HintPick::Ambiguous`]; the looser stem/title tiers take the
 /// first match in the order `names` is given (callers pass a stable order).
 pub fn match_hint_sidecar<S: AsRef<str>>(target: HintTarget<'_>, names: &[S]) -> HintPick {
+    match_hint_sidecar_with_tuid(target, None, names)
+}
+
+/// [`match_hint_sidecar`] for a story that may carry an IFDB tuid, which names the
+/// game for the identity tier only when the IFID is unknown ([`identity_title`]).
+pub fn match_hint_sidecar_with_tuid<S: AsRef<str>>(
+    target: HintTarget<'_>,
+    tuid: Option<&str>,
+    names: &[S],
+) -> HintPick {
     let ident: Vec<usize> = (0..names.len())
-        .filter(|&i| !target.ifid.is_empty() && hint_matches_identity(names[i].as_ref(), target.ifid))
+        .filter(|&i| {
+            !target.ifid.is_empty() && hint_matches_identity_with_tuid(names[i].as_ref(), target.ifid, tuid)
+        })
         .collect();
     match ident.len() {
         1 => return HintPick::One(ident[0]),
@@ -543,12 +555,12 @@ pub fn match_hint_sidecar<S: AsRef<str>>(target: HintTarget<'_>, names: &[S]) ->
 /// Rank hint candidate names with [`match_hint_sidecar`] and return the chosen
 /// one; else a lone (generic) candidate; else `None` (ambiguous or empty).
 /// Callers distinguish empty from ambiguous by checking the input.
-fn pick_hint_candidate(target: HintTarget<'_>, mut names: Vec<String>) -> Option<String> {
+fn pick_hint_candidate(target: HintTarget<'_>, tuid: Option<&str>, mut names: Vec<String>) -> Option<String> {
     if names.is_empty() {
         return None;
     }
     names.sort();
-    match match_hint_sidecar(target, &names) {
+    match match_hint_sidecar_with_tuid(target, tuid, &names) {
         HintPick::One(i) => return Some(names.swap_remove(i)),
         HintPick::Ambiguous => return None,
         HintPick::NoMatch => {}
@@ -676,10 +688,21 @@ pub enum HintResolution {
 ///    `read_zip_entry`.
 /// 5. Else: `AskUser`.
 pub fn resolve_hint_source(story_path: &Path, story: HintStory<'_>, index: &HintIndex) -> HintResolution {
+    resolve_hint_source_with_tuid(story_path, story, None, index)
+}
+
+/// [`resolve_hint_source`] for a story that may carry an IFDB tuid (see
+/// [`identity_title`]); `HintStory` has no field for it, so it travels beside.
+pub fn resolve_hint_source_with_tuid(
+    story_path: &Path,
+    story: HintStory<'_>,
+    tuid: Option<&str>,
+    index: &HintIndex,
+) -> HintResolution {
     let HintStory { ifid, title, documents: _ } = story;
 
     // Step 0 (SQ-1690): the game's documents folder.
-    if let Some(found) = resolve_in_story_documents(story_path, story, index) {
+    if let Some(found) = resolve_in_story_documents_with_tuid(story_path, story, tuid, index) {
         return found;
     }
 
@@ -701,7 +724,7 @@ pub fn resolve_hint_source(story_path: &Path, story: HintStory<'_>, index: &Hint
             .and_then(|s| s.to_str())
             .unwrap_or("")
             .to_ascii_lowercase();
-        if let Ok(Some(entry)) = find_hint_entry_in_zip(story_path, HintTarget { stem: &stem, title, ifid }) {
+        if let Ok(Some(entry)) = find_hint_entry_in_zip(story_path, HintTarget { stem: &stem, title, ifid }, tuid) {
             return HintResolution::ZipEntry { zip_path: story_path.to_path_buf(), entry };
         }
     }
@@ -747,8 +770,8 @@ pub fn resolve_hint_source(story_path: &Path, story: HintStory<'_>, index: &Hint
                     .filter_map(|p| p.file_name().and_then(|n| n.to_str()).map(String::from))
                     .collect();
                 let target = HintTarget { stem: &story_stem, title, ifid };
-                let tied = identity_ties(target, &names);
-                if let Some(chosen) = pick_hint_candidate(target, names) {
+                let tied = identity_ties(target, tuid, &names);
+                if let Some(chosen) = pick_hint_candidate(target, tuid, names) {
                     for path in &hint_files {
                         if path.file_name().and_then(|n| n.to_str()) == Some(chosen.as_str()) {
                             return HintResolution::File(path.clone());
@@ -773,7 +796,7 @@ pub fn resolve_hint_source(story_path: &Path, story: HintStory<'_>, index: &Hint
             // Step 4: look inside sibling ZIPs for a hint entry, story-aware.
             zips.sort();
             for zip_path in zips {
-                if let Ok(Some(entry_name)) = find_hint_entry_in_zip(&zip_path, HintTarget { stem: &story_stem, title, ifid }) {
+                if let Ok(Some(entry_name)) = find_hint_entry_in_zip(&zip_path, HintTarget { stem: &story_stem, title, ifid }, tuid) {
                     return HintResolution::ZipEntry { zip_path, entry: entry_name };
                 }
             }
@@ -784,11 +807,11 @@ pub fn resolve_hint_source(story_path: &Path, story: HintStory<'_>, index: &Hint
 }
 
 /// The names in `names` that [`hint_matches_identity`] ties to `target.ifid`.
-fn identity_ties(target: HintTarget<'_>, names: &[String]) -> Vec<String> {
+fn identity_ties(target: HintTarget<'_>, tuid: Option<&str>, names: &[String]) -> Vec<String> {
     if target.ifid.is_empty() {
         return Vec::new();
     }
-    names.iter().filter(|n| hint_matches_identity(n, target.ifid)).cloned().collect()
+    names.iter().filter(|n| hint_matches_identity_with_tuid(n, target.ifid, tuid)).cloned().collect()
 }
 
 /// Step 0 of [`resolve_hint_source`] for a whole story: the hint program(s) in its
@@ -797,15 +820,30 @@ fn identity_ties(target: HintTarget<'_>, names: &[String]) -> Vec<String> {
 /// no name/IFID guessing applies. Public so the story browser's hint status asks
 /// the very same question the Hints tab does.
 pub fn resolve_in_story_documents(story_path: &Path, story: HintStory<'_>, index: &HintIndex) -> Option<HintResolution> {
+    resolve_in_story_documents_with_tuid(story_path, story, None, index)
+}
+
+/// [`resolve_in_story_documents`] for a story that may carry an IFDB tuid.
+pub fn resolve_in_story_documents_with_tuid(
+    story_path: &Path,
+    story: HintStory<'_>,
+    tuid: Option<&str>,
+    index: &HintIndex,
+) -> Option<HintResolution> {
     let dir = story.documents?;
     let stem = story_path.file_stem().and_then(|s| s.to_str()).unwrap_or("").to_ascii_lowercase();
-    resolve_in_documents(dir, HintTarget { stem: &stem, title: story.title, ifid: story.ifid }, index)
+    resolve_in_documents(dir, HintTarget { stem: &stem, title: story.title, ifid: story.ifid }, tuid, index)
 }
 
 /// Step 0 of [`resolve_hint_source`]: the hint programs in the game's documents
 /// folder, or `None` when the folder holds none (the caller falls back to the
 /// old rules). Only the folder's own top-level files count.
-fn resolve_in_documents(dir: &Path, target: HintTarget<'_>, index: &HintIndex) -> Option<HintResolution> {
+fn resolve_in_documents(
+    dir: &Path,
+    target: HintTarget<'_>,
+    tuid: Option<&str>,
+    index: &HintIndex,
+) -> Option<HintResolution> {
     let mut files: Vec<PathBuf> = std::fs::read_dir(dir)
         .ok()?
         .flatten()
@@ -824,7 +862,7 @@ fn resolve_in_documents(dir: &Path, target: HintTarget<'_>, index: &HintIndex) -
         }
     }
     let names: Vec<String> = files.iter().filter_map(|p| p.file_name()?.to_str().map(String::from)).collect();
-    Some(match match_hint_sidecar(target, &names) {
+    Some(match match_hint_sidecar_with_tuid(target, tuid, &names) {
         HintPick::One(i) => HintResolution::File(files.swap_remove(i)),
         HintPick::Ambiguous | HintPick::NoMatch => HintResolution::Choose(files),
     })
@@ -836,7 +874,7 @@ fn resolve_in_documents(dir: &Path, target: HintTarget<'_>, index: &HintIndex) -
 /// Applies the same tiers as [`pick_hint_candidate`]: a story-stem match wins;
 /// a lone generic entry is used; multiple generics with no story match are
 /// ambiguous and yield `None`.
-fn find_hint_entry_in_zip(zip_path: &Path, target: HintTarget<'_>) -> io::Result<Option<String>> {
+fn find_hint_entry_in_zip(zip_path: &Path, target: HintTarget<'_>, tuid: Option<&str>) -> io::Result<Option<String>> {
     let file = std::fs::File::open(zip_path)?;
     let mut zip = zip::ZipArchive::new(file)
         .map_err(|e| io::Error::new(io::ErrorKind::InvalidData, e))?;
@@ -855,7 +893,7 @@ fn find_hint_entry_in_zip(zip_path: &Path, target: HintTarget<'_>) -> io::Result
     // Rank by the bare filename, but return the full entry path.
     let basename_of = |n: &str| n.rsplit('/').next().unwrap_or(n).to_string();
     let basenames: Vec<String> = matches.iter().map(|n| basename_of(n)).collect();
-    match pick_hint_candidate(target, basenames) {
+    match pick_hint_candidate(target, tuid, basenames) {
         Some(chosen) => Ok(matches.into_iter().find(|n| basename_of(n) == chosen)),
         None => Ok(None),
     }
@@ -2499,6 +2537,15 @@ mod tests {
         assert_eq!(dl.filename, "zork2inv.z5");
         assert!(hint_matches_identity_with_tuid("zork2inv.z5", "ZCODE-48-840904-D899", Some(ZORK1_TUID)));
         assert!(!hint_matches_identity_with_tuid("zork1inv.z5", "ZCODE-48-840904-D899", Some(ZORK1_TUID)));
+    }
+
+    #[test]
+    fn sidecar_matching_uses_the_tuid_only_for_an_unknown_ifid() {
+        let target = HintTarget { stem: "story", title: "", ifid: UNKNOWN_IFID };
+        let names = ["zork2inv.z5", "zork1inv.z5"];
+        assert_eq!(match_hint_sidecar_with_tuid(target, Some(ZORK1_TUID), &names), HintPick::One(1));
+        assert_eq!(match_hint_sidecar_with_tuid(target, None, &names), HintPick::NoMatch);
+        assert_eq!(match_hint_sidecar(target, &names), HintPick::NoMatch);
     }
 
     #[test]

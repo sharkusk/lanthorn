@@ -32,7 +32,7 @@ use ratatui::style::{Modifier, Style};
 use crate::engine::Engine;
 use crate::hint_download::{HintDlOutcome, HintDlResult, HintDownloader};
 use crate::hints::HintStory;
-use crate::host::hints::{already_running, game_hint_status, no_hint_message, start, GameHintStatus, HintStart};
+use crate::host::hints::{already_running, game_hint_status_with_tuid, no_hint_message, start_with_tuid, GameHintStatus, HintStart};
 use crate::render::transcript::wrap_line;
 use crate::state::{AppState, Focus, HintSession, HintSource};
 
@@ -152,6 +152,14 @@ pub fn game_documents_dir(state: &AppState, story_path: &Path) -> Option<PathBuf
     crate::documents::locate(roots, entry.meta.ifdb_tuid.as_deref(), &entry.title).path().map(Path::to_path_buf)
 }
 
+/// The running game's IFDB tuid, from its library record; `None` when the game is
+/// not linked or the host has no library. The identity fallback for an IFID the
+/// registry does not know ([`crate::hints::hint_download_for_with_tuid`]).
+pub fn game_ifdb_tuid(state: &AppState, story_path: &Path) -> Option<String> {
+    let roots = state.data_roots.as_ref()?;
+    crate::picker::resolve_entry_from(story_path, state.source.disk_entry.as_deref(), roots)?.meta.ifdb_tuid
+}
+
 /// Start the session the first time the tab is on screen. Called once per loop
 /// turn; `true` when something changed and a redraw is due.
 ///
@@ -164,12 +172,24 @@ pub fn ensure_started(state: &mut AppState, story_path: &Path, ifid: &str) -> bo
         return false;
     }
     let documents = game_documents_dir(state, story_path);
-    ensure_started_in(state, story_path, ifid, documents.as_deref())
+    let tuid = game_ifdb_tuid(state, story_path);
+    ensure_started_in_with_tuid(state, story_path, ifid, tuid.as_deref(), documents.as_deref())
 }
 
 /// [`ensure_started`] with the game's documents folder already known (the seam the
 /// tests use; `documents` is what [`game_documents_dir`] answers).
 pub fn ensure_started_in(state: &mut AppState, story_path: &Path, ifid: &str, documents: Option<&Path>) -> bool {
+    ensure_started_in_with_tuid(state, story_path, ifid, None, documents)
+}
+
+/// [`ensure_started_in`] with the game's IFDB tuid (see [`game_ifdb_tuid`]).
+pub fn ensure_started_in_with_tuid(
+    state: &mut AppState,
+    story_path: &Path,
+    ifid: &str,
+    tuid: Option<&str>,
+    documents: Option<&Path>,
+) -> bool {
     if !state.hints_tab_visible() {
         return false;
     }
@@ -187,8 +207,8 @@ pub fn ensure_started_in(state: &mut AppState, story_path: &Path, ifid: &str, do
     };
     state.hints_tab.phase = Phase::NotStarted;
     let index = crate::hints::load_hint_index(&state.config.user_dir);
-    state.hints_tab.status = game_hint_status(story_path, story, &index);
-    match start(story_path, story, picked.as_deref(), running.as_deref(), &state.dict_words, &state.config) {
+    state.hints_tab.status = game_hint_status_with_tuid(story_path, story, tuid, &index);
+    match start_with_tuid(story_path, story, tuid, picked.as_deref(), running.as_deref(), &state.dict_words, &state.config) {
         HintStart::Started(session) => {
             state.overlays.hints = Some(*session);
             state.hints_tab.phase = Phase::Running;
@@ -240,15 +260,27 @@ fn end_session(state: &mut AppState) {
 /// result arrives through [`poll_download`].
 pub fn start_download(state: &mut AppState, story_path: &Path) {
     let documents = game_documents_dir(state, story_path);
-    start_download_in(state, story_path, documents);
+    let tuid = game_ifdb_tuid(state, story_path);
+    start_download_in_with_tuid(state, story_path, tuid.as_deref(), documents);
 }
 
 /// [`start_download`] with the documents folder already known.
 pub fn start_download_in(state: &mut AppState, story_path: &Path, documents: Option<PathBuf>) {
+    start_download_in_with_tuid(state, story_path, None, documents);
+}
+
+/// [`start_download_in`] with the game's IFDB tuid (see [`game_ifdb_tuid`]).
+pub fn start_download_in_with_tuid(
+    state: &mut AppState,
+    story_path: &Path,
+    tuid: Option<&str>,
+    documents: Option<PathBuf>,
+) {
     let running = state.hints_tab.phase == Phase::Running;
-    let line = crate::host::hints::start_game_download(
+    let line = crate::host::hints::start_game_download_with_tuid(
         &mut state.hints_tab.downloader,
         &state.ifid,
+        tuid,
         &state.title,
         story_path,
         state.source.disk_entry.as_deref(),
