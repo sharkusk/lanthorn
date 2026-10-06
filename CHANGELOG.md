@@ -6,7 +6,7 @@ All notable changes to lanthorn are recorded here.
 [`.github/workflows/release.yml`](.github/workflows/release.yml)). A tag whose
 name contains a hyphen — `v0.1.0-beta.1`, `v0.2.0-rc.1` — is published as a
 **pre-release**; a bare `vMAJOR.MINOR.PATCH` is a full release. The workspace
-version in `Cargo.toml` (currently `0.9.1`) versions every crate and every
+version in `Cargo.toml` (currently `0.9.2`) versions every crate and every
 binary's `--version` at once, and carries any pre-release suffix so a build
 identifies itself without reading its git hash.
 
@@ -19,16 +19,13 @@ Absolute URLs or no link.
 
 ---
 
-## Unreleased
-
-*This section is drained when a version is cut. README.md describes the
-RELEASED build; prose for a feature that is in `main` but not yet released
-goes into the README in place, at its normal destination, marked with the
-visible tag `*Next release:*`. `release.yml` refuses to cut a release
-while any such tag, or this Unreleased section, still exists.*
+## v0.9.2 — 2026-10-06
 
 ### Fixed
 
+- **IFDB search and Popular list only games you can download.** Results that
+  have no download link (commercial games, web-only titles) no longer crowd out
+  the ones lanthorn can fetch and play.
 - **Scott Adams games inside a zip show their real titles.** A zip holding
   several Scott Adams adventures listed them as `secret.dat` and `BOND.DAT`;
   they now read "Top Secret Adventure" and "James Bond Adventure", the same as
