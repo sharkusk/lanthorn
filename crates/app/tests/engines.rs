@@ -189,6 +189,8 @@ mod native_disk_font;
 mod story_pick_media;
 #[path = "suites/zip_story_entries.rs"]
 mod zip_story_entries;
+#[path = "suites/zip_scott_titles.rs"]
+mod zip_scott_titles;
 #[path = "suites/v6_dump_windows_face.rs"]
 mod v6_dump_windows_face;
 #[path = "suites/system_face_cascade.rs"]

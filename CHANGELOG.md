@@ -29,6 +29,10 @@ while any such tag, or this Unreleased section, still exists.*
 
 ### Fixed
 
+- **Scott Adams games inside a zip show their real titles.** A zip holding
+  several Scott Adams adventures listed them as `secret.dat` and `BOND.DAT`;
+  they now read "Top Secret Adventure" and "James Bond Adventure", the same as
+  the loose files, in the story list and in the game's own title pane.
 - **InvisiClues for Infocom games whose exact release isn't recognised.** A story
   linked to its Infocom game's IFDB page (a Zork I built from the public source,
   say) is now offered that game's InvisiClues, and a local hint file for it is

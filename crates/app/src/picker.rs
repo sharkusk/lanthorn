@@ -1359,7 +1359,7 @@ pub fn metadata_title(
     bytes: &[u8],
 ) -> Option<String> {
     let game_dir = roots.catalogue_dir(&crate::storage::story_key_at(path));
-    metadata_title_in(path, &game_dir, ifid, is_scott, bytes)
+    metadata_title_in(path, &game_dir, ifid, is_scott, bytes, None)
 }
 
 /// [`metadata_title`] for a caller that already knows which per-game directory
@@ -1376,10 +1376,13 @@ pub fn metadata_title_in(
     ifid: &str,
     is_scott: bool,
     bytes: &[u8],
+    member_stem: Option<&str>,
 ) -> Option<String> {
     let ifmd = container_ifmd(path);
     let fetched = crate::story_info::load(game_dir, ifid).and_then(|i| i.fetched);
-    let stem = path.file_stem().and_then(|s| s.to_str()).unwrap_or_default();
+    // A zip member names itself, not its archive (SQ-1720).
+    let stem = member_stem
+        .unwrap_or_else(|| path.file_stem().and_then(|s| s.to_str()).unwrap_or_default());
     resolved_title(ifmd.as_ref(), fetched.as_ref(), bundled_title(stem, ifid, is_scott, bytes))
 }
 
@@ -2121,6 +2124,13 @@ pub fn resolve_entries(path: &Path, roots: &DataRoots) -> Vec<StoryEntry> {
     resolve_entry(path, roots).into_iter().collect()
 }
 
+/// The bare stem of a zip member's name: basename, extension stripped (SQ-1720).
+/// The bundled tables are keyed on it, as they are on a loose file's stem.
+pub fn zip_member_stem(name: &str) -> &str {
+    let base = name.rsplit('/').next().unwrap_or(name);
+    Path::new(base).file_stem().and_then(|s| s.to_str()).unwrap_or(base)
+}
+
 /// The body both doors share: build one row out of a story that is already
 /// loaded, whichever door loaded it.
 fn entry_from_loaded(
@@ -2230,7 +2240,13 @@ fn entry_from_loaded(
     // identifies those by content checksum before falling back to the ordinary
     // Scott lookup below — which also fixes the same game opened DIRECTLY as a
     // bare `.prg` (`BATON.prg`), with no disk entry to name it at all (SQ-1469).
-    let stem = disk_entry.unwrap_or_else(|| {
+    //
+    // A zip member is not a disk entry (SQ-1720): its name carries an extension
+    // and maybe a directory (`sub/secret.dat`), and every table keys on the bare
+    // stem, so a member's stem is its basename minus the extension. A disk
+    // image's entry name is already the disk's own spelling and is left alone.
+    let zip_member_stem = disk_entry.filter(|_| disk_image.is_none()).map(zip_member_stem);
+    let stem = zip_member_stem.or(disk_entry).unwrap_or_else(|| {
         path.file_stem()
             .and_then(|s| s.to_str())
             .unwrap_or(&filename)

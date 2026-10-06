@@ -1761,7 +1761,15 @@ pub fn boot_story(req: BootRequest<'_>, hooks: &mut dyn BootHooks) -> Result<Boo
     // names the game the way the list does. The banner heuristic is the tier
     // below it, and the filename stem is the last resort it was meant to be.
     let meta_title =
-        crate::picker::metadata_title_in(&story_path, &catalogue_dir, &ifid, is_scott, &story_bytes);
+        crate::picker::metadata_title_in(
+            &story_path,
+            &catalogue_dir,
+            &ifid,
+            is_scott,
+            &story_bytes,
+            // A zip member names itself, not its archive (SQ-1720).
+            disk_entry.filter(|_| disk_image.is_none()).map(crate::picker::zip_member_stem),
+        );
     state.title =
         crate::session::resolve_title(None, meta_title.as_deref(), banner_title.as_deref(), &story_path);
     let story_filename = story_path.file_name().and_then(|n| n.to_str()).unwrap_or("");
