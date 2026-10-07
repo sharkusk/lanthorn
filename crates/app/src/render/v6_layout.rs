@@ -267,7 +267,8 @@ pub struct MainText {
 /// **Bound for hosts (SQ-1728):** zvm caps every window pixel property at
 /// `zvm::screen::WINDOW_PX_CAP` (8192), so each axis here is at most
 /// `2 * 8192 = 16384` (an origin plus a size, `saturating_add`ed in `u16`). Nothing
-/// here clamps further; a caller sizing a pixel buffer from this should clamp it.
+/// here clamps further; a host sizing a pixel buffer should call [`canvas_extent`]
+/// (SQ-1737), which applies the one clamp rule ([`clamp_canvas_extent`]).
 pub fn native_extent(items: &[PositionedWindow], tf: &crate::native_font::TextFace) -> (u16, u16) {
     let cell = tf.cell();
     let font_h = u32::from(cell.h());
@@ -316,6 +317,23 @@ pub fn native_extent(items: &[PositionedWindow], tf: &crate::native_font::TextFa
         }
     }
     (w, h)
+}
+
+/// Clamp a canvas extent to `zvm::screen::WINDOW_PX_CAP` per axis, and to at least
+/// 1 (SQ-1728, SQ-1737). The ONE rule for sizing a pixel buffer from an extent that
+/// story memory can influence (header words 0x22/0x24 live in dynamic memory).
+pub fn clamp_canvas_extent((w, h): (u32, u32)) -> (u32, u32) {
+    let cap = u32::from(zvm::screen::WINDOW_PX_CAP);
+    (w.clamp(1, cap), h.clamp(1, cap))
+}
+
+/// [`native_extent`] bounded for hosts: each axis in `1..=WINDOW_PX_CAP`, safe to
+/// size a pixel buffer from (SQ-1737).
+pub fn canvas_extent(items: &[PositionedWindow], tf: &crate::native_font::TextFace) -> (u16, u16) {
+    let (w, h) = native_extent(items, tf);
+    let (w, h) = clamp_canvas_extent((u32::from(w), u32::from(h)));
+    // Both are <= WINDOW_PX_CAP, which fits u16.
+    (w as u16, h as u16)
 }
 
 /// The v6 window list split into the story window, the story window's own
@@ -3811,6 +3829,24 @@ mod tests {
         // and this must not undo.
         let over = block_px(ART_X..ART_X + 10);
         assert_eq!(over, 0, "a glyph over the artwork still draws ink on it rather than a block");
+    }
+
+    /// SQ-1737: `canvas_extent` bounds an oversized window to `WINDOW_PX_CAP`
+    /// while `native_extent` still reports the raw value.
+    #[test]
+    fn canvas_extent_clamps_an_oversized_window_to_the_cap() {
+        let cap = zvm::screen::WINDOW_PX_CAP;
+        let mut big = grid_item(0);
+        big.x_px = cap;
+        big.y_px = cap;
+        big.w_px = cap;
+        big.h_px = cap;
+        let tf = crate::native_font::TextFace::cell_only(zvm::screen::V6Cell::DEFAULT);
+        let items = [big];
+        assert_eq!(native_extent(&items, &tf), (cap * 2, cap * 2));
+        assert_eq!(canvas_extent(&items, &tf), (cap, cap));
+        assert_eq!(canvas_extent(&[], &tf), (1, 1));
+        assert_eq!(clamp_canvas_extent((0, 0)), (1, 1));
     }
 
     fn grid_item(x_px: u16) -> PositionedWindow {

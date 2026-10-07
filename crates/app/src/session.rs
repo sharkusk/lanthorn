@@ -2309,7 +2309,7 @@ impl GameSession {
             u32::from(self.machine.mem.read_word(0x24)),
         );
         if hdr.0 > 1 && hdr.1 > 1 {
-            return clamp_canvas_extent(hdr);
+            return crate::render::v6_layout::clamp_canvas_extent(hdr);
         }
         self.machine
             .screen
@@ -2320,7 +2320,7 @@ impl GameSession {
                 (u32::from(w.x_size).max(1), u32::from(w.y_size).max(1))
             })
             .filter(|&(w, h)| w > 1 && h > 1)
-            .map_or((640, 400), clamp_canvas_extent)
+            .map_or((640, 400), crate::render::v6_layout::clamp_canvas_extent)
     }
 
     /// Drain [`zvm::cpu::exec::Machine::take_paint_events`], apply every one of
@@ -7205,14 +7205,6 @@ fn build_object_tree(
 
 // ── Tests ─────────────────────────────────────────────────────────────────────
 
-/// Clamp a paint-ground canvas extent to `zvm`'s `WINDOW_PX_CAP` per axis, and to
-/// at least 1 (SQ-1728). The header words it is computed from (0x22/0x24) live in
-/// dynamic memory, so a story can overwrite them with up to 65535.
-fn clamp_canvas_extent((w, h): (u32, u32)) -> (u32, u32) {
-    let cap = u32::from(zvm::screen::WINDOW_PX_CAP);
-    (w.clamp(1, cap), h.clamp(1, cap))
-}
-
 #[cfg(all(test, feature = "t-session"))]
 mod tests {
     use super::*;
@@ -10557,7 +10549,11 @@ mod tests {
         s.machine.mem.write_word(0x24, 0xFFFF);
         let cap = u32::from(zvm::screen::WINDOW_PX_CAP);
         assert_eq!(s.v6_native_extent(), (cap, cap));
-        assert_eq!(clamp_canvas_extent((0, 0)), (1, 1), "zero never reaches the allocator");
+        assert_eq!(
+            crate::render::v6_layout::clamp_canvas_extent((0, 0)),
+            (1, 1),
+            "zero never reaches the allocator"
+        );
     }
 
     /// A synthetic v6 session with `text` painted on window 7, built the way
