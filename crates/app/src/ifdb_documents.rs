@@ -574,8 +574,8 @@ pub fn fetch_preview(source: &dyn SearchSource, url: &str, entry: Option<usize>)
 
 /// Write `bytes` as `name` into `dir` through [`crate::documents::import`]: the
 /// folder is made if missing, a clash is suffixed, and bytes the folder already
-/// holds are not written again. `meta` goes into the folder's index (SQ-1687). The bytes go to a scratch
-/// file first, so nothing partial is ever in the folder.
+/// holds are not written again. `meta` goes into the folder's index (SQ-1687). The bytes go to a staging
+/// directory inside the folder first (SQ-1733), so nothing partial is ever listed.
 pub fn save_document(dir: &Path, name: &str, bytes: &[u8], meta: Option<DocMeta>) -> io::Result<Imported> {
     if !crate::documents::admitted(name, &bytes[..bytes.len().min(8 * 1024)]) {
         return Err(io::Error::new(
@@ -584,14 +584,21 @@ pub fn save_document(dir: &Path, name: &str, bytes: &[u8], meta: Option<DocMeta>
         ));
     }
     static NTH: AtomicUsize = AtomicUsize::new(0);
-    let scratch = std::env::temp_dir().join(format!(
-        "lanthorn-doc-{}-{}",
-        std::process::id(),
-        NTH.fetch_add(1, Ordering::Relaxed)
-    ));
-    std::fs::create_dir_all(&scratch)?;
+    // Staged inside the destination folder, never in a shared temp directory: a
+    // hidden directory made with `create_dir` (which fails on anything already
+    // there, a planted symlink included) holding the file made with `create_new`.
+    // `import_with` takes the file's name from the staged path, so it keeps the
+    // real name inside that directory.
+    std::fs::create_dir_all(dir)?;
+    let scratch = dir.join(format!(".stage-{}-{}", std::process::id(), NTH.fetch_add(1, Ordering::Relaxed)));
+    std::fs::create_dir(&scratch)?;
     let src = scratch.join(name);
-    let result = std::fs::write(&src, bytes).and_then(|()| crate::documents::import_with(dir, &src, meta));
+    let staged = std::fs::OpenOptions::new()
+        .write(true)
+        .create_new(true)
+        .open(&src)
+        .and_then(|mut f| io::Write::write_all(&mut f, bytes));
+    let result = staged.and_then(|()| crate::documents::import_with(dir, &src, meta));
     // File then (empty) directory, never a recursive delete.
     let _ = std::fs::remove_file(&src);
     let _ = std::fs::remove_dir(&scratch);
@@ -1517,6 +1524,29 @@ pub(crate) mod tests {
             assert_eq!(err.kind(), io::ErrorKind::InvalidInput, "{name}");
         }
         assert_eq!(files_in(&dir), ["Walkthrough.sol"]);
+        let _ = std::fs::remove_dir_all(home);
+    }
+
+    #[test]
+    fn save_document_stages_privately_inside_the_folder_and_leaves_nothing() {
+        let home = crate::scratch_dir("docs-stage");
+        let dir = home.join("g");
+        let got = save_document(&dir, "Manual.pdf", b"%PDF-1", None).unwrap();
+        assert!(matches!(&got, Imported::Added(e) if e.id == "Manual.pdf"));
+        assert_eq!(std::fs::read(dir.join("Manual.pdf")).unwrap(), b"%PDF-1");
+        let all: Vec<String> =
+            std::fs::read_dir(&dir).unwrap().flatten().map(|e| e.file_name().to_string_lossy().into_owned()).collect();
+        assert!(all.iter().all(|n| !n.starts_with(".stage-")), "no staging left behind: {all:?}");
+        // A refused save leaves none either.
+        assert!(save_document(&dir, "x.bat", b"echo\n", None).is_err());
+        assert!(save_document(&dir, "x.sol", &[0, 1, 0, 2], None).is_err());
+        let all: Vec<String> =
+            std::fs::read_dir(&dir).unwrap().flatten().map(|e| e.file_name().to_string_lossy().into_owned()).collect();
+        assert!(all.iter().all(|n| !n.starts_with(".stage-")), "{all:?}");
+        // The shared temp directory is not used.
+        assert!(!std::env::temp_dir().read_dir().unwrap().flatten().any(|e| {
+            e.file_name().to_string_lossy().starts_with(&format!("lanthorn-doc-{}-", std::process::id()))
+        }));
         let _ = std::fs::remove_dir_all(home);
     }
 }
