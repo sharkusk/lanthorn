@@ -199,8 +199,9 @@ fn label(row: &ImportRow) -> String {
     }
 }
 
-/// Download `url`, keep it only if it decodes as an image, save it beside the
-/// sidecar as `cover.png`, and name it. `None` for no URL, a story with its
+/// Download `url`, keep it only if it decodes as an image, store it (in the
+/// shared IFDB store under the copy's tuid, else as the copy's own `cover.png`),
+/// and name it. `None` for no URL, a story with its
 /// own frontispiece, or anything that fails.
 fn fetch_cover_from(url: Option<&str>, source: &dyn MetadataSource, game_dir: &Path, path: &Path) -> Option<String> {
     let url = url?;
@@ -209,14 +210,9 @@ fn fetch_cover_from(url: Option<&str>, source: &dyn MetadataSource, game_dir: &P
     }
     let bytes = source.fetch_cover(url).ok()?;
     crate::cover::decode(&bytes)?;
-    std::fs::create_dir_all(game_dir).ok()?;
-    let tmp = game_dir.join(format!(".cover.png.part-{}", std::process::id()));
-    std::fs::write(&tmp, &bytes).ok()?;
-    if std::fs::rename(&tmp, game_dir.join("cover.png")).is_err() {
-        let _ = std::fs::remove_file(&tmp);
-        return None;
-    }
-    Some("cover.png".to_string())
+    // Under the copy's IFDB entry in the shared store when it has one (SQ-1723).
+    let tuid = story_info::linked_tuid(game_dir);
+    crate::ifdb_store::write_fetched_cover(game_dir, tuid.as_deref(), &bytes).ok()
 }
 
 /// Point an existing sidecar's `cover` at `cover`, leaving the rest as it is.
@@ -387,8 +383,9 @@ mod tests {
         let f = info.fetched.unwrap();
         assert_eq!(f.source, "ifdb");
         assert_eq!(f.title.as_deref(), Some("A Known Game"));
-        assert_eq!(f.cover.as_deref(), Some("cover.png"), "IFDB had no cover, so the row's was taken");
-        assert!(entry.game_dir(&crate::data_roots::DataRoots::single(&dir)).join("cover.png").exists());
+        assert_eq!(f.cover.as_deref(), Some("known0000tuid.png"), "IFDB had no cover, so the row's was taken");
+        assert!(dir.join("ifdb").join("known0000tuid.png").exists(), "kept in the shared store");
+        assert!(!entry.game_dir(&crate::data_roots::DataRoots::single(&dir)).join("cover.png").exists());
         let _ = std::fs::remove_dir_all(&dir);
     }
 
@@ -438,7 +435,7 @@ mod tests {
         let entry = crate::picker::resolve_entry(&story, &crate::data_roots::DataRoots::single(&dir)).unwrap();
         let f = story_info::load(&entry.game_dir(&crate::data_roots::DataRoots::single(&dir)), &entry.meta.ifid).unwrap().fetched.unwrap();
         assert_eq!(f.source, "ifdb", "the record itself is untouched");
-        assert_eq!(f.cover.as_deref(), Some("cover.png"));
+        assert_eq!(f.cover.as_deref(), Some("known0000tuid.png"));
         // A curated title never replaces the IFDB record.
         let curated = ImportRow { path: story.clone(), title: Some("Collection".into()), ..Default::default() };
         assert!(matches!(import_row(&curated, &crate::data_roots::DataRoots::single(&dir), &src), RowOutcome::Skipped(_)));

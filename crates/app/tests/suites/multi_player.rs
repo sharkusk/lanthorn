@@ -155,7 +155,9 @@ fn the_default_player_keeps_todays_layout() {
     assert!(folder.join("default.lanthorn").is_file());
     fetch_via_worker(&story, &roots);
     assert!(folder.join("info.json").is_file());
-    assert!(folder.join("cover.png").is_file());
+    assert!(!folder.join("cover.png").exists(), "the cover is shared, not per copy");
+    assert!(home.join("saves/ifdb/abc123.png").is_file(), "kept once per IFDB entry (SQ-1723)");
+    assert!(home.join("saves/ifdb/abc123.json").is_file());
     assert!(!home.join("users").exists(), "no player tree appears for the default player");
 
     // A settings write lands in <user>/config.toml, stamped as before.
@@ -188,9 +190,12 @@ fn a_named_players_saves_go_to_their_own_tree_and_metadata_to_the_catalogue() {
     fetch_via_worker(&story, &bob);
     fetch_via_import(&story, &bob);
     assert!(shared.join("info.json").is_file());
-    assert!(shared.join("cover.png").is_file());
+    assert!(home.join("saves/ifdb/abc123.png").is_file(), "the shared store is the catalogue's");
+    assert!(home.join("saves/ifdb/abc123.json").is_file());
+    assert!(!shared.join("cover.png").exists());
     assert!(!bobs.join("info.json").exists());
     assert!(!bobs.join("cover.png").exists());
+    assert!(!home.join("users/bob/saves/ifdb").exists(), "never in a player's own tree");
 
     // The default player (and anyone else) sees what bob fetched.
     let default = DataRoots::resolve(&home, None, None, &Default::default());
@@ -198,6 +203,11 @@ fn a_named_players_saves_go_to_their_own_tree_and_metadata_to_the_catalogue() {
     assert_eq!(seen.title, "Shared Title");
     let amy = DataRoots::resolve(&home, None, Some("amy"), &Default::default());
     assert_eq!(app::picker::resolve_entry(&story, &amy).unwrap().title, "Shared Title");
+    // ...and the cover, in the bytes IFDB served.
+    let amys = app::picker::resolve_entry(&story, &amy).unwrap();
+    let (bytes, format) = app::cover::cover_bytes(Path::new("/nonexistent/none.z5"), Some(&amys.catalogue_dir(&amy)))
+        .expect("another player sees the shared cover");
+    assert_eq!((bytes, format), (png(), image::ImageFormat::Png));
     let _ = std::fs::remove_dir_all(&home);
 }
 
@@ -250,7 +260,7 @@ fn nothing_a_player_does_removes_catalogue_files() {
     let folder = b.game_dir.clone();
     std::fs::write(folder.join("room-global"), "1 2:3").unwrap();
     std::fs::write(folder.join("quick-save.lanthorn"), b"x").unwrap();
-    let catalogue = ["info.json", "cover.png", "room-global"];
+    let catalogue = ["info.json", "room-global", "../ifdb/abc123.json", "../ifdb/abc123.png"];
 
     // Every delete the player can reach: auto data, the quick-save, and each save by hand.
     app::storage::delete_auto_persistent(&folder);

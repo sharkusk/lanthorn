@@ -398,8 +398,8 @@ impl StoryEntry {
         roots.player_dir(&self.story_key())
     }
 
-    /// Where the story's SHARED metadata (`info.json`, `cover.png`, IFDB link
-    /// state) lives. The same folder as [`StoryEntry::game_dir`] for the default
+    /// Where the story's SHARED metadata (`info.json` with its IFDB link state;
+    /// the record and cover themselves are in `<catalogue>/ifdb/`, SQ-1723) lives. The same folder as [`StoryEntry::game_dir`] for the default
     /// player; the shared catalogue's for a named one (SQ-1676).
     pub fn catalogue_dir(&self, roots: &DataRoots) -> PathBuf {
         roots.catalogue_dir(&self.story_key())
@@ -413,8 +413,8 @@ impl StoryEntry {
     /// image is its **game directory** instead: five rows off `INFOCOM6` share
     /// one path, so keying by path would paint the first row's jacket onto all
     /// five, and a disk image is never a blorb — there is no frontispiece in
-    /// there to lose. The fetched `cover.png` sits in that same directory, so
-    /// the key doubles as the source.
+    /// there to lose. The fetched cover is found from that same directory (its
+    /// link names the shared entry), so the key doubles as the source.
     pub fn cover_key(&self, roots: &DataRoots) -> PathBuf {
         match self.meta.disk_entry {
             Some(_) => self.catalogue_dir(roots),

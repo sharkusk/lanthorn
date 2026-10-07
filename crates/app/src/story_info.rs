@@ -1,5 +1,10 @@
 //! Per-story metadata cache: `<data_base>/<story-key>.save/info.json`.
 //!
+//! Since SQ-1723 the fetched IFDB record and cover are not in that file but in
+//! the catalogue's shared store ([`crate::ifdb_store`]), once per IFDB entry;
+//! `info.json` keeps the copy's link to its entry (and the probe block), and
+//! [`load`]/[`save`] assemble and split so callers still see one [`StoryInfo`].
+//!
 //! Caches ONLY what cannot be cheaply recomputed from the story file — the IFDB
 //! fetch, and (SQ-0276) a runtime capability probe. A blorb's own `IFmd` is NOT
 //! cached: `scan_stories` already holds the bytes, so the blorb is the cache.
@@ -52,7 +57,9 @@ pub struct FetchedMeta {
     pub ifdb_rating: Option<f32>,
     /// The number of ratings behind `ifdb_rating`; the rating sort's tiebreak.
     pub ifdb_rating_count: Option<u32>,
-    /// Filename of the cached cover beside this file, e.g. "cover.png".
+    /// Filename of the cached cover: in the shared store ("<tuid>.jpg") when the
+    /// record is linked, else the copy's own "cover.png". Derived on load from
+    /// which file exists; never trusted from disk.
     pub cover: Option<String>,
     pub not_found: bool,
 }
@@ -63,25 +70,127 @@ pub struct ProbeMeta {
     pub probed_at: Option<String>,
 }
 
+/// A copy's own file: `<game_dir>/info.json`. Since SQ-1723 it holds the link
+/// state, not the IFDB record (see [`StoryInfo`]).
 pub fn info_path(game_dir: &Path) -> PathBuf { game_dir.join("info.json") }
 
-/// Load, or None if absent/unreadable/malformed/wrong-version/wrong-IFID.
-/// Never an error: absent metadata is a normal state, not a failure.
-pub fn load(game_dir: &Path, expect_ifid: &str) -> Option<StoryInfo> {
-    let raw = std::fs::read(info_path(game_dir)).ok()?;
-    let info: StoryInfo = serde_json::from_slice(&raw).ok()?;
-    if info.format_version != FORMAT_VERSION || info.ifid != expect_ifid {
-        return None;
-    }
-    Some(info)
+/// A copy's link to a shared IFDB entry: which tuid it is linked to. The
+/// record behind it lives in [`crate::ifdb_store`].
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+struct Link {
+    tuid: String,
 }
 
-pub fn save(game_dir: &Path, info: &StoryInfo) -> std::io::Result<()> {
+/// What a copy's `info.json` holds on disk.
+///
+/// * `link` — the copy is linked to a shared IFDB entry (the normal found case).
+/// * `fetched` — a record that cannot be shared and so stays with the copy: an
+///   authoritative not-found, a curated row, or one with no usable tuid. A
+///   `fetched` that *could* be shared is the pre-SQ-1723 shape; reading it
+///   moves it into the store ([`adopt_if_legacy`]).
+///
+/// [`StoryInfo`] is the assembled view of this plus the shared record, so
+/// callers see one struct, as they always did.
+#[derive(Serialize, Deserialize)]
+struct CopyInfo {
+    format_version: u32,
+    ifid: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    link: Option<Link>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    fetched: Option<FetchedMeta>,
+    #[serde(default)]
+    probe: Option<ProbeMeta>,
+}
+
+fn read_copy(game_dir: &Path) -> Option<CopyInfo> {
+    let raw = std::fs::read(info_path(game_dir)).ok()?;
+    serde_json::from_slice(&raw).ok()
+}
+
+fn write_copy(game_dir: &Path, copy: &CopyInfo) -> std::io::Result<()> {
     std::fs::create_dir_all(game_dir)?;
-    let json = serde_json::to_string_pretty(info)?;
+    let json = serde_json::to_string_pretty(copy)?;
     // Atomic (SQ-1676): the catalogue is shared, so two players may refresh the
     // same story at once; a reader must see the old file or the new one.
     crate::storage::atomic_write(&info_path(game_dir), json.as_bytes())
+}
+
+/// The IFDB page id this copy is linked to, from its link or (not yet adopted)
+/// its own record. No identity check: the id is the key to a shared entry, and
+/// whatever it names is right for itself.
+pub fn linked_tuid(game_dir: &Path) -> Option<String> {
+    let copy = read_copy(game_dir)?;
+    copy.link
+        .map(|l| l.tuid)
+        .or_else(|| copy.fetched.and_then(|f| f.ifdb_tuid))
+        .filter(|t| crate::ifdb_store::is_valid_tuid(t))
+}
+
+/// Adoption (SQ-1723): if this copy still holds a shareable IFDB record of its
+/// own (the layout before the shared store), move it and its `cover.png` into
+/// the store under its tuid and leave only the link behind. The newer fetch
+/// wins if the store already has the entry; nothing is refetched. Best-effort:
+/// on any failure the copy is left as it was and is read as before.
+pub(crate) fn adopt_if_legacy(game_dir: &Path) {
+    let Some(mut copy) = read_copy(game_dir) else { return };
+    let Some(tuid) = copy.fetched.as_ref().and_then(crate::ifdb_store::shared_tuid).map(str::to_string) else {
+        return;
+    };
+    let Some(cat) = crate::ifdb_store::catalogue_of(game_dir) else { return };
+    let legacy = copy.fetched.take().expect("matched above");
+    if crate::ifdb_store::adopt_legacy(cat, game_dir, &tuid, &legacy, &info_path(game_dir)).is_ok() {
+        copy.link = Some(Link { tuid });
+        let _ = write_copy(game_dir, &copy);
+    }
+}
+
+/// Load, or None if absent/unreadable/malformed/wrong-version/wrong-IFID.
+/// Never an error: absent metadata is a normal state, not a failure.
+///
+/// A copy linked to a shared IFDB entry (SQ-1723) comes back with that entry's
+/// record as `fetched`; a link whose entry is missing has no `fetched`, so it
+/// reads as never fetched.
+pub fn load(game_dir: &Path, expect_ifid: &str) -> Option<StoryInfo> {
+    let copy = read_copy(game_dir)?;
+    if copy.format_version != FORMAT_VERSION || copy.ifid != expect_ifid {
+        return None;
+    }
+    adopt_if_legacy(game_dir);
+    // Re-read: adoption rewrote it. A failed adoption leaves it as it was.
+    let copy = read_copy(game_dir).unwrap_or(copy);
+    let fetched = match &copy.link {
+        Some(link) => crate::ifdb_store::catalogue_of(game_dir)
+            .and_then(|cat| crate::ifdb_store::read_record(cat, &link.tuid)),
+        None => copy.fetched,
+    };
+    Some(StoryInfo { format_version: copy.format_version, ifid: copy.ifid, fetched, probe: copy.probe })
+}
+
+/// Save: a shareable record goes to the shared store (unless the store holds a
+/// strictly newer fetch of the same entry) and the copy keeps only its link;
+/// anything else stays in the copy's own file. A save that carries no `fetched`
+/// keeps the copy's existing link.
+pub fn save(game_dir: &Path, info: &StoryInfo) -> std::io::Result<()> {
+    std::fs::create_dir_all(game_dir)?;
+    let mut copy = CopyInfo {
+        format_version: info.format_version,
+        ifid: info.ifid.clone(),
+        link: None,
+        fetched: None,
+        probe: info.probe.clone(),
+    };
+    match &info.fetched {
+        Some(f) => match (crate::ifdb_store::shared_tuid(f), crate::ifdb_store::catalogue_of(game_dir)) {
+            (Some(tuid), Some(cat)) => {
+                crate::ifdb_store::write_record_unless_older(cat, tuid, f)?;
+                copy.link = Some(Link { tuid: tuid.to_string() });
+            }
+            _ => copy.fetched = Some(f.clone()),
+        },
+        None => copy.link = read_copy(game_dir).and_then(|old| old.link),
+    }
+    write_copy(game_dir, &copy)
 }
 
 /// The `r`/`f` skip decision. `forced` (`f`) ignores the cache entirely.

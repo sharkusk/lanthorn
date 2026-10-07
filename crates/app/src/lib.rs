@@ -150,6 +150,7 @@ pub mod story_pick;
 pub mod story_url;
 pub mod style;
 pub mod machine_boot;
+pub mod ifdb_store;
 pub mod story_info;
 pub mod system_fonts;
 pub mod story_text;

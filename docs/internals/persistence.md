@@ -326,6 +326,36 @@ that game side by side:
     config.toml         # per-game non-style overrides (honor/borders/map panel)
 ```
 
+The app's fetched IFDB data is the exception to "everything for that game side
+by side" (SQ-1723). A game's record and cover are kept **once per IFDB entry**,
+flat, in the shared catalogue, not in each copy's directory:
+
+```
+<catalogue>/ifdb/<tuid>.json     the fetched record
+<catalogue>/ifdb/<tuid>.<ext>    the fetched cover, in the bytes IFDB served
+                                 (.png, .jpg, ...; the extension is its real format)
+```
+
+`app/src/ifdb_store.rs` is the only place those paths are spelled. A copy's own
+`<story-key>.save/info.json` keeps only its **link state**: the tuid it is linked
+to, or, when there is no tuid to share under (an authoritative not-found, a
+curated row), the record itself; plus the probe block. So two copies of one game
+(different story keys) show one record and cover, a refresh through either is
+seen by both, and relinking one copy ("wrong game", a hand-set IFDB page) changes
+only that copy's link. The store is in the **catalogue**, so every player sees it
+(SQ-1676). A blorb's own frontispiece still outranks a fetched cover. A copy with
+no tuid keeps any cover of its own as `cover.png`.
+
+`story_info::load`/`save` keep returning one assembled `StoryInfo`, so callers
+and embedding hosts are unchanged. **Adoption:** a copy whose `info.json` still
+holds its own record (every build before SQ-1723) is read as before, and the first
+`load` (or cover read, or fetch) *moves* the record and its `cover.png` into the
+store under the copy's tuid; nothing is refetched. If the store already holds that
+entry, the newer fetch wins and the copy's files are removed. "Newer" is decided
+by the record's own `scanned_at`; if either does not parse, or they are equal, by
+file modification time; on a tie the store's record stays. `save` never replaces a
+stored record with a strictly older `scanned_at`.
+
 `<story-key>` has **two rules**, because one disk image is no longer one game
 (SQ-0850):
 

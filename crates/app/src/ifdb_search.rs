@@ -1910,8 +1910,9 @@ mod tests {
         let fetched = info.fetched.expect("a fetched block was written");
         assert_eq!(fetched.title.as_deref(), Some("Deep Space Drifter"));
         assert_eq!(fetched.author.as_deref(), Some("Michael J. Roberts"));
-        assert_eq!(fetched.cover.as_deref(), Some("cover.png"));
-        assert!(game_dir.join("cover.png").exists());
+        assert_eq!(fetched.cover.as_deref(), Some("k82q3libhff6ks8l.png"));
+        assert!(data_base.join("ifdb").join("k82q3libhff6ks8l.png").exists());
+        assert!(!game_dir.join("cover.png").exists(), "the cover is shared, not per copy");
         assert_eq!(
             cover_calls.lock().unwrap().as_slice(),
             &["https://ifdb.org/coverart?id=k82q3libhff6ks8l&version=1".to_string()],

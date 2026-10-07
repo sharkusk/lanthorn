@@ -46,8 +46,9 @@ fn frontispiece_cover(path: &Path) -> Option<(Vec<u8>, image::ImageFormat, image
 }
 
 /// `path`'s cover, by precedence: the story's own `Fspc` frontispiece always
-/// wins; a fetched `<game_dir>/cover.png` (written by the fetch worker,
-/// SQ-0348) is used only when the story has none. `game_dir` is `None` when
+/// wins; a fetched cover (written by the fetch worker, SQ-0348; kept once per
+/// IFDB entry in the shared store since SQ-1723, see [`crate::ifdb_store`]) is
+/// used only when the story has none. `game_dir` is `None` when
 /// no fallback source is available (e.g. the IFDB-precedence check in
 /// `fetch_worker`, which only cares whether a story already has its own
 /// cover). `None` when neither source yields a decodable image.
@@ -70,7 +71,7 @@ fn cover_parts(
     if let Some((bytes, format, img)) = frontispiece_cover(path) {
         return Some((bytes, format, Some(img)));
     }
-    let bytes = std::fs::read(game_dir?.join("cover.png")).ok()?;
+    let bytes = crate::ifdb_store::cover_bytes_for(game_dir?)?;
     let format = image::guess_format(&bytes).ok()?;
     Some((bytes, format, None))
 }
@@ -1255,6 +1256,55 @@ mod tests {
         assert_eq!(px, [200, 50, 50], "the story's own Fspc must win over a fetched cover.png");
 
         let _ = std::fs::remove_dir_all(story_path.parent().unwrap());
+    }
+
+    /// SQ-1723: a copy linked to a shared IFDB entry reads that entry's cover
+    /// from the store, in the format IFDB served (here a JPEG, bytes untouched),
+    /// and its own `Fspc` frontispiece still outranks it.
+    #[test]
+    fn a_linked_copy_reads_the_shared_cover_and_its_own_frontispiece_still_wins() {
+        let mut jpeg = Vec::new();
+        image::DynamicImage::ImageRgb8(image::RgbImage::from_pixel(2, 2, image::Rgb([60, 60, 60])))
+            .write_to(&mut std::io::Cursor::new(&mut jpeg), image::ImageFormat::Jpeg)
+            .unwrap();
+        let link = |game_dir: &Path| {
+            let meta = crate::story_info::FetchedMeta {
+                scanned_at: "2026-07-16T00:00:00Z".into(),
+                fetch_version: crate::story_info::FETCH_VERSION,
+                source: "ifdb".into(),
+                title: Some("T".into()),
+                author: None, language: None, first_published: None, genre: None, description: None,
+                ifdb_tuid: Some("tuid1".into()),
+                ifdb_link: None, ifdb_rating: None, ifdb_rating_count: None, cover: None,
+                not_found: false,
+            };
+            let info = crate::story_info::StoryInfo {
+                format_version: crate::story_info::FORMAT_VERSION,
+                ifid: "X".into(),
+                fetched: Some(meta),
+                probe: None,
+            };
+            crate::story_info::save(game_dir, &info).unwrap();
+        };
+
+        let (story_path, game_dir) = temp_story_and_game_dir("shared-jpeg", &minimal_blorb_no_fspc());
+        link(&game_dir);
+        let cat = game_dir.parent().unwrap();
+        crate::ifdb_store::write_cover(cat, "tuid1", &jpeg).unwrap();
+        let (bytes, format) = cover_bytes(&story_path, Some(&game_dir)).expect("the shared cover");
+        assert_eq!(bytes, jpeg, "the original bytes, not a re-encode");
+        assert_eq!(format, image::ImageFormat::Jpeg);
+        assert!(!game_dir.join("cover.png").exists(), "nothing per copy");
+        let _ = std::fs::remove_dir_all(cat);
+
+        let own = png_bytes_colored([200, 50, 50]);
+        let (story_path, game_dir) = temp_story_and_game_dir("shared-fspc", &blorb_with_fspc(&own));
+        link(&game_dir);
+        let cat = game_dir.parent().unwrap();
+        crate::ifdb_store::write_cover(cat, "tuid1", &jpeg).unwrap();
+        let (bytes, _) = cover_bytes(&story_path, Some(&game_dir)).unwrap();
+        assert_eq!(bytes, own, "the frontispiece outranks the shared cover");
+        let _ = std::fs::remove_dir_all(cat);
     }
 
     /// SQ-1542: a story with no `Fspc` of its own hands back the fetched

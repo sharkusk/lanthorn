@@ -1942,7 +1942,7 @@ pub(crate) fn run_story_picker(
                         *slot = fresh;
                     }
                 }
-                // A fetch may have just written a cover.png; drop any cached
+                // A fetch may have just written a cover; drop any cached
                 // "coverless" decode so the panel re-reads and shows it now,
                 // rather than only after the picker is reopened.
                 if matches!(p.outcome, app::fetch_worker::Outcome::Fetched) {

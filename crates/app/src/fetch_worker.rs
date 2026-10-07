@@ -217,7 +217,10 @@ fn fetch_one(
     let remembered = existing
         .as_ref()
         .and_then(|i| i.fetched.as_ref())
-        .and_then(|f| f.ifdb_tuid.clone());
+        .and_then(|f| f.ifdb_tuid.clone())
+        // The link outlives its record: a copy whose shared entry went missing
+        // still knows which page it is (SQ-1723).
+        .or_else(|| existing.as_ref().and_then(|_| story_info::linked_tuid(&game_dir)));
 
     // A manual IFDB-id fetch (SQ-0371) always runs and always fetches by that
     // id; only an IFID-keyed fetch consults the skip cache.
@@ -335,8 +338,10 @@ fn not_found_meta() -> FetchedMeta {
 }
 
 /// On a `Found` result with a cover URL and no cover already local to the
-/// story (a blorb's own `Fspc` frontispiece), fetch it and cache it beside
-/// the sidecar as `cover.png`. Best-effort: any failure (no URL, a decode-free
+/// story (a blorb's own `Fspc` frontispiece), fetch it and cache it in the
+/// shared IFDB store under the record's tuid, in the bytes IFDB served
+/// (SQ-1723; a record with no tuid keeps `cover.png` beside the sidecar).
+/// Best-effort: any failure (no URL, a decode-free
 /// local cover already present, a transport error, a write error) simply
 /// leaves the field `None` — it never turns a successful metadata fetch into
 /// a failed one.
@@ -361,14 +366,10 @@ pub(crate) fn maybe_fetch_cover(
     // temp-then-rename in the same dir so a crash mid-write can't leave a
     // truncated cover.png either.
     crate::cover::decode(&bytes)?;
-    std::fs::create_dir_all(game_dir).ok()?;
-    let tmp = game_dir.join(format!(".cover.png.part-{}", std::process::id()));
-    std::fs::write(&tmp, &bytes).ok()?;
-    if std::fs::rename(&tmp, game_dir.join("cover.png")).is_err() {
-        let _ = std::fs::remove_file(&tmp);
-        return None;
-    }
-    Some("cover.png".to_string())
+    // SQ-1723: kept once per IFDB entry, in the bytes IFDB served (so it may
+    // be a JPEG), shared by every copy; a copy with no tuid keeps its own.
+    let tuid = iff.ifdb.as_ref().map(|e| e.tuid.as_str());
+    crate::ifdb_store::write_fetched_cover(game_dir, tuid, &bytes).ok()
 }
 
 fn stem_title(path: &Path) -> String {
@@ -1009,7 +1010,8 @@ mod tests {
         wait_for(&fetcher, 1);
 
         assert_eq!(cover_calls.lock().unwrap().len(), 1, "the cover must be fetched exactly once");
-        let cover_bytes = std::fs::read(game_dir.join("cover.png")).expect("cover.png must be written");
+        let cover_bytes = std::fs::read(data_base.join("ifdb").join("abc123.png"))
+            .expect("the cover must be written to the shared store");
         assert_eq!(cover_bytes, real_png_bytes());
         // The temp-then-rename write leaves no .part file behind.
         assert!(
@@ -1020,9 +1022,66 @@ mod tests {
         );
 
         let reloaded = story_info::load(&game_dir, &ifid).unwrap();
-        assert_eq!(reloaded.fetched.unwrap().cover.as_deref(), Some("cover.png"));
+        assert_eq!(reloaded.fetched.unwrap().cover.as_deref(), Some("abc123.png"));
+        assert!(!game_dir.join("cover.png").exists(), "no per-copy cover: it is shared");
 
         let _ = std::fs::remove_dir_all(&data_base);
+    }
+
+    /// SQ-1723: two copies of one game (different story keys, so different
+    /// directories) fetched through the worker share ONE record and ONE cover,
+    /// kept in the bytes IFDB served (a JPEG here, so `.jpg`, not `.png`).
+    #[test]
+    fn two_copies_of_one_game_fetch_into_one_shared_record_and_cover() {
+        let cat = crate::scratch_dir("fetch-shared");
+        let (pa, pb) = (cat.join("a.z5"), cat.join("b.z5"));
+        std::fs::write(&pa, b"not a blorb").unwrap();
+        std::fs::write(&pb, b"not a blorb").unwrap();
+        let iff = |title: &str| IFiction {
+            title: Some(title.into()),
+            ifdb: Some(crate::ifiction::IfdbExt {
+                tuid: "shared1".into(),
+                link: None,
+                cover_url: Some("https://ifdb.org/coverart?id=shared1".into()),
+                average_rating: None,
+                rating_count: None,
+            }),
+            ..Default::default()
+        };
+        let mut jpeg = Vec::new();
+        image::DynamicImage::ImageRgb8(image::RgbImage::from_pixel(2, 2, image::Rgb([5, 6, 7])))
+            .write_to(&mut std::io::Cursor::new(&mut jpeg), image::ImageFormat::Jpeg)
+            .unwrap();
+        let roots = crate::data_roots::DataRoots::single(&cat);
+        let run = |path: &PathBuf, ifid: &str, title: &str| {
+            let mut responses = HashMap::new();
+            responses.insert(ifid.to_string(), FakeResp::Found(Box::new(iff(title))));
+            // A copy that already knows its page asks by id (SQ-1226).
+            responses.insert("shared1".to_string(), FakeResp::Found(Box::new(iff(title))));
+            let mut fake = Fake::new(responses);
+            fake.cover_bytes = jpeg.clone();
+            let fetcher = Fetcher::new(Box::new(fake), roots.clone(), Duration::ZERO);
+            fetcher.request(FetchOrder {
+                stories: vec![FetchTarget { path: path.clone(), disk_entry: None, ifid: ifid.into() }],
+                forced: true,
+                id_override: None,
+            });
+            wait_for(&fetcher, 1);
+        };
+        run(&pa, "IFID-A", "First Title");
+        run(&pb, "IFID-B", "First Title");
+
+        let dir = |p: &PathBuf| crate::storage::game_dir(&cat, &crate::storage::story_key_at(p));
+        assert_eq!(std::fs::read(cat.join("ifdb/shared1.jpg")).unwrap(), jpeg, "original bytes, real extension");
+        assert!(!cat.join("ifdb/shared1.png").exists());
+        assert!(!dir(&pa).join("cover.png").exists() && !dir(&pb).join("cover.png").exists());
+
+        // A refresh through A is what B sees, without B being fetched again.
+        run(&pa, "IFID-A", "Second Title");
+        let seen = |p: &PathBuf, ifid: &str| story_info::load(&dir(p), ifid).unwrap().fetched.unwrap();
+        assert_eq!(seen(&pb, "IFID-B").title.as_deref(), Some("Second Title"));
+        assert_eq!(seen(&pb, "IFID-B").cover.as_deref(), Some("shared1.jpg"));
+        let _ = std::fs::remove_dir_all(&cat);
     }
 
     /// SQ-0660: cover bytes that don't decode as an image (an HTML error page

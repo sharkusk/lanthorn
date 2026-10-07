@@ -51,7 +51,7 @@ Pre-beta there is still **no obligation to read old files** (see the standing
 | Glk file VFS sidecar | `default.glkvfs` | `gvm/src/glk.rs` `encode_files`/`decode_files` (path: `app/src/vfs_store.rs`) | `GVFS` magic + `u32` version `1` | Frozen (0.x) | `glk::tests::encode_files_roundtrips_and_skips_temp`, `…decode_files_rejects_bumped_gvfs_version` |
 | Debug-coverage PC set | `default.pcs` | `app/src/pcset_store.rs` | `ZPCS` magic + `VERSION = 1` | Frozen (0.x) | `pcset_store::tests::version_constant_is_frozen`, `…decode_rejects_bumped_version`, `…codec_round_trips` |
 | Map graph | `map.json` (inside `.lanthorn`) | `mapper/src/persist.rs` | JSON `version: 1` field | Tolerant (JSON) — carried by the archive | `mapper::persist::tests` round-trips |
-| Per-story metadata | `info.json` (+ cover) | `app/src/story_info.rs`, `fetch_worker.rs` | JSON `format_version = 1`, `fetch_version = 1` | Tolerant (JSON) | `story_info::tests` |
+| Per-story metadata | `info.json` (link) + shared `ifdb/<tuid>.json` / `ifdb/<tuid>.<ext>` (record, cover) | `app/src/story_info.rs`, `ifdb_store.rs`, `fetch_worker.rs` | JSON `format_version = 1`, `fetch_version = 1` | Tolerant (JSON) | `story_info::tests` |
 | Global config | `config.toml` | `app/src/config.rs` | TOML `version` (`CONFIG_SCHEMA_VERSION = 1`) | Tolerant (TOML) | `config::tests` |
 | Theme / per-game config | `style.toml`, `<ifid>.config.toml` | `app/src/config.rs`, `styles.rs` | none (TOML, field-tolerant) | Tolerant (TOML) | — |
 

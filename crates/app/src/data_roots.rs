@@ -1,8 +1,10 @@
 //! Who is playing, and where their files live (SQ-1676).
 //!
 //! One install can serve several players. What every player shares is the
-//! **catalogue**: per-story `info.json`, `cover.png`, the IFDB link state and the
-//! Glulx learned-address files, all under `<user_dir>/saves/<story-key>.save/`.
+//! **catalogue**: each story's IFDB link state (`info.json`) and the Glulx
+//! learned-address files, under `<user_dir>/saves/<story-key>.save/`, and the
+//! fetched IFDB records and covers, once per IFDB entry, in
+//! `<user_dir>/saves/ifdb/<tuid>.json` / `<tuid>.<ext>` (see [`crate::ifdb_store`]).
 //! What is per-player is everything else a story folder holds (saves, aux data,
 //! exports, per-game sidecars) and the layered `config.toml` / `style.toml`.
 //!
