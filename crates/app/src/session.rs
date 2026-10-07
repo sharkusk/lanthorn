@@ -2309,7 +2309,7 @@ impl GameSession {
             u32::from(self.machine.mem.read_word(0x24)),
         );
         if hdr.0 > 1 && hdr.1 > 1 {
-            return hdr;
+            return clamp_canvas_extent(hdr);
         }
         self.machine
             .screen
@@ -2320,7 +2320,7 @@ impl GameSession {
                 (u32::from(w.x_size).max(1), u32::from(w.y_size).max(1))
             })
             .filter(|&(w, h)| w > 1 && h > 1)
-            .unwrap_or((640, 400))
+            .map_or((640, 400), clamp_canvas_extent)
     }
 
     /// Drain [`zvm::cpu::exec::Machine::take_paint_events`], apply every one of
@@ -7205,6 +7205,14 @@ fn build_object_tree(
 
 // ── Tests ─────────────────────────────────────────────────────────────────────
 
+/// Clamp a paint-ground canvas extent to `zvm`'s `WINDOW_PX_CAP` per axis, and to
+/// at least 1 (SQ-1728). The header words it is computed from (0x22/0x24) live in
+/// dynamic memory, so a story can overwrite them with up to 65535.
+fn clamp_canvas_extent((w, h): (u32, u32)) -> (u32, u32) {
+    let cap = u32::from(zvm::screen::WINDOW_PX_CAP);
+    (w.clamp(1, cap), h.clamp(1, cap))
+}
+
 #[cfg(all(test, feature = "t-session"))]
 mod tests {
     use super::*;
@@ -10539,6 +10547,18 @@ mod tests {
     }
 
     // ── SQ-1191: the memoized v6 screen model ─────────────────────────────────
+
+    /// SQ-1728: a story overwriting header words 0x22/0x24 (dynamic memory) with
+    /// 65535 must not size the paint-ground canvas past `WINDOW_PX_CAP`.
+    #[test]
+    fn paint_canvas_extent_is_clamped_when_the_header_screen_size_is_overwritten() {
+        let mut s = v6_session_with_run("x");
+        s.machine.mem.write_word(0x22, 0xFFFF);
+        s.machine.mem.write_word(0x24, 0xFFFF);
+        let cap = u32::from(zvm::screen::WINDOW_PX_CAP);
+        assert_eq!(s.v6_native_extent(), (cap, cap));
+        assert_eq!(clamp_canvas_extent((0, 0)), (1, 1), "zero never reaches the allocator");
+    }
 
     /// A synthetic v6 session with `text` painted on window 7, built the way
     /// `drain_turn_applies_pending_draw_picture_to_the_window_canvas` builds
