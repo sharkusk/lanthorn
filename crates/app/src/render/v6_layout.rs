@@ -263,6 +263,11 @@ pub struct MainText {
 /// v6 screen (~640 px) so it's treated as unresolved and skipped for that axis;
 /// clamping here (presentation) keeps zvm storing window props verbatim for the
 /// game to read back (ZMSD §8.8.3.2).
+///
+/// **Bound for hosts (SQ-1728):** zvm caps every window pixel property at
+/// `zvm::screen::WINDOW_PX_CAP` (8192), so each axis here is at most
+/// `2 * 8192 = 16384` (an origin plus a size, `saturating_add`ed in `u16`). Nothing
+/// here clamps further; a caller sizing a pixel buffer from this should clamp it.
 pub fn native_extent(items: &[PositionedWindow], tf: &crate::native_font::TextFace) -> (u16, u16) {
     let cell = tf.cell();
     let font_h = u32::from(cell.h());

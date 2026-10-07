@@ -1492,7 +1492,7 @@ pub fn load_archive(path: &Path) -> io::Result<ArchiveContents> {
         .map(|(i, dto)| {
             let dto = dto.as_ref()?;
             let png = img_png.get(&i)?;
-            let rgba = image::load_from_memory(png).ok()?.to_rgba8();
+            let rgba = crate::cover::decode(png)?.to_rgba8();
             Some(crate::inline_image::InlineImage {
                 pixels: std::sync::Arc::new(rgba),
                 align: dto.align,

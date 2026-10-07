@@ -22,9 +22,30 @@ use ratatui_image::protocol::Protocol;
 
 use crate::render::graphics::KittyDeleteQueue;
 
-/// Decode PNG/JPEG/GIF bytes into a `DynamicImage`. `None` on any decode failure.
+/// Widest/tallest image [`decode`] will accept, in pixels (SQ-1728). Far past
+/// any real cover or v6 picture (the v6 window cap is also 8192).
+pub const MAX_IMAGE_DIM: u32 = 8192;
+
+/// Decoder allocation ceiling for [`decode`] (SQ-1728): 256 MiB, which is exactly
+/// the largest legitimate RGBA buffer (8192 x 8192 x 4). The `image` crate's own
+/// default is 512 MiB, twice what any accepted image can need.
+pub const MAX_DECODE_ALLOC: u64 = 256 * 1024 * 1024;
+
+/// Decode PNG/JPEG/GIF bytes into a `DynamicImage`. `None` on any decode failure,
+/// including an image the limits refuse (over [`MAX_IMAGE_DIM`] on either axis, or
+/// needing more than [`MAX_DECODE_ALLOC`]): the limits are checked from the header
+/// before any pixel buffer is allocated. This is the ONE decode entry point for
+/// untrusted image bytes (covers, blorb picts, save-archive blobs).
 pub fn decode(bytes: &[u8]) -> Option<image::DynamicImage> {
-    image::load_from_memory(bytes).ok()
+    let mut reader = image::ImageReader::new(std::io::Cursor::new(bytes))
+        .with_guessed_format()
+        .ok()?;
+    let mut limits = image::Limits::default();
+    limits.max_image_width = Some(MAX_IMAGE_DIM);
+    limits.max_image_height = Some(MAX_IMAGE_DIM);
+    limits.max_alloc = Some(MAX_DECODE_ALLOC);
+    reader.limits(limits);
+    reader.decode().ok()
 }
 
 /// Read `path`; if it is a blorb declaring an `Fspc` frontispiece, fetch that
@@ -729,6 +750,34 @@ pub fn should_request_cover(
 
 #[cfg(all(test, feature = "t-picker"))]
 mod tests {
+    /// A genuine, fully decodable all-black grey PNG of `w` x `h` (compresses to a
+    /// few KB), so only the decoder's limits can refuse it (SQ-1728).
+    fn grey_png(w: u32, h: u32) -> Vec<u8> {
+        let mut bytes = Vec::new();
+        image::DynamicImage::ImageLuma8(image::GrayImage::new(w, h))
+            .write_to(&mut std::io::Cursor::new(&mut bytes), image::ImageFormat::Png)
+            .unwrap();
+        bytes
+    }
+
+    #[test]
+    fn decode_refuses_oversized_images() {
+        assert!(decode(&grey_png(9000, 9000)).is_none(), "9000x9000 is over the limit");
+        assert!(decode(&grey_png(8193, 1)).is_none(), "one pixel past the width cap");
+        assert!(decode(&grey_png(1, 8193)).is_none(), "one pixel past the height cap");
+        assert!(decode(&grey_png(8192, 1)).is_some(), "the cap itself is allowed");
+    }
+
+    #[test]
+    fn decode_accepts_a_normal_image() {
+        let mut bytes = Vec::new();
+        image::DynamicImage::ImageRgba8(image::RgbaImage::new(640, 400))
+            .write_to(&mut std::io::Cursor::new(&mut bytes), image::ImageFormat::Png)
+            .unwrap();
+        let img = decode(&bytes).expect("640x400 decodes");
+        assert_eq!((img.width(), img.height()), (640, 400));
+    }
+
     /// A GIF cover decodes: IFDB and the IFComp archive serve some covers as
     /// GIF, and every one of them was dropped before the decoder was enabled.
     #[test]

@@ -1433,7 +1433,7 @@ impl GameSession {
     /// text, because the ground was the one v6 screen layer no restore touched.
     pub fn load_paint_ground(&mut self, png: Option<&[u8]>) {
         self.paint = png
-            .and_then(|b| image::load_from_memory(b).ok())
+            .and_then(crate::cover::decode)
             .map(|img| std::sync::Arc::new(img.to_rgba8()));
     }
 
@@ -1699,7 +1699,7 @@ impl GameSession {
         // to the session that was just discarded (SQ-0708).
         self.paced_frames.clear();
         for (win, png) in blobs {
-            let Ok(img) = image::load_from_memory(png) else { continue };
+            let Some(img) = crate::cover::decode(png) else { continue };
             let rgba = img.to_rgba8();
             let mut canvas = crate::graphics::Canvas::new(rgba.width(), rgba.height());
             canvas.img = std::sync::Arc::new(rgba);

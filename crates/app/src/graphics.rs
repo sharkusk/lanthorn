@@ -414,8 +414,75 @@ impl SagaRecords {
     }
 }
 
+/// Byte budget across [`PictSource`]'s four decoded/scaled pixel caches
+/// (SQ-1728): 256 MiB, the size of the largest single image the decoder accepts
+/// (8192 x 8192 RGBA, see `cover::MAX_DECODE_ALLOC`). A real v6 session pins a few
+/// dozen pictures of well under 1 MiB each, so this only ever bites on hostile or
+/// pathological archives.
+const PIC_CACHE_BUDGET: u64 = 256 * 1024 * 1024;
+
+/// Which of [`PictSource`]'s four pixel caches an entry lives in.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+enum PicKey {
+    Src(u32),
+    Adaptive(u32, u64),
+    Scaled(u32),
+    AdaptiveScaled(u32, u64),
+}
+
+/// Least-recently-used bookkeeping for the four caches: bytes and last-use tick
+/// per entry. The maps keep the images; this only decides who goes.
+#[derive(Debug)]
+struct PicBudget {
+    limit: u64,
+    used: u64,
+    tick: u64,
+    entries: HashMap<PicKey, (u64, u64)>,
+}
+
+impl Default for PicBudget {
+    fn default() -> Self {
+        PicBudget { limit: PIC_CACHE_BUDGET, used: 0, tick: 0, entries: HashMap::new() }
+    }
+}
+
+impl PicBudget {
+    fn touch(&mut self, key: PicKey) {
+        self.tick += 1;
+        if let Some(e) = self.entries.get_mut(&key) {
+            e.1 = self.tick;
+        }
+    }
+    fn record(&mut self, key: PicKey, bytes: u64) {
+        self.tick += 1;
+        if let Some((old, _)) = self.entries.insert(key, (bytes, self.tick)) {
+            self.used -= old;
+        }
+        self.used += bytes;
+    }
+    fn forget(&mut self, key: PicKey) {
+        if let Some((bytes, _)) = self.entries.remove(&key) {
+            self.used -= bytes;
+        }
+    }
+    /// The least recently used entry other than `keep`, if over budget.
+    fn victim(&self, keep: PicKey) -> Option<PicKey> {
+        if self.used <= self.limit {
+            return None;
+        }
+        self.entries.iter().filter(|(k, _)| **k != keep).min_by_key(|(_, (_, t))| *t).map(|(k, _)| *k)
+    }
+}
+
+fn pic_bytes(img: &DynamicImage) -> u64 {
+    img.as_bytes().len() as u64
+}
+
 #[derive(Debug)]
 pub struct PictSource {
+    /// LRU byte budget over `cache`, `adaptive_cache`, `scaled_cache` and
+    /// `adaptive_scaled_cache` (SQ-1728).
+    budget: PicBudget,
     blorb: Option<blorb::Blorb>,
     /// Native Infocom picture archive, used when there is no Blorb.
     native: Option<blorb::infocom_pics::InfocomPics>,
@@ -464,7 +531,8 @@ pub struct PictSource {
     /// `session::V6_OPS_CAP` (512) ops per window — a RE-MAP rather than a
     /// re-decode.
     ///
-    /// Unbounded, like [`Self::cache`], and for a smaller price: a plane is one
+    /// Unbounded (the four pixel caches above are LRU-budgeted, SQ-1728; this
+    /// one is not), and for a smaller price: a plane is one
     /// byte per pixel where a decode is four, so this pins at most a quarter of
     /// what the RGBA cache beside it already pins for the same pictures — and
     /// only for pictures a draw actually asked for, since `dims`/`info` answer
@@ -604,6 +672,7 @@ impl PictSource {
             adaptive_cache: HashMap::new(),
             scaled_cache: HashMap::new(),
             adaptive_scaled_cache: HashMap::new(),
+            budget: PicBudget::default(),
             index_planes: HashMap::new(),
             hw_palette: None,
             scott_c64: None,
@@ -1248,6 +1317,7 @@ impl PictSource {
         // Every scaled pixel was resampled from a decode this just invalidated.
         self.scaled_cache.clear();
         self.adaptive_scaled_cache.clear();
+        self.budget = PicBudget { limit: self.budget.limit, ..PicBudget::default() };
         // The INDICES do not depend on the fuse — `blend_half_width_columns`
         // runs on the RGBA, after colourisation — so this clear buys nothing
         // today. It is here so that every decode cache on this source has ONE
@@ -1409,6 +1479,16 @@ impl PictSource {
         let gen = self.palette_gen;
         self.adaptive_cache.retain(|&(_, g), _| g == gen);
         self.adaptive_scaled_cache.retain(|&(_, g), _| g == gen);
+        let stale: Vec<PicKey> = self
+            .budget
+            .entries
+            .keys()
+            .copied()
+            .filter(|k| matches!(k, PicKey::Adaptive(_, g) | PicKey::AdaptiveScaled(_, g) if *g != gen))
+            .collect();
+        for k in stale {
+            self.budget.forget(k);
+        }
     }
 
     /// Decode `resnum` for a replay WITHOUT establishing a new Current Palette —
@@ -1672,7 +1752,31 @@ impl PictSource {
         self.index_planes.get(&resnum).and_then(|o| o.clone())
     }
 
+    /// Account for a freshly inserted cache entry and evict least-recently-used
+    /// entries (never `key` itself) until the pixel caches fit the budget.
+    fn note_cached(&mut self, key: PicKey, bytes: u64) {
+        self.budget.record(key, bytes);
+        while let Some(victim) = self.budget.victim(key) {
+            match victim {
+                PicKey::Src(r) => {
+                    self.cache.remove(&r);
+                }
+                PicKey::Adaptive(r, g) => {
+                    self.adaptive_cache.remove(&(r, g));
+                }
+                PicKey::Scaled(r) => {
+                    self.scaled_cache.remove(&r);
+                }
+                PicKey::AdaptiveScaled(r, g) => {
+                    self.adaptive_scaled_cache.remove(&(r, g));
+                }
+            }
+            self.budget.forget(victim);
+        }
+    }
+
     fn get(&mut self, resnum: u32) -> Option<&Arc<DynamicImage>> {
+        self.budget.touch(PicKey::Src(resnum));
         if !self.cache.contains_key(&resnum) {
             let decoded = match &self.blorb {
                 Some(b) => b
@@ -1766,7 +1870,9 @@ impl PictSource {
                     Some(scott_c64_image(list, *scale, *platform))
                 }),
             };
+            let bytes = decoded.as_ref().map_or(0, pic_bytes);
             self.cache.insert(resnum, decoded.map(Arc::new));
+            self.note_cached(PicKey::Src(resnum), bytes);
         }
         self.cache.get(&resnum).and_then(|o| o.as_ref())
     }
@@ -1896,17 +2002,23 @@ impl PictSource {
         if self.is_palette_dependent(resnum) {
             let key = (resnum, self.palette_gen);
             if let Some(img) = self.adaptive_scaled_cache.get(&key) {
-                return Some(Arc::clone(img));
+                let img = Arc::clone(img);
+                self.budget.touch(PicKey::AdaptiveScaled(key.0, key.1));
+                return Some(img);
             }
             let scaled = scale_art(&source, scale);
             self.adaptive_scaled_cache.insert(key, Arc::clone(&scaled));
+            self.note_cached(PicKey::AdaptiveScaled(key.0, key.1), pic_bytes(&scaled));
             return Some(scaled);
         }
         if let Some(img) = self.scaled_cache.get(&resnum) {
-            return Some(Arc::clone(img));
+            let img = Arc::clone(img);
+            self.budget.touch(PicKey::Scaled(resnum));
+            return Some(img);
         }
         let scaled = scale_art(&source, scale);
         self.scaled_cache.insert(resnum, Arc::clone(&scaled));
+        self.note_cached(PicKey::Scaled(resnum), pic_bytes(&scaled));
         Some(scaled)
     }
 
@@ -1944,6 +2056,7 @@ impl PictSource {
     /// yet the palette is undefined per spec; we fall back to the placeholder.
     fn adaptive_image(&mut self, resnum: u32) -> Option<Arc<DynamicImage>> {
         let key = (resnum, self.palette_gen);
+        self.budget.touch(PicKey::Adaptive(key.0, key.1));
         if !self.adaptive_cache.contains_key(&key) {
             // SQ-1197: a native picture's INDICES are the same under every
             // palette, so this miss costs a re-MAP off the retained index plane
@@ -1983,7 +2096,9 @@ impl PictSource {
                 }
                 (None, None) => None,
             };
+            let bytes = decoded.as_ref().map_or(0, pic_bytes);
             self.adaptive_cache.insert(key, decoded.map(Arc::new));
+            self.note_cached(PicKey::Adaptive(key.0, key.1), bytes);
         }
         self.adaptive_cache.get(&key).and_then(|o| o.clone())
     }
@@ -3669,6 +3784,30 @@ mod tests {
         let mut none = PictSource::new(None);
         assert!(none.info(1).is_none());
         assert!(none.image(1).is_none());
+    }
+
+    /// SQ-1728: the decoded/scaled pixel caches share one LRU byte budget.
+    #[test]
+    fn pixel_caches_evict_least_recently_used_over_budget() {
+        let mut src = PictSource::new(None);
+        let img = || Arc::new(DynamicImage::ImageRgba8(RgbaImage::new(4, 4))); // 64 bytes
+        src.budget.limit = 150; // room for two entries, not three
+        for r in 1..=2u32 {
+            src.cache.insert(r, Some(img()));
+            src.note_cached(PicKey::Src(r), 64);
+        }
+        src.budget.touch(PicKey::Src(1)); // 1 is now more recent than 2
+        src.scaled_cache.insert(3, img());
+        src.note_cached(PicKey::Scaled(3), 64);
+        assert!(src.cache.contains_key(&1), "most recently used survives");
+        assert!(!src.cache.contains_key(&2), "least recently used is evicted");
+        assert!(src.scaled_cache.contains_key(&3), "the new entry is kept");
+        assert_eq!(src.budget.used, 128);
+        // A single entry bigger than the whole budget is still kept.
+        src.adaptive_cache.insert((9, 0), Some(img()));
+        src.note_cached(PicKey::Adaptive(9, 0), 1000);
+        assert_eq!(src.cache.len() + src.scaled_cache.len(), 0);
+        assert!(src.adaptive_cache.contains_key(&(9, 0)));
     }
 
     /// A valid 2x2 red PNG, encoded via the `image` crate.
