@@ -115,6 +115,11 @@ const AA_HFS_LEN: usize = 14;
 /// most; the bound exists so a self-referential extent cannot spin.
 const MAX_DEPTH: usize = 8;
 
+/// The most file records one mount will collect. Real discs hold hundreds; the
+/// cap is a ceiling for a hostile image whose directories fan out, after which
+/// the walk stops and keeps what it has.
+const MAX_ENTRIES: usize = 100_000;
+
 /// Why an ISO 9660 image would not open.
 #[derive(Debug, PartialEq, Eq)]
 pub enum IsoError {
@@ -204,7 +209,8 @@ impl Iso9660 {
 
         let mut iso = Iso9660 { image, block, name, files: Vec::new() };
         let mut files = Vec::new();
-        iso.walk(extent, len, &[], &mut files, 0);
+        let mut seen = std::collections::HashSet::new();
+        iso.walk(extent, len, &[], &mut files, 0, &mut seen);
         iso.files = files;
         Ok(iso)
     }
@@ -312,6 +318,10 @@ impl Iso9660 {
 
     /// Read one directory's extent as a run of records, recursing into the
     /// directories it names.
+    ///
+    /// Each directory extent is walked once (`seen`), so a record pointing back
+    /// at its own or an ancestor's extent cannot multiply the work at every
+    /// level, and the walk stops at [`MAX_ENTRIES`] records.
     fn walk(
         &self,
         extent: usize,
@@ -319,8 +329,9 @@ impl Iso9660 {
         dirs: &[String],
         out: &mut Vec<IsoEntry>,
         depth: usize,
+        seen: &mut std::collections::HashSet<usize>,
     ) {
-        if depth > MAX_DEPTH {
+        if depth > MAX_DEPTH || out.len() >= MAX_ENTRIES || !seen.insert(extent) {
             return;
         }
         let Some(at) = extent.checked_mul(self.block) else { return };
@@ -341,9 +352,12 @@ impl Iso9660 {
                 Record::Directory { name, extent, len } => {
                     let mut deeper = dirs.to_vec();
                     deeper.push(name);
-                    self.walk(extent, len, &deeper, out, depth + 1);
+                    self.walk(extent, len, &deeper, out, depth + 1, seen);
                 }
                 Record::File(mut file) => {
+                    if out.len() >= MAX_ENTRIES {
+                        return;
+                    }
                     file.dirs = dirs.to_vec();
                     out.push(file);
                 }
@@ -564,6 +578,26 @@ pub(crate) mod tests {
             Some(crate::medium::DiskImage::Hfs),
             "the Apple AA entry is read"
         );
+    }
+
+    /// SQ-1727: directory records that point back at the root's own extent
+    /// were re-walked at every level (k records cost ~k^9 entries).
+    #[test]
+    fn self_referential_directories_are_walked_once() {
+        let mut disc = sample_disc(&[("A.DAT", b"x")]);
+        let root = 18 * SECTOR;
+        let mut o = root;
+        while disc[o] != 0 {
+            o += usize::from(disc[o]);
+        }
+        for i in 0..4u8 {
+            let id = [b'D', b'0' + i];
+            let r = dir_record(&id, 18, SECTOR as u32, FLAG_DIRECTORY, None);
+            disc[o..o + r.len()].copy_from_slice(&r);
+            o += r.len();
+        }
+        let iso = Iso9660::mount(disc).expect("mounts");
+        assert_eq!(iso.files().len(), 1, "the root is walked once, not once per level");
     }
 
     /// The two discs live outside the repo (`treasures/` is gitignored), so
