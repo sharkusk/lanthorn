@@ -151,7 +151,18 @@ static EXTRA_GLYPHS: &[(char, [u8; 8])] = &[
 /// covering ASCII, the ZSCII default accented-character table, and
 /// BeyondZork's font-3 box/block glyphs) in order, then falls back to
 /// [`EXTRA_GLYPHS`] for the handful of codepoints those sets don't cover.
-pub(crate) fn glyph_bits(glyph: char) -> Option<[u8; 8]> {
+///
+/// Public for hosts that draw their own character grid rather than going
+/// through a terminal: this is the portable source for the Z-machine font-3
+/// graphics characters `zvm::cpu::exec::font3_translate` emits (arrows, runes,
+/// the APL quad, the U+1FBA0..U+1FBA3 diagonals) plus box and block glyphs, so
+/// every host draws the same shapes as the TUI.
+///
+/// Bit layout: eight rows, top to bottom (`[0]` is the top row). Within a row,
+/// bit 0 (the least significant) is the LEFTMOST column and bit 7 the rightmost
+/// (`bit_at` reads column `c` as `1 << c`; font8x8's `A` is `0x0C` on row 0,
+/// drawn as `..##....`). A set bit is ink.
+pub fn glyph_bits(glyph: char) -> Option<[u8; 8]> {
     font8x8::BASIC_FONTS
         .get(glyph)
         .or_else(|| font8x8::LATIN_FONTS.get(glyph))
@@ -939,6 +950,19 @@ impl crate::native_font::TextFace {
 #[cfg(all(test, feature = "t-render"))]
 mod tests {
     use super::*;
+
+    #[test]
+    fn every_font3_translation_of_printable_zscii_has_a_bitmap() {
+        for code in 32u8..=126 {
+            let src = char::from(code);
+            let out = zvm::cpu::exec::font3_translate(src);
+            assert!(
+                glyph_bits(out).is_some(),
+                "font-3 code {code} ({src:?}) translates to {out:?} (U+{:04X}) with no glyph_bits bitmap",
+                out as u32
+            );
+        }
+    }
 
     fn assert_has_glyph(c: char) {
         let bits = glyph_bits(c);
