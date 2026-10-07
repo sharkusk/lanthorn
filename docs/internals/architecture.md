@@ -228,6 +228,26 @@ caller of it: there is one copy of each rule.
   or every one-run choice reads as an edit. The TUI's `Action::ConfigSave` runs
   both; mouse capture and the style watcher stay its own.
 
+### Fetching on a host's behalf: the address policy (SQ-1731)
+
+Every HTTP fetcher (`story_url::HttpSource`, `ifdb::IfdbClient`,
+`ifdb_search::IfdbSearchClient`, which also serves the documents chooser, and the
+hint downloader) builds its `ureq` agent through `fetch_policy::agent`. By default
+(`FetchPolicy::Open`, what the TUI uses) it connects anywhere. A host that embeds
+lanthorn and fetches URLs on behalf of users turns on `FetchPolicy::PublicOnly`,
+which refuses loopback, private (10/8, 172.16/12, 192.168/16, fc00::/7),
+link-local (169.254/16 including 169.254.169.254, fe80::/10) and unspecified
+addresses, and the IPv4-mapped form of any of them.
+
+Two ways to turn it on: call `fetch_policy::set_process_policy(FetchPolicy::PublicOnly)`
+once at startup, before any client is built (every `new()` reads
+`FetchPolicy::current()`), or pass the value to a client's `with_policy`. The check
+is a `ureq` resolver wrapped around the default one, so it runs at connect time on
+every hop: a redirect to `127.0.0.1`, or to a name that resolves there, is refused
+like the first URL. Proxies are disabled for a `PublicOnly` agent, because through
+one the resolver would only see the proxy's name. `fetch_policy::is_public_address`
+is the pure classifier, for a host that wants to check an address itself.
+
 ## Three engines, one renderer — and Glk only for Glulx
 
 All three VMs implement one `Engine` trait whose `screen()` returns an

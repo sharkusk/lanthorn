@@ -155,11 +155,8 @@ impl HintDownloader {
 /// GET `url` and return its body bytes. ureq follows the Internet Archive's
 /// 302 redirect to the nearest capture automatically.
 fn fetch_bytes(url: &str) -> Result<Vec<u8>, String> {
-    let config = ureq::Agent::config_builder()
-        .timeout_global(Some(TIMEOUT))
-        .user_agent(user_agent())
-        .build();
-    let agent = ureq::Agent::new_with_config(config);
+    let builder = ureq::Agent::config_builder().timeout_global(Some(TIMEOUT)).user_agent(user_agent());
+    let agent = crate::fetch_policy::agent(builder, crate::fetch_policy::FetchPolicy::current());
     let mut resp = agent.get(url).call().map_err(|e| e.to_string())?;
     resp.body_mut()
         .with_config()

@@ -157,7 +157,12 @@ pub struct HttpSource {
 
 impl HttpSource {
     pub fn new() -> Self {
-        let config = ureq::Agent::config_builder()
+        Self::with_policy(crate::fetch_policy::FetchPolicy::current())
+    }
+
+    /// A fetcher that connects only where `policy` allows (SQ-1731).
+    pub fn with_policy(policy: crate::fetch_policy::FetchPolicy) -> Self {
+        let builder = ureq::Agent::config_builder()
             // Per PHASE, never end-to-end. `timeout_global` is documented as
             // "from DNS lookup to finishing reading the response body", so any
             // value small enough to be a useful stall detector is also small
@@ -173,9 +178,8 @@ impl HttpSource {
             // A chain longer than the cap must FAIL, not quietly hand back the
             // last redirect's body — a login wall would otherwise be written to
             // disk as the story.
-            .max_redirects_will_error(true)
-            .build();
-        Self { agent: ureq::Agent::new_with_config(config) }
+            .max_redirects_will_error(true);
+        Self { agent: crate::fetch_policy::agent(builder, policy) }
     }
 }
 

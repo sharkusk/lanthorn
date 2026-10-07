@@ -100,6 +100,7 @@ pub mod inventory;
 pub mod export_dot;
 pub mod export_json;
 pub mod export_svg;
+pub mod fetch_policy;
 pub mod fetch_worker;
 pub mod metadata_import;
 pub mod miss_cache;

@@ -56,11 +56,13 @@ pub struct IfdbClient {
 
 impl IfdbClient {
     pub fn new() -> Self {
-        let config = ureq::Agent::config_builder()
-            .timeout_global(Some(TIMEOUT))
-            .user_agent(user_agent())
-            .build();
-        Self { agent: ureq::Agent::new_with_config(config) }
+        Self::with_policy(crate::fetch_policy::FetchPolicy::current())
+    }
+
+    /// A client that connects only where `policy` allows (SQ-1731).
+    pub fn with_policy(policy: crate::fetch_policy::FetchPolicy) -> Self {
+        let builder = ureq::Agent::config_builder().timeout_global(Some(TIMEOUT)).user_agent(user_agent());
+        Self { agent: crate::fetch_policy::agent(builder, policy) }
     }
 }
 
