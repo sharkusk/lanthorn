@@ -153,7 +153,9 @@ pub fn home_dir() -> Option<PathBuf> {
 
 /// An XDG base directory value: honoured only when non-empty and absolute.
 fn xdg(value: &Option<PathBuf>) -> Option<&Path> {
-    value.as_deref().filter(|p| !p.as_os_str().is_empty() && p.is_absolute())
+    // Judged by the Unix rule (starts with `/`), not the host's `Path::is_absolute`:
+    // this is the Linux row, and on a Windows host `/x/cfg` has no drive letter.
+    value.as_deref().filter(|p| p.to_string_lossy().starts_with('/'))
 }
 
 impl UserDirs {
