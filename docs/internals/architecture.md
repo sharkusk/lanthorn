@@ -232,7 +232,7 @@ caller of it: there is one copy of each rule.
 
 Every HTTP fetcher (`story_url::HttpSource`, `ifdb::IfdbClient`,
 `ifdb_search::IfdbSearchClient`, which also serves the documents chooser, and the
-hint downloader) builds its `ureq` agent through `fetch_policy::agent`. By default
+hint downloader, each with a `with_policy` constructor) builds its `ureq` agent through `fetch_policy::agent`. By default
 (`FetchPolicy::Open`, what the TUI uses) it connects anywhere. A host that embeds
 lanthorn and fetches URLs on behalf of users turns on `FetchPolicy::PublicOnly`,
 which refuses loopback, private (10/8, 172.16/12, 192.168/16, fc00::/7),
