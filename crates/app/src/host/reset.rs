@@ -329,6 +329,7 @@ pub fn reset_game(
                 crate::styles::read_per_game_borderless(game_dir),
                 state.garglk_overlay.as_ref(),
                 state.glk_design.as_ref(),
+                state.config.borderless_windows,
             );
             GlulxSession::new_in(
                 game_dir.to_path_buf(),

@@ -894,6 +894,7 @@ pub fn boot_story(req: BootRequest<'_>, hooks: &mut dyn BootHooks) -> Result<Boo
         crate::styles::read_per_game_borderless(&game_dir),
         garglk_overlay.as_ref(),
         glk_design.as_ref(),
+        cfg.borderless_windows,
     );
     // SQ-0304: per-game map-panel visibility. `Some(false)` → start with the map
     // hidden (captured here before `cfg` is moved into the engine build below).

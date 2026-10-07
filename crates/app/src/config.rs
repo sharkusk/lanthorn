@@ -1801,6 +1801,13 @@ pub struct Config {
     /// `crate::render::graphics::v6_pixel_lock_applies` for the measurement.
     #[serde(default)]
     pub v6_pixel_lock: bool,
+    /// Your own default for Glulx borderless windows (SQ-1740): `true` abuts the
+    /// Glk windows, `false` keeps their borders. Unset (the default) means "no
+    /// user default" and is never written. It sits BELOW a per-game
+    /// `borderless_windows`, garglk.ini and the story's `.cfg` design — see
+    /// `glk_cfg::resolve_borderless`.
+    #[serde(default)]
+    pub borderless_windows: Option<bool>,
     /// Which of the player's own boot media in the data folder answers first
     /// when several carry the machine's system typeface (SQ-1037, SQ-1053).
     ///
@@ -2464,6 +2471,7 @@ impl Default for Config {
             glk_pixel_scale: GlkPixelScale::Native,
             v6_arrow_keys: false,
             v6_pixel_lock: false,
+            borderless_windows: None,
             system_font_disk: String::new(),
             keymap: KeymapConfig::default(),
             hotkeys: HotkeysConfig::default(),
@@ -2811,6 +2819,7 @@ fn resolve_config_layers(
             cfg.glk_pixel_scale = from_file.glk_pixel_scale;
             cfg.v6_arrow_keys = from_file.v6_arrow_keys;
             cfg.v6_pixel_lock = from_file.v6_pixel_lock;
+            cfg.borderless_windows = from_file.borderless_windows;
             cfg.system_font_disk = from_file.system_font_disk;
             cfg.keymap = from_file.keymap;
             cfg.hotkeys = from_file.hotkeys;
@@ -3116,6 +3125,8 @@ pub fn write_config_at(config_path: &std::path::Path, cfg: &Config) -> std::io::
     doc.put("glk_pixel_scale", scale_val, cfg.glk_pixel_scale == def.glk_pixel_scale);
     doc.put("v6_arrow_keys", cfg.v6_arrow_keys.into(), cfg.v6_arrow_keys == def.v6_arrow_keys);
     doc.put("v6_pixel_lock", cfg.v6_pixel_lock.into(), cfg.v6_pixel_lock == def.v6_pixel_lock);
+    // Absent means "no user default" (SQ-1740): written only when the player set one.
+    doc.put_or_remove("borderless_windows", cfg.borderless_windows.map(Into::into), def.borderless_windows.map(Into::into));
     doc.put(
         "system_font_disk",
         cfg.system_font_disk.as_str().into(),
@@ -3503,6 +3514,27 @@ mod tests {
         assert!(config_has_style_sections("[colors]\n\"room\" = { fg = \"red\" }\n"));
         assert!(config_has_style_sections("[symbols]\nbox_style = \"thick\"\n"));
         assert!(!config_has_style_sections("style = \"s.toml\"\n"));
+    }
+
+    /// SQ-1740: the user's own borderless default is absent by default, parses
+    /// from `config.toml`, and is written only when set.
+    #[test]
+    fn borderless_windows_user_default_parses_and_writes_only_when_set() {
+        assert_eq!(Config::default().borderless_windows, None);
+        let cfg: Config = toml::from_str("borderless_windows = true").unwrap();
+        assert_eq!(cfg.borderless_windows, Some(true));
+
+        let dir = crate::scratch_dir("borderless-user-default");
+        write_config(&dir, &Config::default()).unwrap();
+        let unset = std::fs::read_to_string(dir.join("config.toml")).unwrap_or_default();
+        assert!(!unset.lines().any(|l| l.trim_start().starts_with("borderless_windows")));
+        let mut set = Config::default();
+        set.borderless_windows = Some(false);
+        write_config(&dir, &set).unwrap();
+        let written = std::fs::read_to_string(dir.join("config.toml")).unwrap();
+        let doc: toml_edit::DocumentMut = written.parse().unwrap();
+        assert_eq!(doc["borderless_windows"].as_bool(), Some(false));
+        let _ = std::fs::remove_dir_all(&dir);
     }
 
     #[test]
@@ -4451,6 +4483,7 @@ use_defaults = false
             glk_pixel_scale: GlkPixelScale::Native,
             v6_arrow_keys: true,
             v6_pixel_lock: false,
+            borderless_windows: None,
             system_font_disk: "Workbench 1.3".into(),
             keymap: KeymapConfig::default(),
             hotkeys: HotkeysConfig::default(),

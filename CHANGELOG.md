@@ -29,6 +29,10 @@ while any such tag, or this Unreleased section, still exists.*
 
 ### Added
 
+- **A default for Glulx window borders.** Set `borderless_windows = true` (or
+  `false`) in `config.toml` to choose whether Glulx games draw borders between
+  their windows. A game's own `garglk.ini` or `.cfg` still wins over it, and a
+  per-game setting (`/set-game-borders`) beats everything.
 - **`lanthorn --migrate-user-dir` moves an old `~/.lanthorn` into your platform's
   standard folders.** It lists every file and where it will go, asks before
   moving, and stops without changing anything if the new folders already hold

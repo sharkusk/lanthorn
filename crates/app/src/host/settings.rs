@@ -197,6 +197,7 @@ fn layer_per_game(state: &mut AppState, pg: &PerGameConfig) -> bool {
         pg.borderless_windows,
         state.garglk_overlay.as_ref(),
         state.glk_design.as_ref(),
+        state.config.borderless_windows,
     )
 }
 

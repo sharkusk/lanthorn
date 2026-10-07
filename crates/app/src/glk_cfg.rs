@@ -128,15 +128,18 @@ pub fn discover(story_path: &Path) -> Option<GlkDesign> {
 /// 1. the player's per-game `config.toml` `borderless_windows` (`per_game`);
 /// 2. garglk.ini's `wborderx`/`wbordery` (`GarglkOverlay::borderless`);
 /// 3. this story's `.cfg` `WindowBorders` ([`GlkDesign::borderless`]);
-/// 4. bordered.
+/// 4. the player's global `config.toml` `borderless_windows` (`user_default`, SQ-1740);
+/// 5. bordered.
 pub fn resolve_borderless(
     per_game: Option<bool>,
     garglk: Option<&GarglkOverlay>,
     design: Option<&GlkDesign>,
+    user_default: Option<bool>,
 ) -> bool {
     per_game
         .or_else(|| garglk.and_then(|o| o.borderless))
         .or_else(|| design.and_then(GlkDesign::borderless))
+        .or(user_default)
         .unwrap_or(false)
 }
 
@@ -645,17 +648,37 @@ mod tests {
         let no_borders = GlkDesign { borders: Some(false), ..Default::default() };
         let garglk = |b| GarglkOverlay { borderless: Some(b), ..GarglkOverlay::default() };
         // cfg alone decides when nothing outranks it.
-        assert!(resolve_borderless(None, None, Some(&no_borders)));
-        assert!(resolve_borderless(None, Some(&GarglkOverlay::default()), Some(&no_borders)));
+        assert!(resolve_borderless(None, None, Some(&no_borders), None));
+        assert!(resolve_borderless(None, Some(&GarglkOverlay::default()), Some(&no_borders), None));
         // garglk wborder wins over the cfg, in both directions.
-        assert!(!resolve_borderless(None, Some(&garglk(false)), Some(&no_borders)));
+        assert!(!resolve_borderless(None, Some(&garglk(false)), Some(&no_borders), None));
         let borders = GlkDesign { borders: Some(true), ..Default::default() };
-        assert!(resolve_borderless(None, Some(&garglk(true)), Some(&borders)));
+        assert!(resolve_borderless(None, Some(&garglk(true)), Some(&borders), None));
         // the player's per-game choice wins over both.
-        assert!(!resolve_borderless(Some(false), Some(&garglk(true)), Some(&no_borders)));
-        assert!(resolve_borderless(Some(true), None, None));
+        assert!(!resolve_borderless(Some(false), Some(&garglk(true)), Some(&no_borders), None));
+        assert!(resolve_borderless(Some(true), None, None, None));
         // nothing says anything: bordered.
-        assert!(!resolve_borderless(None, None, None));
+        assert!(!resolve_borderless(None, None, None, None));
+    }
+
+    #[test]
+    fn borderless_user_default_sits_below_every_other_source() {
+        let garglk = |b| GarglkOverlay { borderless: Some(b), ..GarglkOverlay::default() };
+        let cfg = |b: bool| GlkDesign { borders: Some(!b), ..Default::default() };
+        // Nothing else says anything: the user default applies, either way.
+        assert!(resolve_borderless(None, None, None, Some(true)));
+        assert!(!resolve_borderless(None, None, None, Some(false)));
+        // A story .cfg design beats it.
+        assert!(!resolve_borderless(None, None, Some(&cfg(false)), Some(true)));
+        assert!(resolve_borderless(None, None, Some(&cfg(true)), Some(false)));
+        // garglk.ini beats it (and the cfg).
+        assert!(!resolve_borderless(None, Some(&garglk(false)), None, Some(true)));
+        assert!(resolve_borderless(None, Some(&garglk(true)), Some(&cfg(false)), Some(false)));
+        // The per-game override beats everything.
+        assert!(!resolve_borderless(Some(false), Some(&garglk(true)), Some(&cfg(true)), Some(true)));
+        assert!(resolve_borderless(Some(true), None, None, Some(false)));
+        // No user default: bordered.
+        assert!(!resolve_borderless(None, None, None, None));
     }
 
     #[test]

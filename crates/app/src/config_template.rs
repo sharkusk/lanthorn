@@ -413,6 +413,17 @@ const INTERPRETER: &[Row] = &[
             "fixed canvas, which lanthorn scales into the pane already.",
         ],
     ),
+    ex(
+        "borderless_windows",
+        "false",
+        &[
+            "Your default for Glulx Glk window borders: true abuts the windows with no",
+            "borders, false keeps them. Unset (default) leaves each game to its own",
+            "garglk.ini or .cfg design, else bordered. Applies to Glulx games only.",
+            "A game's own garglk.ini or .cfg design still wins over this; a per-game",
+            "config.toml setting beats everything.",
+        ],
+    ),
     d(
         "v6_render",
         "\"hybrid\"",

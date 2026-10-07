@@ -478,7 +478,9 @@ size in pixels), `WindowBorders`, `WindowFrame`, `WindowMask` (a Blorb Pict id),
 the font keys and `FullScreen`. Key meanings come from Windows Glulxe's own
 `config.htm`. So far only `WindowBorders` acts: the borderless-windows
 preference resolves per-game `config.toml` → garglk.ini `wborder` → the `.cfg`
-(`WindowBorders=no` → borderless) → bordered, in the one function
+(`WindowBorders=no` → borderless) → the global `config.toml` `borderless_windows`
+(`Config::borderless_windows`, an `Option<bool>`; absent = no user default, SQ-1740)
+→ bordered, in the one function
 `glk_cfg::resolve_borderless` that boot, `@restart` and the settings screen
 share.
 

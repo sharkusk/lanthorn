@@ -232,6 +232,13 @@ fits, centred, with the spare area painted in the `glk_mask_outside` style.
 `/set-glk-fit` again switches back; the choice is remembered per game, and
 `glk_design_fit` in `config.toml` sets the default for every game.
 
+**Borders between Glulx windows.** By default a Glulx game's windows keep their
+borders, unless the game's own `garglk.ini` or `.cfg` file asks for them to
+abut. If you would rather have no borders anywhere, put `borderless_windows =
+true` in your `config.toml` (`false` pins borders on); a game's own `garglk.ini`
+or `.cfg` still wins over it. `/set-game-borders on|off|auto` overrides it for
+one game and beats everything.
+
 ## Going deeper
 
 - [v6 graphics](../internals/v6-graphics.md) — render modes, the pixel lock, and period fonts in full
