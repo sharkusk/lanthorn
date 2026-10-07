@@ -2007,6 +2007,16 @@ impl Machine {
         result
     }
 
+    /// Record a synthetic fault, as if a runtime error had occurred at the
+    /// instruction about to run. Used by the host to abort a runaway turn (an
+    /// unbounded game loop) so the app survives instead of hard-hanging; the
+    /// trace is read back with [`Self::take_fault_trace`] exactly like a real
+    /// fault's. The caller stops stepping (the Glulx twin is `abort_with_fault`).
+    pub fn abort_with_fault(&mut self, msg: String) {
+        let pc = self.state.pc;
+        self.fault_trace = Some(self.build_trace(msg, pc, "(host abort)".to_string()));
+    }
+
     /// Take and clear the stack trace captured at the last fault.
     pub fn take_fault_trace(&mut self) -> Option<crate::cpu::trace::StackTrace> {
         self.fault_trace.take()

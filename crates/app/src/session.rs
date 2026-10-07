@@ -21,6 +21,7 @@ use zvm::location::{detect_location_with, Location, LocationMethod, PlayerCandid
 use zvm::screen::ZColour;
 
 use crate::engine::LocationInfo;
+use crate::glulx_session::default_turn_budget;
 
 use crate::state::ParaFmt;
 use zvm::memory::Memory;
@@ -853,6 +854,11 @@ const PACE_MAX_FRAMES: usize = 8;
 pub struct GameSession {
     pub machine: Machine,
     pub quit: bool,
+    /// Runaway-turn watchdog (SQ-1729): the wall-clock budget one run to the next
+    /// input request gets before the turn is aborted as a fault. Same policy and
+    /// env override as the Glulx adapter ([`default_turn_budget`]); tests set it
+    /// directly.
+    pub turn_budget: std::time::Duration,
     /// Which kind of input the VM is currently waiting for.
     pending: InputKind,
     /// When false, the game's own trailing `>` read prompt is kept in the
@@ -1309,11 +1315,12 @@ impl GameSession {
         machine.trace_exec = trace_from_boot;
         machine.trace_screen = trace_from_boot;
 
-        let (pending, quit, line_preload) = run_settled(&mut machine);
+        let (pending, quit, line_preload) = run_settled(&mut machine, default_turn_budget());
 
         Ok(GameSession {
             machine, quit, pending, strip_prompt: true, pen_before_char: None, output_continued: false,
             disasm_cache: std::cell::RefCell::new(None),
+            turn_budget: default_turn_budget(),
             world: std::cell::OnceCell::new(),
             parse_names: std::cell::OnceCell::new(),
             player_candidates: std::cell::OnceCell::new(),
@@ -1890,7 +1897,7 @@ impl GameSession {
     /// Resume after the host performed an in-game SAVE (`wrote_ok` = file written).
     pub fn resume_save(&mut self, wrote_ok: bool) -> TurnResult {
         self.machine.complete_save(wrote_ok);
-        let stop = run_until_input(&mut self.machine);
+        let stop = run_until_input(&mut self.machine, self.turn_budget);
         self.finish_turn(stop)
     }
 
@@ -1906,7 +1913,7 @@ impl GameSession {
             }
             None => self.machine.complete_restore_failure(),
         }
-        let stop = run_until_input(&mut self.machine);
+        let stop = run_until_input(&mut self.machine, self.turn_budget);
         self.finish_turn(stop)
     }
 
@@ -1997,7 +2004,7 @@ impl GameSession {
     /// `abort_timed_input` once input has been supplied to the VM. `timed_out`
     /// is `true` only for the `abort_timed_input` caller.
     fn advance_after_input(&mut self, timed_out: bool) -> TurnResult {
-        let stop = run_until_input(&mut self.machine);
+        let stop = run_until_input(&mut self.machine, self.turn_budget);
         let mut result = self.finish_turn(stop);
         result.timed_out = timed_out;
         result
@@ -5228,6 +5235,9 @@ fn is_death_relocation(transcript: &str) -> bool {
 
 // ── Helpers ───────────────────────────────────────────────────────────────────
 
+/// Steps between wall-clock samples of the runaway-turn watchdog.
+const WATCHDOG_SAMPLE_STEPS: u64 = 1_000_000;
+
 /// Stop reason from `run_until_input`.
 enum RunStop {
     /// VM is waiting for player input of this kind. The `String` is the
@@ -5247,7 +5257,14 @@ enum RunStop {
 /// Step until the machine pauses for input, quits, or suspends on its own
 /// `@save`/`@restore`. In-game save/restore bubbles up as `SavePending`/
 /// `RestorePending` for the host to service (all versions, v3 included).
-fn run_until_input(machine: &mut Machine) -> RunStop {
+///
+/// A runaway loop that never asks for input is aborted as a fault once `budget`
+/// of wall-clock time has passed (SQ-1729; Glulx's `drive` has the same
+/// watchdog). The clock is sampled every million steps, and the budget covers
+/// the whole call, `@restart`s included.
+fn run_until_input(machine: &mut Machine, budget: std::time::Duration) -> RunStop {
+    let start = std::time::Instant::now();
+    let mut steps: u64 = 0;
     loop {
         match machine.step() {
             StepResult::Quit => return RunStop::Quit,
@@ -5262,7 +5279,17 @@ fn run_until_input(machine: &mut Machine) -> RunStop {
             // `just_restarted` flag lets the session drop stale v6 chrome in
             // `drain_turn`.
             StepResult::Restart => machine.restart(),
-            StepResult::Continue => {}
+            StepResult::Continue => {
+                steps += 1;
+                if steps.is_multiple_of(WATCHDOG_SAMPLE_STEPS) && start.elapsed() > budget {
+                    machine.abort_with_fault(format!(
+                        "turn aborted after {:?} / {steps} steps with no input request \
+                         (runaway game loop); the app stays interactive",
+                        start.elapsed()
+                    ));
+                    return RunStop::Quit;
+                }
+            }
             _ => return RunStop::Quit,
         }
     }
@@ -5278,9 +5305,9 @@ fn run_until_input(machine: &mut Machine) -> RunStop {
 /// and the suspension itself belongs to a run that is being replaced or has not
 /// started. This is the Z-machine twin of the Glulx `drive_settled`, so the two
 /// engines behave identically at these three points (SQ-0656).
-fn run_settled(machine: &mut Machine) -> (InputKind, bool, String) {
+fn run_settled(machine: &mut Machine, budget: std::time::Duration) -> (InputKind, bool, String) {
     loop {
-        match run_until_input(machine) {
+        match run_until_input(machine, budget) {
             RunStop::Input(k, preload) => return (k, false, preload),
             RunStop::Quit => return (InputKind::Line, true, String::new()),
             RunStop::SavePending => machine.complete_save(false),
@@ -6214,7 +6241,7 @@ impl Engine for GameSession {
         // has to be ANSWERED rather than silently dropped — dropping it parks the
         // VM on a suspension no dialog will ever open for. Uniform with the Glulx
         // adapter, whose restore runs the same settling drive. (SQ-0656)
-        let (pending, quit, line_preload) = run_settled(&mut self.machine);
+        let (pending, quit, line_preload) = run_settled(&mut self.machine, self.turn_budget);
         self.pending = pending;
         self.quit = quit;
         self.line_preload = line_preload;
@@ -6242,7 +6269,7 @@ impl Engine for GameSession {
         // that stop left the VM suspended with no dialog to answer it — every
         // later turn would re-report it. It is auto-failed and the drive
         // continues, as on the boot and Save State paths. (SQ-0656)
-        let (pending, quit, line_preload) = run_settled(&mut self.machine);
+        let (pending, quit, line_preload) = run_settled(&mut self.machine, self.turn_budget);
         let _ = self.take_transcript();
         self.pending = pending;
         self.quit = quit;
@@ -9156,7 +9183,7 @@ mod tests {
         // A witness the save's failure result must overwrite (0 is its own default).
         machine.mem.write_word(0x0300, 0xFFFF);
 
-        let (pending, quit, _line_preload) = run_settled(&mut machine);
+        let (pending, quit, _line_preload) = run_settled(&mut machine, std::time::Duration::from_secs(10));
 
         assert_eq!(
             machine.mem.read_word(0x0300), 0,
@@ -9164,6 +9191,34 @@ mod tests {
         );
         assert!(quit, "and the drive runs on to the game's quit, which must set the quit flag");
         assert_eq!(pending, InputKind::Line, "a quit reports the neutral Line input mode");
+    }
+
+    /// SQ-1729: a Z-machine turn that never asks for input is aborted as a fault
+    /// by the wall-clock watchdog instead of hanging the app (Glulx's `drive` has
+    /// the same backstop). `jump` to itself forever.
+    #[test]
+    fn a_runaway_turn_is_aborted_as_a_fault_once_the_budget_is_spent() {
+        let mem = Memory::new(minimal_v5_story(&[0x8C, 0xFF, 0xFF])).expect("minimal v5 story");
+        let mut machine = Machine::with_output(mem, Box::new(CaptureSink::new()));
+        let start = std::time::Instant::now();
+        let (_pending, quit, _preload) = run_settled(&mut machine, std::time::Duration::from_millis(20));
+        assert!(quit, "the aborted turn reads as a stopped game");
+        assert!(start.elapsed() < std::time::Duration::from_secs(30), "the call returned in bounded time");
+        let trace = machine.take_fault_trace().expect("the abort records a fault trace");
+        assert!(trace.fault.contains("runaway game loop"), "got {:?}", trace.fault);
+    }
+
+    /// The budget costs a normal turn nothing: a real story under a zero budget
+    /// still reaches input, because the clock is sampled only every million steps.
+    #[test]
+    fn a_normal_turn_reaches_input_under_a_zero_budget() {
+        let story = zvm::fixtures::load("minizork.z3").expect("committed fixture");
+        let mut sess = GameSession::new(story, true, false, None).expect("minizork boots");
+        sess.turn_budget = std::time::Duration::ZERO;
+        let r = sess.submit("look");
+        assert!(!r.quit, "a short turn is not cut off");
+        assert!(r.fault.is_none(), "and records no fault");
+        assert!(r.transcript.contains("West of House"), "got {:?}", r.transcript);
     }
 
     /// The cached object-word set is one build per TURN — and not one per
@@ -9258,6 +9313,7 @@ mod tests {
         let mut sess = GameSession {
             machine, quit: false, pending: InputKind::Line, strip_prompt: true, pen_before_char: None, output_continued: false,
             disasm_cache: std::cell::RefCell::new(None),
+            turn_budget: default_turn_budget(),
             world: std::cell::OnceCell::new(),
             parse_names: std::cell::OnceCell::new(),
             player_candidates: std::cell::OnceCell::new(),
@@ -9335,6 +9391,7 @@ mod tests {
         let mut sess = GameSession {
             machine, quit: false, pending: InputKind::Line, strip_prompt: true, pen_before_char: None, output_continued: false,
             disasm_cache: std::cell::RefCell::new(None),
+            turn_budget: default_turn_budget(),
             world: std::cell::OnceCell::new(),
             parse_names: std::cell::OnceCell::new(),
             player_candidates: std::cell::OnceCell::new(),
@@ -9407,6 +9464,7 @@ mod tests {
         let mut sess = GameSession {
             machine, quit: false, pending: InputKind::Line, strip_prompt: true, pen_before_char: None, output_continued: false,
             disasm_cache: std::cell::RefCell::new(None),
+            turn_budget: default_turn_budget(),
             world: std::cell::OnceCell::new(),
             parse_names: std::cell::OnceCell::new(),
             player_candidates: std::cell::OnceCell::new(),
@@ -9468,6 +9526,7 @@ mod tests {
         let mut sess = GameSession {
             machine, quit: false, pending: InputKind::Line, strip_prompt: true, pen_before_char: None, output_continued: false,
             disasm_cache: std::cell::RefCell::new(None),
+            turn_budget: default_turn_budget(),
             world: std::cell::OnceCell::new(),
             parse_names: std::cell::OnceCell::new(),
             player_candidates: std::cell::OnceCell::new(),
@@ -9572,6 +9631,7 @@ mod tests {
         let mut sess = GameSession {
             machine, quit: false, pending: InputKind::Line, strip_prompt: true, pen_before_char: None, output_continued: false,
             disasm_cache: std::cell::RefCell::new(None),
+            turn_budget: default_turn_budget(),
             world: std::cell::OnceCell::new(),
             parse_names: std::cell::OnceCell::new(),
             player_candidates: std::cell::OnceCell::new(),
@@ -9635,6 +9695,7 @@ mod tests {
         let mut sess = GameSession {
             machine, quit: false, pending: InputKind::Line, strip_prompt: true, pen_before_char: None, output_continued: false,
             disasm_cache: std::cell::RefCell::new(None),
+            turn_budget: default_turn_budget(),
             world: std::cell::OnceCell::new(),
             parse_names: std::cell::OnceCell::new(),
             player_candidates: std::cell::OnceCell::new(),
@@ -9682,6 +9743,7 @@ mod tests {
         let mut sess = GameSession {
             machine, quit: false, pending: InputKind::Line, strip_prompt: true, pen_before_char: None, output_continued: false,
             disasm_cache: std::cell::RefCell::new(None),
+            turn_budget: default_turn_budget(),
             world: std::cell::OnceCell::new(),
             parse_names: std::cell::OnceCell::new(),
             player_candidates: std::cell::OnceCell::new(),
@@ -9743,6 +9805,7 @@ mod tests {
         let mut sess = GameSession {
             machine, quit: false, pending: InputKind::Line, strip_prompt: true, pen_before_char: None, output_continued: false,
             disasm_cache: std::cell::RefCell::new(None),
+            turn_budget: default_turn_budget(),
             world: std::cell::OnceCell::new(),
             parse_names: std::cell::OnceCell::new(),
             player_candidates: std::cell::OnceCell::new(),
@@ -9842,6 +9905,7 @@ mod tests {
         let mut sess = GameSession {
             machine, quit: false, pending: InputKind::Line, strip_prompt: true, pen_before_char: None, output_continued: false,
             disasm_cache: std::cell::RefCell::new(None),
+            turn_budget: default_turn_budget(),
             world: std::cell::OnceCell::new(),
             parse_names: std::cell::OnceCell::new(),
             player_candidates: std::cell::OnceCell::new(),
@@ -9899,6 +9963,7 @@ mod tests {
         let mut sess = GameSession {
             machine, quit: false, pending: InputKind::Line, strip_prompt: true, pen_before_char: None, output_continued: false,
             disasm_cache: std::cell::RefCell::new(None),
+            turn_budget: default_turn_budget(),
             world: std::cell::OnceCell::new(),
             parse_names: std::cell::OnceCell::new(),
             player_candidates: std::cell::OnceCell::new(),
@@ -10109,7 +10174,7 @@ mod tests {
             .expect("restore_game completes the .qzl descriptor");
         // Run forward to the next input request (mirrors resume_restore's own
         // run_until_input) and sync the session's pending/quit bookkeeping.
-        let stop = run_until_input(&mut sess2.machine);
+        let stop = run_until_input(&mut sess2.machine, sess2.turn_budget);
         let _ = sess2.finish_turn(stop); // drains stray intro/restore text, not asserted
 
         // restore(qzl file).probe() — same probe command on the restored session.
@@ -10494,6 +10559,7 @@ mod tests {
         GameSession {
             machine, quit: false, pending: InputKind::Line, strip_prompt: true, pen_before_char: None, output_continued: false,
             disasm_cache: std::cell::RefCell::new(None),
+            turn_budget: default_turn_budget(),
             world: std::cell::OnceCell::new(),
             parse_names: std::cell::OnceCell::new(),
             player_candidates: std::cell::OnceCell::new(),

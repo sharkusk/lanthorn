@@ -371,7 +371,7 @@ impl GameStore {
 /// turn, so a session carries its own policy and the hot loop makes no env call.
 /// A caller that knows a long turn is legitimate raises it with
 /// [`GlulxSession::set_turn_budget`]; see that method for why one exists.
-fn default_turn_budget() -> Duration {
+pub(crate) fn default_turn_budget() -> Duration {
     std::env::var("LANTHORN_TURN_BUDGET_MS")
         .ok()
         .and_then(|s| s.parse::<u64>().ok())
