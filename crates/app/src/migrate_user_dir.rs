@@ -10,6 +10,8 @@
 //! `style.toml` go to the config root; the children of `cache/` go straight into
 //! the cache root; everything else goes to the data root. OS clutter is deleted.
 //! Nothing is merged: if any destination exists, the plan is refused whole.
+//! Entries are only renamed; nothing is copied or recursively deleted, so a
+//! rename the OS refuses (another disk) is reported for the person to do by hand.
 
 use crate::user_dirs::{home_dir, Inputs, UserDirs, LEGACY_DIR};
 use std::io::{BufRead, Write};
@@ -121,47 +123,14 @@ pub struct ExecError {
     pub not_moved: Vec<Move>,
 }
 
-fn copy_recursive(from: &Path, to: &Path) -> std::io::Result<()> {
-    let meta = from.symlink_metadata()?;
-    if meta.file_type().is_symlink() {
-        #[cfg(unix)]
-        return std::os::unix::fs::symlink(std::fs::read_link(from)?, to);
-        #[cfg(not(unix))]
-        return std::fs::copy(from, to).map(|_| ());
-    }
-    if meta.is_dir() {
-        std::fs::create_dir(to)?;
-        for e in std::fs::read_dir(from)? {
-            let e = e?;
-            copy_recursive(&e.path(), &to.join(e.file_name()))?;
-        }
-        Ok(())
-    } else {
-        std::fs::copy(from, to).map(|_| ())
-    }
-}
-
-fn remove_any(p: &Path) -> std::io::Result<()> {
-    if p.symlink_metadata()?.is_dir() {
-        std::fs::remove_dir_all(p)
-    } else {
-        std::fs::remove_file(p)
-    }
-}
-
-/// Rename; when that fails (a different filesystem), copy then delete.
+/// Create the parent folders and rename. Nothing is ever copied or deleted here:
+/// if a rename is refused (say, the new folder is on another disk), the entry
+/// stays where it was and the caller tells the person to move it by hand.
 fn move_entry(from: &Path, to: &Path) -> std::io::Result<()> {
     if let Some(parent) = to.parent() {
         std::fs::create_dir_all(parent)?;
     }
-    if std::fs::rename(from, to).is_ok() {
-        return Ok(());
-    }
-    if let Err(e) = copy_recursive(from, to) {
-        let _ = remove_any(to); // a half-made copy is not a result
-        return Err(e);
-    }
-    remove_any(from)
+    std::fs::rename(from, to)
 }
 
 /// Carry out `plan`. Stops at the first failed move without rolling back.
@@ -170,7 +139,11 @@ pub fn execute(plan: &Plan) -> Result<Outcome, ExecError> {
     for (i, m) in plan.moves.iter().enumerate() {
         if let Err(e) = move_entry(&m.from, &m.to) {
             return Err(ExecError {
-                message: format!("moving {} to {}: {e}", m.from.display(), m.to.display()),
+                message: format!(
+                    "could not move {} to {}: {e}; nothing was deleted, so move it by hand",
+                    m.from.display(),
+                    m.to.display()
+                ),
                 moved: out.moved,
                 not_moved: plan.moves[i..].to_vec(),
             });

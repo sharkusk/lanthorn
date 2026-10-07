@@ -82,7 +82,9 @@ standard places, run `lanthorn --migrate-user-dir`. It shows you every file it
 will move and where to, asks before doing anything, and then quits without
 opening the game. It will not overwrite or merge: if something is already in the
 new folders it stops and tells you what, leaving everything where it was. Add
-`--yes` to skip the question.
+`--yes` to skip the question. It only renames; if your computer refuses a move
+(say the new folder is on another disk), it tells you which item to move by hand
+and deletes nothing.
 
 ## Going deeper
 

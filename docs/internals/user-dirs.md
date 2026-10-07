@@ -50,7 +50,9 @@ that is what XDG asks for, and a user who wants one folder keeps (or creates)
    `~/.lanthorn`, and exits without starting the TUI. It refuses, changing
    nothing, if `~/.lanthorn` is missing, if `--user-dir` is also given, or if
    any destination already exists (no merging). A failure partway stops and
-   reports what moved; nothing is rolled back.
+   reports what moved; nothing is rolled back. Entries are only renamed, never
+   copied or deleted: if the OS refuses a rename (a different disk), the message
+   names that item and asks the person to move it by hand.
 3. **Platform defaults** above.
 
 The TUI and every embedding host go through the same resolver, so on one
