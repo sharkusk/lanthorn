@@ -41,18 +41,20 @@ impl Pcm {
     /// The same sound as a RIFF WAVE file: 16-bit little-endian PCM
     /// (`WAVE_FORMAT_PCM`), the one format every WAV player reads.
     pub fn to_wav(&self) -> Vec<u8> {
-        let data_len = (self.samples.len() * 2) as u32;
-        let block_align = self.channels * 2;
-        let mut out = Vec::with_capacity(44 + data_len as usize);
+        // Infallible by signature, so hostile header values saturate rather
+        // than overflow; `decode_aiff` already refuses the absurd ones.
+        let data_len = u32::try_from(self.samples.len().saturating_mul(2)).unwrap_or(u32::MAX);
+        let block_align = self.channels.saturating_mul(2);
+        let mut out = Vec::with_capacity(44usize.saturating_add(self.samples.len().saturating_mul(2)));
         out.extend_from_slice(b"RIFF");
-        out.extend_from_slice(&(36 + data_len).to_le_bytes());
+        out.extend_from_slice(&data_len.saturating_add(36).to_le_bytes());
         out.extend_from_slice(b"WAVE");
         out.extend_from_slice(b"fmt ");
         out.extend_from_slice(&16u32.to_le_bytes()); // fmt chunk length
         out.extend_from_slice(&1u16.to_le_bytes()); // WAVE_FORMAT_PCM
         out.extend_from_slice(&self.channels.to_le_bytes());
         out.extend_from_slice(&self.rate.to_le_bytes());
-        out.extend_from_slice(&(self.rate * u32::from(block_align)).to_le_bytes()); // byte rate
+        out.extend_from_slice(&self.rate.saturating_mul(u32::from(block_align)).to_le_bytes()); // byte rate
         out.extend_from_slice(&block_align.to_le_bytes());
         out.extend_from_slice(&16u16.to_le_bytes()); // bits per sample
         out.extend_from_slice(b"data");
@@ -150,6 +152,11 @@ fn extended80_to_u32(b: &[u8; 10]) -> u32 {
     val as u32
 }
 
+/// Most channels an AIFF may declare (surround is 8); more is a hostile header.
+const MAX_AIFF_CHANNELS: u16 = 8;
+/// Highest AIFF sample rate accepted, in Hz (384 kHz is the top of real audio).
+const MAX_AIFF_RATE: u32 = 384_000;
+
 /// Decode an IFF `FORM`/`AIFF` (or `AIFC`) container — a Blorb `Snd ` resource,
 /// an Infocom disk sample (`blorb::infocom_sound::InfocomSound::to_aiff`) — into
 /// [`Pcm`]. 8-bit samples are widened to 16. `None` on a malformed AIFF.
@@ -194,7 +201,7 @@ pub fn decode_aiff(bytes: &[u8]) -> Option<Pcm> {
         }
         scan = data_start + len + (len & 1);
     }
-    if channels == 0 || sample_rate == 0 {
+    if channels == 0 || sample_rate == 0 || channels > MAX_AIFF_CHANNELS || sample_rate > MAX_AIFF_RATE {
         return None;
     }
     // Pass 2: decode SSND with the format known.
@@ -686,6 +693,26 @@ mod tests {
     fn extended80_decodes_44100() {
         assert_eq!(extended80_to_u32(&[0x40, 0x0E, 0xAC, 0x44, 0, 0, 0, 0, 0, 0]), 44100);
         assert_eq!(extended80_to_u32(&[0; 10]), 0);
+    }
+
+    /// SQ-1736: absurd COMM values are refused, and `to_wav` cannot overflow.
+    #[test]
+    fn hostile_comm_values_are_rejected_and_to_wav_does_not_overflow() {
+        let mut many = tiny_aiff();
+        many[20..22].copy_from_slice(&40000u16.to_be_bytes());
+        assert!(decode_aiff(&many).is_none());
+
+        let mut fast = tiny_aiff();
+        let rate = 2_200_000_000u64;
+        let shift = rate.leading_zeros();
+        let exp = 16383u16 + 63 - shift as u16;
+        fast[28..30].copy_from_slice(&exp.to_be_bytes());
+        fast[30..38].copy_from_slice(&(rate << shift).to_be_bytes());
+        assert_eq!(extended80_to_u32(fast[28..38].try_into().unwrap()), 2_200_000_000);
+        assert!(decode_aiff(&fast).is_none());
+
+        let wav = Pcm { channels: u16::MAX, rate: u32::MAX, samples: vec![0; 4] }.to_wav();
+        assert_eq!(wav.len(), 44 + 8);
     }
 
     #[test]
