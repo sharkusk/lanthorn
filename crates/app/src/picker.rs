@@ -1449,6 +1449,17 @@ fn resolve(
     }
 }
 
+/// Run one file's resolver, treating a panic inside a parser as "this file
+/// yields no rows" (SQ-1735). The indexer runs on a thread whose death the
+/// receiver cannot tell from a finished walk, so one hostile file would
+/// otherwise silently truncate the whole library.
+fn guarded_entries(
+    path: &Path,
+    resolve: impl FnOnce(&Path) -> Vec<StoryEntry>,
+) -> Vec<StoryEntry> {
+    std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| resolve(path))).unwrap_or_default()
+}
+
 /// Scan `dir` (top level, non-recursive) for **launchable** Z-machine stories,
 /// resolving a display title for each. Files that don't load or don't parse as
 /// a supported story are silently skipped (v6 is supported since SQ-0186).
@@ -1478,7 +1489,7 @@ pub fn scan_stories(dir: &Path, roots: &DataRoots) -> Vec<StoryEntry> {
         if !has_story_ext(path) {
             continue;
         }
-        out.extend(resolve_entries(path, roots));
+        out.extend(guarded_entries(path, |p| resolve_entries(p, roots)));
     }
     dedupe_within_a_volume(&mut out);
     dedupe_within_sets(&mut out, &sets);
@@ -5008,6 +5019,24 @@ mod tests {
         names.sort();
         assert_eq!(names, vec!["burg.z5", "curses.z5", "top.z5"], "every story once, none from `.hidden`");
         assert!(all.iter().all(|e| !e.is_folder()), "the index carries stories, not folder rows");
+    }
+
+    /// SQ-1735: a parser panic on one file must cost that file, not the rest
+    /// of the scan.
+    #[test]
+    fn a_panicking_file_costs_only_itself() {
+        let files = ["a.z5", "boom.z5", "c.z5"];
+        let mut out: Vec<StoryEntry> = Vec::new();
+        for f in files {
+            out.extend(guarded_entries(Path::new(f), |p| {
+                if p.ends_with("boom.z5") {
+                    panic!("hostile file");
+                }
+                vec![story(f, f, None, None)]
+            }));
+        }
+        let names: Vec<&str> = out.iter().map(|e| e.filename.as_str()).collect();
+        assert_eq!(names, ["a.z5", "c.z5"]);
     }
 
     #[test]
