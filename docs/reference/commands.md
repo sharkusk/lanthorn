@@ -76,9 +76,9 @@ Every slash command, grouped the way `/help` groups them. Type any of these afte
 | Animation | `anim-step forward|back` | step the animation one frame |
 | Animation | `anim-play` | toggle animation play/pause |
 | Animation | `anim-exit` | exit the animation view |
-| Help | `dump-windows` | dump the last game frame's window layout, here and to ~/.lanthorn/dump-windows.log |
-| Help | `dump-cells` | write the last frame's cells — glyphs, colours and attributes — to ~/.lanthorn/dump-cells.log |
-| Help | `dump-terminal` | dump this terminal's detected protocol, cell size, capabilities and traffic — here and to ~/.lanthorn/dump-terminal.log |
+| Help | `dump-windows` | dump the last game frame's window layout, here and to dump-windows.log in your data folder |
+| Help | `dump-cells` | write the last frame's cells — glyphs, colours and attributes — to dump-cells.log in your data folder |
+| Help | `dump-terminal` | dump this terminal's detected protocol, cell size, capabilities and traffic — here and to dump-terminal.log in your data folder |
 | Help | `debug` | toggle the Z-machine debug inspector pane |
 | Help | `trace [sections|all|none]` | toggle debug-trace sections (screen, map, hostio, v6) written to trace.log; no arg shows current state |
 | Help | `dump-notifications` | print the notification history to the transcript, in case a toast was missed |

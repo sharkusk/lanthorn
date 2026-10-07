@@ -96,6 +96,12 @@ pub(crate) fn resolve_launch() -> LaunchCtx {
         std::process::exit(0);
     }
 
+    // `--migrate-user-dir` moves a legacy ~/.lanthorn into the platform folders and
+    // exits (SQ-1725): it is a chore, not a launch, so no story is required.
+    if cli.migrate_user_dir {
+        std::process::exit(app::migrate_user_dir::run_cli(cli.user_dir.as_deref(), cli.yes));
+    }
+
     // Who is playing (SQ-1676): `--player`, else LANTHORN_PLAYER, else the default
     // player. Lanthorn only takes the name; it never checks who is entitled to it.
     // A bad name stops the launch here, before anything is read or written under it.

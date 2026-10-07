@@ -27,6 +27,13 @@ goes into the README in place, at its normal destination, marked with the
 visible tag `*Next release:*`. `release.yml` refuses to cut a release
 while any such tag, or this Unreleased section, still exists.*
 
+### Added
+
+- **`lanthorn --migrate-user-dir` moves an old `~/.lanthorn` into your platform's
+  standard folders.** It lists every file and where it will go, asks before
+  moving, and stops without changing anything if the new folders already hold
+  something with the same name. `--yes` skips the question.
+
 ### Changed
 
 - **A game's IFDB details and cover are fetched once and shared by every copy of

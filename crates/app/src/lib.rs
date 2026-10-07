@@ -67,6 +67,7 @@ pub mod docs_reference;
 pub mod corpus;
 pub mod cover;
 pub mod data_roots;
+pub mod migrate_user_dir;
 pub mod user_dirs;
 pub mod documents;
 pub mod documents_tab;

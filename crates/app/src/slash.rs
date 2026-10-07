@@ -723,13 +723,13 @@ pub static COMMANDS: &[CommandSpec] = &[
 
     // ── Help ──────────────────────────────────────────────────────────────
     CommandSpec { name: "dump-windows", category: Category::Help, context: Context::Global,
-        usage: "dump-windows", description: "dump the last game frame's window layout, here and to ~/.lanthorn/dump-windows.log",
+        usage: "dump-windows", description: "dump the last game frame's window layout, here and to dump-windows.log in your data folder",
         dispatch: |_| SlashOutcome::DumpWindows },
     CommandSpec { name: "dump-cells", category: Category::Help, context: Context::Global,
-        usage: "dump-cells", description: "write the last frame's cells — glyphs, colours and attributes — to ~/.lanthorn/dump-cells.log",
+        usage: "dump-cells", description: "write the last frame's cells — glyphs, colours and attributes — to dump-cells.log in your data folder",
         dispatch: |_| SlashOutcome::DumpCells },
     CommandSpec { name: "dump-terminal", category: Category::Help, context: Context::Global,
-        usage: "dump-terminal", description: "dump this terminal's detected protocol, cell size, capabilities and traffic — here and to ~/.lanthorn/dump-terminal.log",
+        usage: "dump-terminal", description: "dump this terminal's detected protocol, cell size, capabilities and traffic — here and to dump-terminal.log in your data folder",
         dispatch: |_| SlashOutcome::DumpTerminal },
     CommandSpec { name: "debug", category: Category::Help, context: Context::Global,
         usage: "debug", description: "toggle the Z-machine debug inspector pane",

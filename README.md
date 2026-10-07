@@ -421,7 +421,9 @@ regenerable cache lives in `~/Library/Caches/lanthorn`, `%LOCALAPPDATA%\lanthorn
 or `~/.cache/lanthorn`. (Linux honours `XDG_CONFIG_HOME`, `XDG_DATA_HOME` and
 `XDG_CACHE_HOME`.) If `~/.lanthorn` already exists it keeps being used, whole,
 exactly as before, and `--user-dir <folder>` still puts everything in one
-folder of your choosing. See
+folder of your choosing. *Next release:* `lanthorn --migrate-user-dir` moves an
+existing `~/.lanthorn` into the standard folders (it shows the plan and asks
+first; `--yes` skips the question). See
 [every setting](docs/reference/config.md) and
 [saves and rewind](docs/guide/saves-and-rewind.md).
 

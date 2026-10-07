@@ -41,8 +41,16 @@ that is what XDG asks for, and a user who wants one folder keeps (or creates)
    `documents/`, `cache/` all inside X). `--data-dir` keeps standing in for the
    catalogue base, as `DataRoots::resolve` documents.
 2. **Legacy**: if `~/.lanthorn` exists, it is used whole, exactly as today
-   (single-folder layout, cache inside it). No migration, no prompt, no
-   opt-in move command.
+   (single-folder layout, cache inside it). Nothing is migrated on its own and
+   there is no prompt. The one way out is opt-in: `lanthorn --migrate-user-dir
+   [--yes]` (`migrate_user_dir.rs`) lists every move, asks, then moves
+   `config.toml`/`style.toml` to the platform config root, the contents of
+   `cache/` to the cache root and everything else to the data root, deletes OS
+   clutter (`.DS_Store`, `Thumbs.db`, `desktop.ini`), removes the emptied
+   `~/.lanthorn`, and exits without starting the TUI. It refuses, changing
+   nothing, if `~/.lanthorn` is missing, if `--user-dir` is also given, or if
+   any destination already exists (no merging). A failure partway stops and
+   reports what moved; nothing is rolled back.
 3. **Platform defaults** above.
 
 The TUI and every embedding host go through the same resolver, so on one
