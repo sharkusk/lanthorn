@@ -20,6 +20,10 @@ pub fn auto_seed(user_dir: &std::path::Path) {
     if path.exists() {
         return;
     }
+    // The config root may not exist yet (a fresh platform folder).
+    if let Some(parent) = path.parent() {
+        let _ = std::fs::create_dir_all(parent);
+    }
     let _ = std::fs::write(&path, commented_template());
 }
 

@@ -494,6 +494,9 @@ check "dispatch: the served game is launched with --auto-save" "$?"
 ttyd_has "on"
 check "dispatch: ...and the value is on" "$?"
 
+ttyd_has "--user-dir"
+check "dispatch: the served game is launched with --user-dir (single-folder layout)" "$?"
+
 ttyd_has "/usr/local/bin/lanthorn-serve-session"
 check "dispatch: the game still runs through the per-connection wrapper" "$?"
 

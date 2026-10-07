@@ -226,7 +226,8 @@ itself.**
   over it, and the Documents tab reads a game's manuals and maps in place: text in a
   pager, pictures drawn in the pane, PDFs in your viewer.
   Every IFDB-linked game gets a documents folder
-  (`~/.lanthorn/documents/<Title> [<IFDB id>]`) for its manual, feelies and maps,
+  (`~/.lanthorn/documents/<Title> [<IFDB id>]`; *Next release:* new installs keep it in your
+  platform's data folder, see [Configuration](#configuration)) for its manual, feelies and maps,
   and you can fetch them without leaving lanthorn: pick from the files IFDB lists
   for the game (zips can be peeked inside, walkthroughs are flagged as spoilers,
   files you already have are marked), and they land in the folder. The Documents
@@ -358,7 +359,8 @@ beat at three speeds from one recording.
 
 **And the typeface.** *Arthur*'s Amiga floppy carries a real proportional font,
 drawn at the game's own per-glyph advances — try `/set-v6-render raster` to see
-it. Drop your own `Kick12.rom` or a Mac OS System file into `~/.lanthorn` and the
+it. Drop your own `Kick12.rom` or a Mac OS System file into `~/.lanthorn` (*Next release:* your
+data folder, see [Configuration](#configuration)) and the
 system faces come too: topaz 8, and Geneva, which lives on no Infocom disk at
 all.
 
@@ -407,7 +409,19 @@ lanthorn reads `~/.lanthorn/config.toml` (override with `--user-dir`, or point a
 a file with `--config`); every setting has a default, so the file is optional.
 CLI flags beat the config file, which beats built-in defaults. Saves and sidecars
 live under `~/.lanthorn/saves/<story-filename>.save/` by default; `--data-dir
-<path>` relocates just those. See
+<path>` relocates just those.
+
+*Next release:* a new install keeps its files in your platform's standard
+folders instead of a dot-folder in your home directory. Config and styles
+(`config.toml`, `style.toml`) live in `~/Library/Application Support/lanthorn`
+on macOS, `%APPDATA%\lanthorn` on Windows and `~/.config/lanthorn` on Linux;
+saves, per-player folders, documents and your own system disks live in the same
+macOS and Windows folders, or `~/.local/share/lanthorn` on Linux; and the
+regenerable cache lives in `~/Library/Caches/lanthorn`, `%LOCALAPPDATA%\lanthorn`
+or `~/.cache/lanthorn`. (Linux honours `XDG_CONFIG_HOME`, `XDG_DATA_HOME` and
+`XDG_CACHE_HOME`.) If `~/.lanthorn` already exists it keeps being used, whole,
+exactly as before, and `--user-dir <folder>` still puts everything in one
+folder of your choosing. See
 [every setting](docs/reference/config.md) and
 [saves and rewind](docs/guide/saves-and-rewind.md).
 

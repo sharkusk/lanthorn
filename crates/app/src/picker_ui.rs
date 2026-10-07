@@ -1329,7 +1329,7 @@ pub(crate) fn run_story_picker(
     // No story is booted here, so no machine names a colour table: the picker
     // resolves standard colour numbers through §8.3.1's own (SQ-1393).
     let (cs, _set, _w2) =
-        app::style::resolve(&base, &cfg.user_dir, zvm::screen::Palette::Standard);
+        app::style::resolve(&base, cfg.config_root(), zvm::screen::Palette::Standard);
 
     // Row badges: each story's per-game dir under `roots` + one shared hint
     // index, computed once (SQ-0284). Recomputed by `resort_list` whenever the

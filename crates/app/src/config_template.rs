@@ -99,7 +99,12 @@ const STARTUP: &[Row] = &[
     ex(
         "user_dir",
         "\"~/.lanthorn\"",
-        &["Root directory for lanthorn data (maps/, saves/, style.toml).", "Default: ~/.lanthorn."],
+        &[
+            "Root directory for lanthorn data (saves/, users/, documents/).",
+            "Default: your platform's data folder (macOS ~/Library/Application Support/lanthorn,",
+            "Windows %APPDATA%\\lanthorn, Linux ~/.local/share/lanthorn), or ~/.lanthorn if that",
+            "folder already exists. config.toml and style.toml stay in the config folder.",
+        ],
     ),
     ex(
         "default_story_dir",
@@ -133,7 +138,7 @@ const STARTUP: &[Row] = &[
         "\"style.toml\"",
         &[
             "Style-file pointer: a built-in name or a file path. Unset uses",
-            "<user_dir>/style.toml when present, else the built-in theme.",
+            "style.toml in the config folder when present, else the built-in theme.",
         ],
     ),
     d("watch_style", "false", &["Watch the resolved style file and live-reload it on change."]),
@@ -476,7 +481,7 @@ const INTERPRETER: &[Row] = &[
         "system_font_disk",
         "\"\"",
         &[
-            "Which of your own boot media under ~/.lanthorn/ answers first when",
+            "Which of your own boot media in the lanthorn data folder answers first when",
             "several carry the machine's system typeface. A case-insensitive piece of",
             "the file's name — \"6.0.8\" picks the System 6.0.8 startup disk out",
             "of a folder holding System 6 and 7 — and empty means no preference.",
@@ -485,7 +490,7 @@ const INTERPRETER: &[Row] = &[
             "being asked for falls through to the others rather than losing it; with",
             "no preference the pool is ordered by filename.",
             "Drop a Mac OS System disk or an Amiga Kickstart ROM (*.rom) in",
-            "~/.lanthorn/ and a Version 6 game off that machine's own",
+            "the data folder and a Version 6 game off that machine's own",
             "media is drawn with the face the machine really used — Geneva on a",
             "Macintosh, which lives in the System file and on no Infocom disk, and",
             "topaz 8 on an Amiga, which lives in Kickstart and on no floppy at all.",

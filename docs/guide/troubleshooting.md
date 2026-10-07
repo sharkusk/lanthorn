@@ -31,7 +31,7 @@ It probably hasn't. A Glulx story whose turn runs for ten seconds without ever
 asking for input is taken to be caught in a runaway loop: lanthorn abandons
 that turn rather than freezing on it, and the map, your scrollback and your
 ability to quit all keep working throughout. A record of what happened lands
-in `~/.lanthorn/crash.log`.
+in `crash.log` in your data folder.
 
 ## On Windows: I closed the console and lost my progress
 
@@ -50,13 +50,32 @@ a game vanishes from where you expect it, check wherever Frotz moved it to
 
 ## Where does lanthorn keep everything?
 
-Config and styles: `~/.lanthorn/config.toml` and `~/.lanthorn/style.toml`.
-Saves and per-game sidecars: `~/.lanthorn/saves/<story>.save/`, one
-directory per game (a disk image keys on its release and serial rather than
-a filename, so different builds of the same story never collide). Crash
-records: `~/.lanthorn/crash.log`. Terminal diagnostics:
-`~/.lanthorn/dump-terminal.log`. `--user-dir` moves the whole `.lanthorn`
-tree; `--data-dir` moves just the saves.
+lanthorn keeps its files in three folders, which on a new install are your
+platform's standard ones:
+
+| | config | data | cache |
+|---|---|---|---|
+| macOS | `~/Library/Application Support/lanthorn` | the same folder | `~/Library/Caches/lanthorn` |
+| Windows | `%APPDATA%\lanthorn` | the same folder | `%LOCALAPPDATA%\lanthorn` |
+| Linux | `~/.config/lanthorn` | `~/.local/share/lanthorn` | `~/.cache/lanthorn` |
+
+On Linux the `XDG_CONFIG_HOME`, `XDG_DATA_HOME` and `XDG_CACHE_HOME` variables
+move them, as usual (a blank or relative value is ignored).
+
+- **Config folder:** `config.toml` and `style.toml`.
+- **Data folder:** saves and per-game sidecars in `saves/<story>.save/`, one
+  directory per game (a disk image keys on its release and serial rather than
+  a filename, so different builds of the same story never collide); other
+  players' trees in `users/`; each game's `documents/` folder; the system disks
+  and Kickstart ROMs you drop in; and crash and diagnostic logs such as
+  `crash.log` and `dump-terminal.log`.
+- **Cache folder:** only things lanthorn can rebuild on its own, which is safe
+  to delete.
+
+If you already have a `~/.lanthorn` folder from an earlier version, lanthorn
+keeps using it for everything, exactly as before; nothing is moved. To keep it
+all in one folder of your choosing, pass `--user-dir <folder>`: config, saves,
+documents and cache all go inside it. `--data-dir` moves just the saves.
 
 ## Going deeper
 

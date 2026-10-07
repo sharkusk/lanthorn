@@ -135,6 +135,9 @@ serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 toml = "0.8"
 toml_edit = "0.22"
+# SQ-1721/SQ-1722: the platform home directory (Known Folder API on Windows) and
+# its app-data folders. MIT OR Apache-2.0. Not used by zvm/gvm/scott.
+dirs = "6"
 regex = "1"
 # `wrap_help` reflows long help to the real terminal width. Without it clap does
 # not wrap AT ALL — it joins a doc comment into one paragraph and prints it — so

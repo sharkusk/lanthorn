@@ -1564,7 +1564,7 @@ fn set_style_watch(
         *watcher = None;
         state.set_status("style watch off");
     } else if let Some(p) =
-        app::reload::resolved_style_path(state.config.style.as_deref(), &state.config.user_dir)
+        app::reload::resolved_style_path(state.config.style.as_deref(), state.config.config_root())
     {
         *watcher = app::watch::start(&p);
         if let Some(w) = watcher.as_mut() {
@@ -1666,10 +1666,9 @@ fn handle_map_export(
 /// Abbreviate a leading $HOME in a path to `~` for display.
 fn abbreviate_home(p: &std::path::Path) -> String {
     let s = p.display().to_string();
-    if let Ok(home) = std::env::var("HOME") {
-        if !home.is_empty() {
-            if let Some(rest) = s.strip_prefix(&home) { return format!("~{rest}"); }
-        }
+    if let Some(home) = app::user_dirs::home_dir() {
+        let home = home.display().to_string();
+        if let Some(rest) = s.strip_prefix(&home) { return format!("~{rest}"); }
     }
     s
 }
@@ -2032,7 +2031,7 @@ fn run_event_loop(boot: startup::BootResult, launched_from_library: bool) -> Run
     let mut watch_dirty: Option<std::time::Instant> = None;
     if state.config.watch_style {
         if let Some(p) =
-            app::reload::resolved_style_path(state.config.style.as_deref(), &state.config.user_dir)
+            app::reload::resolved_style_path(state.config.style.as_deref(), state.config.config_root())
         {
             style_watcher = app::watch::start(&p);
             if let Some(w) = style_watcher.as_mut() {

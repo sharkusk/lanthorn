@@ -812,8 +812,8 @@ pub fn boot_story(req: BootRequest<'_>, hooks: &mut dyn BootHooks) -> Result<Boo
     // the theme pairs must be in the backend first — and the garglk.ini overlay
     // below must land in `cs` before they are derived. `state.colors` is assigned
     // from these below.
-    let (style_doc, style_w1) = crate::style::load_style(cfg.style.as_deref(), &cfg.user_dir);
-    let (mut cs, set, style_w2) = crate::style::resolve(&style_doc, &cfg.user_dir, machine_palette);
+    let (style_doc, style_w1) = crate::style::load_style(cfg.style.as_deref(), cfg.config_root());
+    let (mut cs, set, style_w2) = crate::style::resolve(&style_doc, cfg.config_root(), machine_palette);
     // SQ-0319: discover a per-game garglk.ini beside the story and overlay its
     // colours onto the resolved theme BEFORE the backend snapshot below, so the
     // imported look is in the backend for glk_style_measure and painted from

@@ -109,7 +109,7 @@ easiest way to keep that: Docker manages it for you and it just works across
 upgrades. If you'd rather see your saves as ordinary files on your machine,
 mount a folder of your own there instead — but mount it at
 `/data/.lanthorn`, not `/data` itself, and pick a dedicated folder like
-`~/lanthorn-docker` rather than your host's own `~/.lanthorn`, since a
+`~/lanthorn-docker` rather than your host's own lanthorn folders, since a
 native lanthorn install and the container don't understand each other's
 story paths. `docker-compose.yml` has that alternative ready to uncomment.
 

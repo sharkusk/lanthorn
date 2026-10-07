@@ -862,9 +862,10 @@ fn builtin_scheme_text(name: &str) -> Option<&'static str> {
 
 /// Expand `~` in a path string and resolve relative paths against `base_dir`.
 pub fn expand_path(s: &str, base_dir: &Path) -> std::path::PathBuf {
-    let expanded = if s.starts_with('~') {
-        let home = std::env::var("HOME").unwrap_or_else(|_| ".".to_string());
-        std::path::PathBuf::from(home).join(s.trim_start_matches("~/").trim_start_matches('~'))
+    // With no home directory `~` is left as written: it names nothing, and it
+    // must not quietly become the working directory (SQ-1721).
+    let expanded = if let (true, Some(home)) = (s.starts_with('~'), crate::user_dirs::home_dir()) {
+        home.join(s.trim_start_matches('~').trim_start_matches(['/', '\\']))
     } else {
         std::path::PathBuf::from(s)
     };
@@ -1013,6 +1014,22 @@ pub fn parse_named_color(s: &str) -> Option<Color> {
 #[cfg(all(test, feature = "t-theme"))]
 mod tests {
     use super::*;
+
+    /// SQ-1721: `~` is the one home directory helper's answer; with no home it is
+    /// left as written rather than turning into the working directory.
+    #[test]
+    fn tilde_expands_through_the_home_helper_and_never_to_dot() {
+        let base = Path::new("/base");
+        match crate::user_dirs::home_dir() {
+            Some(home) => {
+                assert_eq!(expand_path("~/x/y", base), home.join("x").join("y"));
+                assert_eq!(expand_path("~", base), home);
+            }
+            None => assert_eq!(expand_path("~/x", base), base.join("~/x")),
+        }
+        assert_eq!(expand_path("/abs/p", base), Path::new("/abs/p"));
+        assert_eq!(expand_path("rel/p", base), base.join("rel/p"));
+    }
 
     #[test]
     fn seed_glk_styles_copies_input_and_subheader_leaves_rest_none() {

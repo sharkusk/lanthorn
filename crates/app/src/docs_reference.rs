@@ -85,7 +85,7 @@ pub fn render_config() -> String {
     );
     out.push_str("# Config reference\n\n");
     out.push_str(
-        "Every setting `~/.lanthorn/config.toml` accepts, grouped the way the seeded template \
+        "Every setting `config.toml` accepts, grouped the way the seeded template \
          groups them. \"example\" means the default cannot be written down (unset/computed) and \
          the value shown only illustrates the shape; \"live default\" means the setting ships \
          uncommented because it is content rather than documentation.\n\n",

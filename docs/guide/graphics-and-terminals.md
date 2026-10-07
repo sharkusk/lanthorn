@@ -81,7 +81,7 @@ named, off a release disk or a chosen `interpreter_number`.
 nor the Amiga kept its body typeface on a game disk — the Macintosh drew with
 Geneva out of its System file, the Amiga with topaz out of Kickstart ROM.
 Drop a Mac OS System startup disk or an Amiga Kickstart ROM image into
-`~/.lanthorn/`, and a Version 6 game off that machine's own media is drawn
+your lanthorn data folder (see [where lanthorn keeps everything](troubleshooting.md#where-does-lanthorn-keep-everything)), and a Version 6 game off that machine's own media is drawn
 with the face the machine actually used, rather than the built-in stand-in. (A
 Workbench floppy doesn't help: the topaz the interpreter drew with lives in
 the ROM, not on any disk Commodore shipped.) Nothing is shipped or copied —

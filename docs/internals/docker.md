@@ -422,7 +422,7 @@ connects as the page would and reports what arrives.
 | mount | contents |
 |---|---|
 | `/stories` | the game library; the picker opens here. The repo ships no stories (commercial games are gitignored), so this is yours to fill — or use the picker's built-in IFDB search (`/`) to download freely available ones into it. |
-| `/data` | the container user's `$HOME`. Saves, `config.toml` / `style.toml`, and `.lanthorn` map archives live in `/data/.lanthorn`. Name it a volume and saves persist across image upgrades. |
+| `/data` | the container user's `$HOME`. Saves, `config.toml` / `style.toml`, and `.lanthorn` map archives live in `/data/.lanthorn`: the entrypoint passes `--user-dir /data/.lanthorn` wherever it launches lanthorn (SQ-1722), so the container keeps the single-folder layout instead of the Linux XDG folders a bare run would pick. Name it a volume and saves persist across image upgrades. |
 
 The container runs as an unprivileged user (`lanthorn`, uid 1000). If you
 bind-mount host directories and see permission errors, either `chown` them to

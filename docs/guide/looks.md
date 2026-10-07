@@ -18,7 +18,7 @@ the current room, tabs), `muted` (secondary text), `alert` (warnings), and
 theme; reach further in — any individual selector, down to a single map
 glyph — only if you want to.
 
-**Edit it live.** On first run lanthorn seeds `~/.lanthorn/style.toml` fully
+**Edit it live.** On first run lanthorn seeds `style.toml` in your config folder fully
 commented out, every selector already spelling its own default, grouped by
 section — a working reference, not a blank page. Uncomment what you want to
 change, save, and run `/reload-style` to see it live; a bad edit keeps the old

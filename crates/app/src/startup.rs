@@ -104,7 +104,21 @@ pub(crate) fn resolve_launch() -> LaunchCtx {
         std::process::exit(2);
     }
 
+    // Where the user's files live (SQ-1721/1722) must be knowable BEFORE anything
+    // is read or written: with no home directory and no `--user-dir` there is
+    // nowhere sensible to keep them, and the working directory is not it.
+    if let Err(e) = app::user_dirs::UserDirs::detect(cli.user_dir.as_deref()) {
+        eprintln!("lanthorn: {e}");
+        std::process::exit(2);
+    }
+
     let mut cfg = resolve(&cli);
+
+    // The platform folders (unlike the legacy `~/.lanthorn`, which was made on
+    // demand) are not there on a first run; the seeds, the stderr log and the
+    // trace files below write straight into them. Best-effort, like they are.
+    let _ = std::fs::create_dir_all(cfg.config_root());
+    let _ = std::fs::create_dir_all(&cfg.user_dir);
 
     // The SHARED config file: `cfg.config_file` is the named player's own bare file
     // (never seeded, absent until they change a setting), so the first-run test, the
@@ -122,7 +136,7 @@ pub(crate) fn resolve_launch() -> LaunchCtx {
     // commented, registry-derived template, and the picker reads the same file the
     // game does. Never overwrites an existing file; best-effort (a read-only home
     // must not crash startup).
-    app::theme::template::auto_seed(&cfg.user_dir);
+    app::theme::template::auto_seed(cfg.config_root());
 
     // …and the same treatment for config.toml (SQ-0573): a fully commented template
     // listing EVERY setting at its default, so what lanthorn can be told to do is
@@ -267,8 +281,8 @@ pub(crate) fn resolve_launch() -> LaunchCtx {
     // `<user_dir>/saves` (the shared catalogue, and the default player's saves);
     // a named player's own saves sit under `<user_dir>/users/<name>/saves`. Each
     // story gets `<base>/<story-key>.save/` in both.
-    let roots = app::data_roots::DataRoots::resolve(
-        &cfg.user_dir,
+    let roots = app::data_roots::DataRoots::resolve_in(
+        &cfg.user_dirs(),
         cli.data_dir.as_deref(),
         cfg.player.as_deref(),
         &cfg.shared_documents_settings(),
@@ -433,7 +447,7 @@ fn ask_fetch_keep(
     // No story is booted yet, so there is no machine to resolve a colour number
     // through: §8.3.1's own table (SQ-1393).
     let (colors, _syms, _w2) =
-        app::style::resolve(&base, &cfg.user_dir, zvm::screen::Palette::Standard);
+        app::style::resolve(&base, cfg.config_root(), zvm::screen::Palette::Standard);
 
     let mut state = AppState::default();
     state.colors = colors;
@@ -629,7 +643,7 @@ fn ask_font_check(cfg: &Config) -> FontCheckOutcome {
     // No story is booted yet, so there is no machine to resolve a colour number
     // through: §8.3.1's own table (SQ-1393).
     let (colors, _syms, _w2) =
-        app::style::resolve(&base, &cfg.user_dir, zvm::screen::Palette::Standard);
+        app::style::resolve(&base, cfg.config_root(), zvm::screen::Palette::Standard);
 
     let mut state = AppState::default();
     state.colors = colors;

@@ -905,7 +905,7 @@ pub fn read_player_style(cfg: &crate::config::Config) -> Result<Option<StyleDoc>
 /// player's `style.toml` layered over it (SQ-1676). A player file that does not
 /// parse is skipped with one warning, never fatal.
 pub fn load_style_for(cfg: &crate::config::Config) -> (StyleDoc, Vec<String>) {
-    let (doc, mut warnings) = load_style(cfg.style.as_deref(), &cfg.user_dir);
+    let (doc, mut warnings) = load_style(cfg.style.as_deref(), cfg.config_root());
     match read_player_style(cfg) {
         Ok(Some(over)) => (merge(&doc, &over), warnings),
         Ok(None) => (doc, warnings),
@@ -922,7 +922,7 @@ pub fn load_style_for(cfg: &crate::config::Config) -> (StyleDoc, Vec<String>) {
 pub fn style_write_path_for(cfg: &crate::config::Config) -> Option<std::path::PathBuf> {
     match (&cfg.style, player_style_path(cfg)) {
         (None, Some(own)) => Some(own),
-        _ => style_write_path(cfg.style.as_deref(), &cfg.user_dir),
+        _ => style_write_path(cfg.style.as_deref(), cfg.config_root()),
     }
 }
 

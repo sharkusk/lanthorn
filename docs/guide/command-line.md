@@ -115,7 +115,7 @@ cover), what lanthorn has learned about a Glulx story's insides, your
 install-wide extras (hint files, logs, system fonts and disks). One player's
 metadata fetch shows up for everyone.
 
-**What is per player.** Everything under `~/.lanthorn/users/<name>/`: their
+**What is per player.** Everything under `users/<name>/` in your data folder: their
 saves and quick-saves, in-game saves, auto-resume, map and turn history,
 transcripts and scripts, and each game's own settings. A game one player has
 saved shows as played only for them; deleting or resetting your saves never
@@ -129,12 +129,13 @@ hears it. `[keymap]` and `[hotkeys]` layer the same way. The default player's
 `config.toml` *is* the shared one, so their changes become everyone's defaults
 unless a player has set their own.
 
-`--user-dir` moves the whole `.lanthorn`, player trees included. `--data-dir`
-stands in for `~/.lanthorn/saves`, the shared catalogue (and the default
-player's saves); a named player's files always sit under `users/` in the user
-directory. The per-game documents folders (manuals and maps, see
+`--user-dir <folder>` puts everything (config, saves, player trees, documents and
+cache) in that one folder. `--data-dir`
+stands in for `saves/` in your data folder, the shared catalogue (and the default
+player's saves); a named player's files always sit under `users/` in the data
+folder. The per-game documents folders (manuals and maps, see
 [the story picker](getting-started.md#the-story-picker)) are shared by every
-player too: they live in `~/.lanthorn/documents` whatever `--data-dir` and
+player too: they live in `documents/` in your data folder whatever `--data-dir` and
 `--player` say, unless the shared `config.toml` sets `documents_dir`.
 
 **Lanthorn does not check who you are.** `--player amy` means "act as amy", and

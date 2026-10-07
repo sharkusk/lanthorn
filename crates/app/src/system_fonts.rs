@@ -327,15 +327,14 @@ fn faces_on(path: &Path, disk: &str, bytes: Vec<u8>) -> Vec<UserFace> {
         .collect()
 }
 
-/// `~/.lanthorn/` — the fixed spot a player drops their own system disks,
-/// independent of `--user-dir` or `--data-dir`: those move where LANTHORN's OWN
-/// state lives, not where a person's media sits. Same fallback as
-/// `config::default_user_dir` (`$HOME`, or `.` when unset), kept as its own tiny
-/// copy rather than threading `Config` through the picker's aux resolution just
-/// for this.
+/// The DATA root of the platform's own folders (SQ-1722) — `~/.lanthorn/` for
+/// an existing legacy home — the fixed spot a player drops their own system
+/// disks, independent of `--user-dir` or `--data-dir`: those move where
+/// LANTHORN's OWN state lives, not where a person's media sits. Resolved
+/// through [`crate::user_dirs::UserDirs`], so it is the same folder the
+/// catalogue lives in on a default install, and never the working directory.
 pub fn user_media_dir() -> PathBuf {
-    let base = std::env::var("HOME").unwrap_or_else(|_| ".".to_string());
-    PathBuf::from(base).join(".lanthorn")
+    crate::user_dirs::UserDirs::detect_or_temp(None).data().to_path_buf()
 }
 
 /// Every typeface on the user's own disks, off [`user_media_dir`].
@@ -474,13 +473,12 @@ mod tests {
         let _ = std::fs::remove_dir_all(&dir);
     }
 
-    /// [`user_media_dir`] resolves under `$HOME`, matching
-    /// `config::default_user_dir`'s own fallback — pinned so the two cannot
-    /// silently drift onto different homes.
+    /// [`user_media_dir`] is the default data root, matching
+    /// `config::default_user_dir` — pinned so the two cannot silently drift onto
+    /// different homes.
     #[test]
-    fn user_media_dir_is_under_home() {
-        if let Ok(home) = std::env::var("HOME") {
-            assert_eq!(user_media_dir(), PathBuf::from(home).join(".lanthorn"));
-        }
+    fn user_media_dir_is_the_default_data_root() {
+        assert_eq!(user_media_dir(), crate::config::Config::default().user_dir);
+        assert!(user_media_dir().is_absolute());
     }
 }

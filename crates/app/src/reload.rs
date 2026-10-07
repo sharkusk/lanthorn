@@ -35,7 +35,7 @@ pub fn resolved_style_path(style: Option<&str>, user_dir: &Path) -> Option<std::
 /// Re-read and apply `style.toml`. On a real-file read/parse error, the current
 /// `state.colors`/`state.symbols` are left in place.
 pub fn reload_style(state: &mut AppState) -> ReloadOutcome {
-    let user_dir = state.config.user_dir.clone();
+    let user_dir = state.config.config_root().to_path_buf();
     let pointer = state.config.style.clone();
 
     // Build the StyleDoc: a real file parses directly (error → Failed); the

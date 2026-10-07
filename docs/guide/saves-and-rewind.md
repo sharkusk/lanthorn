@@ -45,7 +45,8 @@ through your past turns with the map reconstructed exactly as it looked at
 each one, then resume play from any of them. It survives across sessions, so
 a game you quit mid-replay is still steppable when you come back to it.
 
-Everything lands under `~/.lanthorn/saves/<story-filename>.save/` by
+Everything lands under `saves/<story-filename>.save/` in your data folder
+([where that is](troubleshooting.md#where-does-lanthorn-keep-everything)) by
 default; `--data-dir <path>` moves just the saves and sidecars elsewhere
 without relocating your config or style. Sharing an install between several
 players? See [the command line](command-line.md#sharing-one-install-between-players).

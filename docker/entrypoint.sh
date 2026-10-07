@@ -101,6 +101,10 @@ set -eu
 # image layout.
 LANTHORN_SHARE_DIR="${LANTHORN_SHARE_DIR:-/usr/local/share/lanthorn}"
 
+# The one folder lanthorn keeps its config, saves and cache in, inside the data
+# home: passed as `--user-dir` wherever lanthorn is launched (SQ-1722).
+user_dir="${HOME:-/data}/.lanthorn"
+
 # A FIFO drained at real time, for any session with no browser listening.
 # ALSA writing to /dev/null has no clock and spins a core; this is the clock.
 start_sink() {
@@ -368,10 +372,16 @@ if [ "${1:-}" = "serve" ]; then
     # Ahead of "$@" — the arguments the operator wrote after `serve` — for the
     # same reason `--image-protocol` is: ours is the default, theirs is the
     # instruction, and clap's last occurrence wins.
+    #
+    # `--user-dir` is passed for the same reason, and not only to be tidy: with no
+    # `~/.lanthorn` yet, lanthorn on Linux would pick the XDG folders (SQ-1722) and
+    # split config, saves and cache across /data/.config, /data/.local/share and
+    # /data/.cache. `--user-dir` keeps the single folder /data/.lanthorn this
+    # image documents and its volumes already hold.
     if [ "${LANTHORN_WEB_AUTOSAVE:-on}" != "off" ]; then
-        set -- lanthorn --image-protocol "$images" --auto-save on "$@"
+        set -- lanthorn --user-dir "$user_dir" --image-protocol "$images" --auto-save on "$@"
     else
-        set -- lanthorn --image-protocol "$images" "$@"
+        set -- lanthorn --user-dir "$user_dir" --image-protocol "$images" "$@"
     fi
     set -- /usr/local/bin/lanthorn-serve-session "$@"
 
@@ -385,7 +395,7 @@ if [ "${1:-}" = "serve" ]; then
     # at all until somebody fixes the file by hand.
     grab_zone="${LANTHORN_WEB_GRAB_ZONE:-4}"
     case "$grab_zone" in
-        [1-6]) seed_config_key "${HOME:-/data}/.lanthorn/config.toml" grab_zone_cells "$grab_zone" ;;
+        [1-6]) seed_config_key "$user_dir/config.toml" grab_zone_cells "$grab_zone" ;;
         off|'') : ;;
         *) echo "lanthorn: ignoring LANTHORN_WEB_GRAB_ZONE=$grab_zone (want 1-6, or off)" >&2 ;;
     esac
@@ -491,4 +501,4 @@ if [ -z "${LANTHORN_AUDIO_OUT:-}" ]; then
     start_sink
     export LANTHORN_AUDIO_OUT="$LANTHORN_AUDIO_DIR/null.pcm"
 fi
-exec lanthorn "$@"
+exec lanthorn --user-dir "$user_dir" "$@"

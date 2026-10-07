@@ -417,7 +417,7 @@ each of these is a refusal rather than a stub:
 - **A remembered address outlives the story it was learned from, so the
   `room-global` sidecar carries the image's own identity, not just an address**
   (SQ-1305). The save directory is keyed by the story's FILENAME
-  (`~/.lanthorn/saves/<file>.save/`), so a story rebuilt under the same name — a
+  (`<data root>/saves/<file>.save/`, see `user-dirs.md`), so a story rebuilt under the same name — a
   new release of a `.gblorb`, an author's own rebuild — reuses the old sidecar,
   and a value check alone cannot always catch a wrong address: the globals
   region is full of OTHER objects (`player`, `actor`, `real_location`) a rebuild

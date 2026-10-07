@@ -5,6 +5,7 @@ use clap::Parser;
 use serde::{Deserialize, Deserializer};
 
 use crate::anim::Easing;
+use crate::user_dirs::UserDirs;
 
 // ── Keymap config ─────────────────────────────────────────────────────────────
 
@@ -243,7 +244,8 @@ pub struct Cli {
     /// library.
     pub story: Option<PathBuf>,
 
-    /// Override the lanthorn home directory (default: ~/.lanthorn)
+    /// Keep everything (config, saves, documents, cache) in this one folder, instead
+    /// of the platform's standard folders or an existing ~/.lanthorn
     #[arg(long, value_name = "PATH")]
     pub user_dir: Option<PathBuf>,
 
@@ -994,12 +996,13 @@ where
 /// Fallback for [`Config::config_file`] when a `Config` is built without [`resolve`]
 /// (tests, `Config::default()`): the default home's config.toml.
 fn default_config_file() -> PathBuf {
-    default_user_dir().join("config.toml")
+    UserDirs::detect_or_temp(None).config().join("config.toml")
 }
 
+/// The data root a bare `Config::default()` starts with: the platform's (or the
+/// legacy `~/.lanthorn`), see [`UserDirs`].
 fn default_user_dir() -> PathBuf {
-    let base = std::env::var("HOME").unwrap_or_else(|_| ".".to_string());
-    PathBuf::from(base).join(".lanthorn")
+    UserDirs::detect_or_temp(None).data().to_path_buf()
 }
 
 fn default_true() -> bool { true }
@@ -1789,7 +1792,7 @@ pub struct Config {
     /// `crate::render::graphics::v6_pixel_lock_applies` for the measurement.
     #[serde(default)]
     pub v6_pixel_lock: bool,
-    /// Which of the player's own boot media under `~/.lanthorn/` answers first
+    /// Which of the player's own boot media in the data folder answers first
     /// when several carry the machine's system typeface (SQ-1037, SQ-1053).
     ///
     /// **Media, not only disks**: an Amiga Kickstart ROM (`*.rom`) is read here
@@ -1968,6 +1971,15 @@ pub struct Config {
     /// persisted, and not part of the file's schema.
     #[serde(skip, default = "default_config_file")]
     pub config_file: PathBuf,
+    /// Where `style.toml` lives (SQ-1722). `None` means the same folder as
+    /// [`Config::user_dir`] (a `Config` built by hand, as the tests do). Set by
+    /// [`resolve`]; never persisted. Read it through [`Config::config_root`].
+    #[serde(skip)]
+    pub config_dir: Option<PathBuf>,
+    /// Where regenerable files live (SQ-1722); `None` means `<user_dir>/cache`.
+    /// Never persisted. Read it through [`Config::cache_root`].
+    #[serde(skip)]
+    pub cache_dir: Option<PathBuf>,
     /// The named player this run belongs to (SQ-1676); `None` is the default
     /// player. When set, [`Config::config_file`] is that player's own bare-lines
     /// `users/<name>/config.toml`, layered over the shared one.
@@ -2116,6 +2128,22 @@ pub struct Config {
 }
 
 impl Config {
+    /// The folder `style.toml` (and the shared `config.toml`) live in (SQ-1722):
+    /// the config root, or [`Config::user_dir`] for a `Config` built without one.
+    pub fn config_root(&self) -> &std::path::Path {
+        self.config_dir.as_deref().unwrap_or(&self.user_dir)
+    }
+
+    /// The folder for regenerable files: the cache root, or `<user_dir>/cache`.
+    pub fn cache_root(&self) -> PathBuf {
+        self.cache_dir.clone().unwrap_or_else(|| self.user_dir.join("cache"))
+    }
+
+    /// This run's three roots as one value, ready for `DataRoots::resolve_in`.
+    pub fn user_dirs(&self) -> UserDirs {
+        UserDirs::new(self.config_root(), &self.user_dir, self.cache_root())
+    }
+
     /// The configured documents root (SQ-1679), read from the SHARED config only.
     /// The folder is shared by every player, so a named player's own file cannot
     /// move it: that player's `Config` holds the shared one in `inherited`, and
@@ -2441,6 +2469,8 @@ impl Default for Config {
             period_look: default_period_look(),
             honor_timed_input: default_honor_timed_input(),
             config_file: default_config_file(),
+            config_dir: None,
+            cache_dir: None,
             player: None,
             player_dir: None,
             inherited: None,
@@ -2481,7 +2511,7 @@ impl Default for Config {
 pub fn config_path(cli: &Cli) -> std::path::PathBuf {
     match &cli.config {
         Some(p) => p.clone(),
-        None => cli.user_dir.clone().unwrap_or_else(default_user_dir).join("config.toml"),
+        None => UserDirs::detect_or_temp(cli.user_dir.as_deref()).config().join("config.toml"),
     }
 }
 
@@ -2509,7 +2539,8 @@ pub fn resolve(cli: &Cli) -> Config {
     // An invalid name is rejected at startup before this runs; a host that never
     // validated simply gets the default player here.
     let player = crate::data_roots::select_player_from_env(cli.player.as_deref()).ok().flatten();
-    let mut cfg = resolve_config_layers(config_path, cli.user_dir.clone(), player.as_deref());
+    let dirs = UserDirs::detect_or_temp(cli.user_dir.as_deref());
+    let mut cfg = resolve_config_layers(config_path, &dirs, cli.user_dir.is_some(), player.as_deref());
 
     // CLI overrides beat the file — and every one of them that lands on a key
     // `write_config_at` persists is PINNED as it lands, so a later settings save
@@ -2518,7 +2549,7 @@ pub fn resolve(cli: &Cli) -> Config {
     // `--trace` and `--pictures` need no pin: their fields are `#[serde(skip)]`
     // and never written at all.
     //
-    // (The `--user-dir` override itself is handled inside `resolve_config_file`,
+    // (The `--user-dir` override itself is handled inside `resolve_config_layers`,
     // shared with `resolve_at` — see its doc comment.)
     //
     // SQ-1082: every switch below is `Option<OnOff>`, and the `Option` is the
@@ -2637,10 +2668,6 @@ pub fn resolve(cli: &Cli) -> Config {
 /// other CLI flag (`--sound`, `--v6-render`, `--colour`, …) is layered on top
 /// by `resolve` itself, after this returns, because those have no meaning
 /// outside an actual command-line launch.
-fn resolve_config_file(config_path: PathBuf, user_dir_override: Option<PathBuf>) -> Config {
-    resolve_config_layers(config_path, user_dir_override, None)
-}
-
 /// Overlay `over` onto `base`: tables merge key by key (so a player's partial
 /// `[keymap]` adds to the shared one), anything else is replaced.
 fn overlay_toml(base: &mut toml::Table, over: toml::Table) {
@@ -2654,7 +2681,10 @@ fn overlay_toml(base: &mut toml::Table, over: toml::Table) {
     }
 }
 
-/// [`resolve_config_file`] for a launch that may name a player (SQ-1676).
+/// The layering behind [`resolve`], [`resolve_at`] and [`resolve_with_dirs`], for a
+/// launch that may name a player (SQ-1676). `dirs` are the three roots;
+/// `pinned` says they were given explicitly (`--user-dir`, or a host), which pins
+/// the data root against a later settings save.
 ///
 /// The layers, lowest first: defaults, the shared `config_path`, then the named
 /// player's `<user_dir>/users/<name>/config.toml` (bare lines, never seeded, so
@@ -2663,17 +2693,24 @@ fn overlay_toml(base: &mut toml::Table, over: toml::Table) {
 /// is the shared config alone, so [`write_config_at`] stores only what differs.
 fn resolve_config_layers(
     config_path: PathBuf,
-    user_dir_override: Option<PathBuf>,
+    dirs: &UserDirs,
+    pinned: bool,
     player: Option<&str>,
 ) -> Config {
-    // Start from defaults.
-    let mut cfg = Config { config_file: config_path.clone(), ..Config::default() };
+    // Start from defaults, on the roots the caller resolved.
+    let mut cfg = Config {
+        config_file: config_path.clone(),
+        user_dir: dirs.data().to_path_buf(),
+        config_dir: Some(dirs.config().to_path_buf()),
+        cache_dir: Some(dirs.cache().to_path_buf()),
+        ..Config::default()
+    };
 
     let mut text = std::fs::read_to_string(&config_path).ok();
     let mut layer_error: Option<String> = None;
     let mut baseline: Option<Box<Config>> = None;
     if let Some(name) = player {
-        let shared = resolve_config_layers(config_path.clone(), user_dir_override.clone(), None);
+        let shared = resolve_config_layers(config_path.clone(), dirs, pinned, None);
         // The player root hangs off the user dir the shared layer resolved to.
         let root = crate::data_roots::player_root(&shared.user_dir, name);
         let player_file = root.join("config.toml");
@@ -2791,9 +2828,9 @@ fn resolve_config_layers(
     // not the same thing as the `user_dir` key (that moves the data only). With
     // `--config` naming a different file, writing it back would pin this run's
     // temporary root into the user's real config.
-    if let Some(dir) = user_dir_override {
-        cfg.user_dir = dir.clone();
-        cfg.one_run.pin(keys::USER_DIR, dir.to_string_lossy().into_owned());
+    if pinned {
+        cfg.user_dir = dirs.data().to_path_buf();
+        cfg.one_run.pin(keys::USER_DIR, dirs.data().to_string_lossy().into_owned());
     }
 
     cfg
@@ -2806,7 +2843,25 @@ fn resolve_config_layers(
 /// CLI-flag-shaped overrides (sound, v6-render, colour, …) applies them the way
 /// `resolve` does, on top of what this returns.
 pub fn resolve_at(user_dir: &std::path::Path) -> Config {
-    resolve_config_file(user_dir.join("config.toml"), Some(user_dir.to_path_buf()))
+    resolve_config_layers(user_dir.join("config.toml"), &UserDirs::single(user_dir), true, None)
+}
+
+/// [`resolve_at`] for a host that supplies all three roots itself (SQ-1722): a
+/// mobile container, a store build with its own sync. `config.toml` is read from
+/// `dirs.config()`, the data root is `dirs.data()` and regenerable files go to
+/// `dirs.cache()`. A host that wants the platform defaults the TUI uses passes
+/// [`UserDirs::detect`]'s answer, and then shares config and saves with it.
+pub fn resolve_with_dirs(dirs: &UserDirs) -> Config {
+    resolve_config_layers(dirs.config().join("config.toml"), dirs, true, None)
+}
+
+/// [`resolve_with_dirs`] for one named player; see [`resolve_at_for`].
+pub fn resolve_with_dirs_for(dirs: &UserDirs, player: Option<&str>) -> Result<Config, String> {
+    if let Some(name) = player {
+        crate::data_roots::validate_player_name(name)
+            .map_err(|e| format!("invalid player name {name:?}: {e}"))?;
+    }
+    Ok(resolve_config_layers(dirs.config().join("config.toml"), dirs, true, player))
 }
 
 /// [`resolve_at`] for one named player (SQ-1678), with no environment read: the
@@ -2824,7 +2879,7 @@ pub fn resolve_at_for(user_dir: &std::path::Path, player: Option<&str>) -> Resul
         crate::data_roots::validate_player_name(name)
             .map_err(|e| format!("invalid player name {name:?}: {e}"))?;
     }
-    Ok(resolve_config_layers(user_dir.join("config.toml"), Some(user_dir.to_path_buf()), player))
+    Ok(resolve_config_layers(user_dir.join("config.toml"), &UserDirs::single(user_dir), true, player))
 }
 
 // ── Write helpers ─────────────────────────────────────────────────────────────
@@ -3770,10 +3825,10 @@ mod tests {
     }
 
     #[test]
-    fn default_config_has_lanthorn_dir() {
+    fn default_config_uses_the_detected_data_root() {
         let cfg = Config::default();
-        // The default user_dir must end with ".lanthorn".
-        assert_eq!(cfg.user_dir.file_name().unwrap(), ".lanthorn");
+        // The default user_dir is the detected data root (legacy ~/.lanthorn, else the platform folder).
+        assert_eq!(cfg.user_dir, UserDirs::detect_or_temp(None).data());
     }
 
     #[test]
@@ -3787,7 +3842,7 @@ mod tests {
     fn unspecified_fields_fall_back_to_defaults() {
         // An empty TOML file should give us the same user_dir as Config::default().
         let cfg: Config = toml::from_str("").unwrap();
-        assert_eq!(cfg.user_dir.file_name().unwrap(), ".lanthorn");
+        assert_eq!(cfg.user_dir, UserDirs::detect_or_temp(None).data());
     }
 
     #[test]
@@ -3887,7 +3942,7 @@ mod tests {
             font_check: None,
         };
         let cfg = resolve(&cli);
-        assert_eq!(cfg.user_dir.file_name().unwrap(), ".lanthorn");
+        assert_eq!(cfg.user_dir, UserDirs::detect_or_temp(None).data());
     }
 
     #[test]
@@ -3988,6 +4043,61 @@ mod tests {
         assert_eq!(format!("{via_resolve_at:?}"), format!("{via_cli:?}"));
         assert_eq!(via_resolve_at.user_dir, dir);
         assert!(via_resolve_at.auto_load, "no file means defaults, and auto_load defaults true");
+    }
+
+    /// SQ-1722: a host that supplies all three roots reads `config.toml` from the
+    /// config root, keeps its data in the data root, and the three stay apart.
+    #[test]
+    fn resolve_with_dirs_reads_the_config_root_and_keeps_three_roots() {
+        let base = crate::scratch_dir("resolve-with-dirs");
+        let dirs = UserDirs::new(base.join("cfg"), base.join("data"), base.join("cache"));
+        std::fs::create_dir_all(dirs.config()).unwrap();
+        std::fs::write(dirs.config().join("config.toml"), "volume = 33\n").unwrap();
+        // A file in the DATA root must not be mistaken for the config.
+        std::fs::create_dir_all(dirs.data()).unwrap();
+        std::fs::write(dirs.data().join("config.toml"), "volume = 99\n").unwrap();
+
+        let cfg = resolve_with_dirs(&dirs);
+        assert_eq!(cfg.volume, 33);
+        assert_eq!(cfg.config_file, dirs.config().join("config.toml"));
+        assert_eq!(cfg.user_dir, dirs.data());
+        assert_eq!(cfg.config_root(), dirs.config());
+        assert_eq!(cfg.cache_root(), dirs.cache());
+        assert_eq!(cfg.user_dirs(), dirs);
+        // The data root is pinned for the run, so a settings save cannot bake the
+        // host's folder into the config file.
+        write_config_file(&cfg).unwrap();
+        let written = std::fs::read_to_string(dirs.config().join("config.toml")).unwrap();
+        assert!(!written.contains(&*base.join("data").to_string_lossy()), "{written}");
+
+        let roots = crate::data_roots::DataRoots::resolve_in(&cfg.user_dirs(), None, None, &cfg.shared_documents_settings());
+        assert_eq!(roots.catalogue(), dirs.data().join("saves"));
+        assert_eq!(roots.cache(), dirs.cache());
+
+        let bob = resolve_with_dirs_for(&dirs, Some("bob")).unwrap();
+        assert_eq!(bob.player_dir, Some(crate::data_roots::player_root(dirs.data(), "bob")));
+        assert!(resolve_with_dirs_for(&dirs, Some("../x")).is_err());
+        let _ = std::fs::remove_dir_all(&base);
+    }
+
+    /// `--user-dir X` is the single-folder layout: config, saves/ and cache/ in X.
+    #[test]
+    fn user_dir_flag_is_the_single_folder_layout() {
+        let dir = crate::scratch_dir("user-dir-single");
+        let cfg = resolve(&cli_with_only_user_dir(&dir));
+        assert_eq!(cfg.config_root(), dir);
+        assert_eq!(cfg.user_dir, dir);
+        assert_eq!(cfg.cache_root(), dir.join("cache"));
+        assert_eq!(cfg.config_file, dir.join("config.toml"));
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// A hand-built `Config` (no roots resolved) keeps everything beside `user_dir`.
+    #[test]
+    fn a_config_without_resolved_roots_falls_back_to_user_dir() {
+        let cfg = Config { user_dir: PathBuf::from("/u"), ..Config::default() };
+        assert_eq!(cfg.config_root(), std::path::Path::new("/u"));
+        assert_eq!(cfg.cache_root(), PathBuf::from("/u/cache"));
     }
 
     #[test]
@@ -4325,6 +4435,8 @@ use_defaults = false
             period_look: true,
             honor_timed_input: true,
             config_file: default_config_file(),
+            config_dir: None,
+            cache_dir: None,
             player: None,
             player_dir: None,
             inherited: None,

@@ -369,8 +369,10 @@ file `Zork1.z5` (SQ-0294).
 differently per host, and every host accepts `--data-dir <path>` to override
 it:
 
-- **app** — `~/.lanthorn/saves` (i.e. `<user_dir>/saves`; follows
-  `--user-dir` unless `--data-dir` is also given).
+- **app** — `<data root>/saves` (`<user_dir>/saves`): the platform's data
+  folder, or `~/.lanthorn/saves` for a legacy home — see
+  [`user-dirs.md`](user-dirs.md); follows `--user-dir` unless `--data-dir` is
+  also given.
 - **`zvm-cli` / `gvm-cli`** — the story file's own directory (so a story run
   from `~/games/zork1.z5` gets `~/games/zork1.z5/...`).
 
