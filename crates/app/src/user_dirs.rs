@@ -1,6 +1,6 @@
-//! Where lanthorn keeps a user's files: the three roots (SQ-1721, SQ-1722).
+//! Where lanthorn keeps a user's files: the four roots (SQ-1721, SQ-1722, SQ-1726).
 //!
-//! Everything lanthorn writes for a person hangs off three roots, carried together
+//! Everything lanthorn writes for a person hangs off four roots, carried together
 //! as one [`UserDirs`] the way `DataRoots` and `MachineBoot` carry their facts:
 //!
 //! | root | holds |
@@ -8,13 +8,14 @@
 //! | `config` | `config.toml`, `style.toml` |
 //! | `data` | `saves/`, `users/<name>/`, `documents/`, the user's system disks |
 //! | `cache` | only what is regenerated with no network and no user action |
+//! | `logs` | `crash.log`, `trace.log`, `stderr.log`, the `/dump-*` logs |
 //!
 //! The rules (`docs/internals/user-dirs.md`), highest first:
 //!
 //! 1. an **explicit** value: a `UserDirs` an embedding host hands in, or
 //!    `--user-dir X` (the single-folder layout inside X);
 //! 2. **legacy**: `~/.lanthorn` already exists, so it is used whole, as before;
-//! 3. the **platform defaults** (macOS Application Support/Caches, Linux XDG,
+//! 3. the **platform defaults** (macOS and Linux XDG,
 //!    Windows `%APPDATA%` / `%LOCALAPPDATA%`), under the plain name `lanthorn`.
 //!
 //! [`UserDirs::resolve`] is a pure function over an [`Inputs`] value, so every
@@ -34,12 +35,13 @@ pub const APP_DIR: &str = "lanthorn";
 /// The legacy single-folder home, `~/.lanthorn`.
 pub const LEGACY_DIR: &str = ".lanthorn";
 
-/// The three roots; see the module docs.
+/// The four roots; see the module docs.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct UserDirs {
     config: PathBuf,
     data: PathBuf,
     cache: PathBuf,
+    logs: PathBuf,
 }
 
 /// The folders could not be worked out: no home directory (and, on Windows, no
@@ -62,6 +64,8 @@ impl std::error::Error for NoHome {}
 /// The platform whose defaults [`UserDirs::resolve`] applies.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Platform {
+    /// Takes the same XDG layout as Linux: terminal tools on macOS keep their
+    /// files under `~/.config`, not `~/Library`.
     MacOs,
     /// Linux and every other Unix: the XDG layout.
     Linux,
@@ -87,11 +91,12 @@ pub struct Inputs {
     pub platform: Platform,
     /// The home directory ([`home_dir`]); `None` when it cannot be found.
     pub home: Option<PathBuf>,
-    /// `XDG_CONFIG_HOME`, `XDG_DATA_HOME`, `XDG_CACHE_HOME` as set. Only read on
-    /// Linux; an empty or relative value is ignored, per the XDG specification.
+    /// `XDG_CONFIG_HOME`, `XDG_DATA_HOME`, `XDG_CACHE_HOME`, `XDG_STATE_HOME` as set. Read on
+    /// Linux and macOS; an empty or relative value is ignored, per the XDG specification.
     pub xdg_config: Option<PathBuf>,
     pub xdg_data: Option<PathBuf>,
     pub xdg_cache: Option<PathBuf>,
+    pub xdg_state: Option<PathBuf>,
     /// Windows' roaming and local app-data folders (`%APPDATA%`,
     /// `%LOCALAPPDATA%`). Only read on Windows.
     pub appdata: Option<PathBuf>,
@@ -112,6 +117,7 @@ impl Inputs {
             xdg_config: None,
             xdg_data: None,
             xdg_cache: None,
+            xdg_state: None,
             appdata: None,
             local_appdata: None,
             legacy_exists: false,
@@ -138,6 +144,7 @@ impl Inputs {
             xdg_config: env_path("XDG_CONFIG_HOME"),
             xdg_data: env_path("XDG_DATA_HOME"),
             xdg_cache: env_path("XDG_CACHE_HOME"),
+            xdg_state: env_path("XDG_STATE_HOME"),
             appdata,
             local_appdata,
             explicit: explicit.map(Path::to_path_buf),
@@ -159,16 +166,21 @@ fn xdg(value: &Option<PathBuf>) -> Option<&Path> {
 }
 
 impl UserDirs {
-    /// Hosts that supply all three roots themselves.
-    pub fn new(config: impl Into<PathBuf>, data: impl Into<PathBuf>, cache: impl Into<PathBuf>) -> Self {
-        UserDirs { config: config.into(), data: data.into(), cache: cache.into() }
+    /// Hosts that supply all four roots themselves.
+    pub fn new(
+        config: impl Into<PathBuf>,
+        data: impl Into<PathBuf>,
+        cache: impl Into<PathBuf>,
+        logs: impl Into<PathBuf>,
+    ) -> Self {
+        UserDirs { config: config.into(), data: data.into(), cache: cache.into(), logs: logs.into() }
     }
 
     /// The single-folder layout: config, `saves/`, `documents/` and `cache/` all
-    /// inside `base`. What `--user-dir` and the legacy `~/.lanthorn` mean.
+    /// inside `base`, and the log files beside the data. What `--user-dir` and the legacy `~/.lanthorn` mean.
     pub fn single(base: impl Into<PathBuf>) -> Self {
         let base = base.into();
-        UserDirs { config: base.clone(), cache: base.join("cache"), data: base }
+        UserDirs { config: base.clone(), cache: base.join("cache"), logs: base.clone(), data: base }
     }
 
     /// Where `config.toml` and `style.toml` live.
@@ -186,6 +198,11 @@ impl UserDirs {
         &self.cache
     }
 
+    /// Where `crash.log`, `trace.log`, `stderr.log` and the `/dump-*` logs go.
+    pub fn logs(&self) -> &Path {
+        &self.logs
+    }
+
     /// Choose the roots: explicit, then legacy, then the platform defaults.
     pub fn resolve(inputs: &Inputs) -> Result<Self, NoHome> {
         if let Some(dir) = &inputs.explicit {
@@ -196,12 +213,7 @@ impl UserDirs {
         }
         let home = inputs.home.as_deref();
         match inputs.platform {
-            Platform::MacOs => {
-                let lib = home.ok_or(NoHome)?.join("Library");
-                let support = lib.join("Application Support").join(APP_DIR);
-                Ok(UserDirs { config: support.clone(), data: support, cache: lib.join("Caches").join(APP_DIR) })
-            }
-            Platform::Linux => {
+            Platform::Linux | Platform::MacOs => {
                 let pick = |x: &Option<PathBuf>, under_home: &[&str]| -> Result<PathBuf, NoHome> {
                     match xdg(x) {
                         Some(base) => Ok(base.join(APP_DIR)),
@@ -215,6 +227,7 @@ impl UserDirs {
                     config: pick(&inputs.xdg_config, &[".config"])?,
                     data: pick(&inputs.xdg_data, &[".local", "share"])?,
                     cache: pick(&inputs.xdg_cache, &[".cache"])?,
+                    logs: pick(&inputs.xdg_state, &[".local", "state"])?,
                 })
             }
             Platform::Windows => {
@@ -229,7 +242,8 @@ impl UserDirs {
                     None => home.ok_or(NoHome)?.join("AppData").join("Local"),
                 };
                 let base = roaming.join(APP_DIR);
-                Ok(UserDirs { config: base.clone(), data: base, cache: local.join(APP_DIR) })
+                let local = local.join(APP_DIR);
+                Ok(UserDirs { config: base.clone(), data: base, logs: local.join("logs"), cache: local })
             }
         }
     }
@@ -261,19 +275,20 @@ mod tests {
         Inputs { home: Some(p(home)), ..Inputs::empty(platform) }
     }
 
-    fn roots(d: &UserDirs) -> (PathBuf, PathBuf, PathBuf) {
-        (d.config().to_path_buf(), d.data().to_path_buf(), d.cache().to_path_buf())
+    fn roots(d: &UserDirs) -> (PathBuf, PathBuf, PathBuf, PathBuf) {
+        (d.config().to_path_buf(), d.data().to_path_buf(), d.cache().to_path_buf(), d.logs().to_path_buf())
     }
 
     #[test]
-    fn macos_uses_application_support_and_caches() {
+    fn macos_uses_the_xdg_dot_dirs_not_library() {
         let d = UserDirs::resolve(&with_home(Platform::MacOs, "/Users/ann")).unwrap();
         assert_eq!(
             roots(&d),
             (
-                p("/Users/ann/Library/Application Support/lanthorn"),
-                p("/Users/ann/Library/Application Support/lanthorn"),
-                p("/Users/ann/Library/Caches/lanthorn"),
+                p("/Users/ann/.config/lanthorn"),
+                p("/Users/ann/.local/share/lanthorn"),
+                p("/Users/ann/.cache/lanthorn"),
+                p("/Users/ann/.local/state/lanthorn"),
             )
         );
     }
@@ -283,7 +298,12 @@ mod tests {
         let d = UserDirs::resolve(&with_home(Platform::Linux, "/home/ann")).unwrap();
         assert_eq!(
             roots(&d),
-            (p("/home/ann/.config/lanthorn"), p("/home/ann/.local/share/lanthorn"), p("/home/ann/.cache/lanthorn"))
+            (
+                p("/home/ann/.config/lanthorn"),
+                p("/home/ann/.local/share/lanthorn"),
+                p("/home/ann/.cache/lanthorn"),
+                p("/home/ann/.local/state/lanthorn"),
+            )
         );
     }
 
@@ -293,10 +313,14 @@ mod tests {
             xdg_config: Some(p("/x/cfg")),
             xdg_data: Some(p("/x/data")),
             xdg_cache: Some(p("/x/cache")),
+            xdg_state: Some(p("/x/state")),
             ..with_home(Platform::Linux, "/home/ann")
         };
         let d = UserDirs::resolve(&i).unwrap();
-        assert_eq!(roots(&d), (p("/x/cfg/lanthorn"), p("/x/data/lanthorn"), p("/x/cache/lanthorn")));
+        assert_eq!(
+            roots(&d),
+            (p("/x/cfg/lanthorn"), p("/x/data/lanthorn"), p("/x/cache/lanthorn"), p("/x/state/lanthorn"))
+        );
     }
 
     #[test]
@@ -305,12 +329,18 @@ mod tests {
             xdg_config: Some(p("relative/cfg")),
             xdg_data: Some(p("")),
             xdg_cache: Some(p("../c")),
+            xdg_state: Some(p("state")),
             ..with_home(Platform::Linux, "/home/ann")
         };
         let d = UserDirs::resolve(&i).unwrap();
         assert_eq!(
             roots(&d),
-            (p("/home/ann/.config/lanthorn"), p("/home/ann/.local/share/lanthorn"), p("/home/ann/.cache/lanthorn"))
+            (
+                p("/home/ann/.config/lanthorn"),
+                p("/home/ann/.local/share/lanthorn"),
+                p("/home/ann/.cache/lanthorn"),
+                p("/home/ann/.local/state/lanthorn"),
+            )
         );
     }
 
@@ -320,15 +350,24 @@ mod tests {
             xdg_config: Some(p("/x/cfg")),
             xdg_data: Some(p("/x/data")),
             xdg_cache: Some(p("/x/cache")),
+            xdg_state: Some(p("/x/state")),
             ..Inputs::empty(Platform::Linux)
         };
         assert!(UserDirs::resolve(&i).is_ok());
     }
 
     #[test]
-    fn xdg_is_not_read_off_linux() {
-        let i = Inputs { xdg_data: Some(p("/x/data")), ..with_home(Platform::MacOs, "/Users/ann") };
-        assert_eq!(UserDirs::resolve(&i).unwrap().data(), p("/Users/ann/Library/Application Support/lanthorn"));
+    fn macos_honours_absolute_xdg_vars() {
+        let i = Inputs {
+            xdg_config: Some(p("/x/cfg")),
+            xdg_state: Some(p("/x/state")),
+            xdg_data: Some(p("rel/data")),
+            ..with_home(Platform::MacOs, "/Users/ann")
+        };
+        let d = UserDirs::resolve(&i).unwrap();
+        assert_eq!(d.config(), p("/x/cfg/lanthorn"));
+        assert_eq!(d.logs(), p("/x/state/lanthorn"));
+        assert_eq!(d.data(), p("/Users/ann/.local/share/lanthorn"), "a relative value is ignored");
     }
 
     #[test]
@@ -342,6 +381,7 @@ mod tests {
         assert_eq!(d.config(), p("C:\\Users\\ann\\AppData\\Roaming").join("lanthorn"));
         assert_eq!(d.data(), d.config());
         assert_eq!(d.cache(), p("C:\\Users\\ann\\AppData\\Local").join("lanthorn"));
+        assert_eq!(d.logs(), p("C:\\Users\\ann\\AppData\\Local").join("lanthorn").join("logs"));
     }
 
     /// SQ-1721: a Windows process with no `HOME` (the usual case) still resolves,
@@ -362,6 +402,7 @@ mod tests {
         let d = UserDirs::resolve(&with_home(Platform::Windows, "C:\\Users\\ann")).unwrap();
         assert_eq!(d.config(), p("C:\\Users\\ann").join("AppData").join("Roaming").join("lanthorn"));
         assert_eq!(d.cache(), p("C:\\Users\\ann").join("AppData").join("Local").join("lanthorn"));
+        assert_eq!(d.logs(), d.cache().join("logs"));
     }
 
     #[test]
@@ -377,7 +418,7 @@ mod tests {
         // environment, it must not be the working directory.
         let d = UserDirs::detect_or_temp(None);
         assert!(d.data().is_absolute(), "{:?}", d.data());
-        assert!(d.config().is_absolute() && d.cache().is_absolute());
+        assert!(d.config().is_absolute() && d.cache().is_absolute() && d.logs().is_absolute());
     }
 
     #[test]
@@ -390,7 +431,7 @@ mod tests {
             let i = Inputs { legacy_exists: true, ..with_home(platform, home) };
             let legacy = p(home).join(".lanthorn");
             let d = UserDirs::resolve(&i).unwrap();
-            assert_eq!(roots(&d), (legacy.clone(), legacy.clone(), legacy.join("cache")), "{platform:?}");
+            assert_eq!(roots(&d), (legacy.clone(), legacy.clone(), legacy.join("cache"), legacy.clone()), "{platform:?}");
         }
     }
 
@@ -412,7 +453,7 @@ mod tests {
             ..with_home(Platform::Linux, "/home/ann")
         };
         let d = UserDirs::resolve(&i).unwrap();
-        assert_eq!(roots(&d), (p("/srv/lt"), p("/srv/lt"), p("/srv/lt/cache")));
+        assert_eq!(roots(&d), (p("/srv/lt"), p("/srv/lt"), p("/srv/lt/cache"), p("/srv/lt")));
     }
 
     #[test]
@@ -422,9 +463,17 @@ mod tests {
     }
 
     #[test]
-    fn a_host_can_supply_all_three() {
-        let d = UserDirs::new("/a", "/b", "/c");
-        assert_eq!((d.config(), d.data(), d.cache()), (Path::new("/a"), Path::new("/b"), Path::new("/c")));
+    fn a_host_can_supply_all_four() {
+        let d = UserDirs::new("/a", "/b", "/c", "/d");
+        assert_eq!(
+            (d.config(), d.data(), d.cache(), d.logs()),
+            (Path::new("/a"), Path::new("/b"), Path::new("/c"), Path::new("/d"))
+        );
+    }
+
+    #[test]
+    fn the_single_layout_keeps_logs_at_base() {
+        assert_eq!(UserDirs::single("/srv/lt").logs(), Path::new("/srv/lt"));
     }
 
     #[test]

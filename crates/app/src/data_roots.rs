@@ -241,7 +241,7 @@ mod tests {
     /// meaning `resolve` documents.
     #[test]
     fn three_roots_split_data_from_cache() {
-        let dirs = UserDirs::new("/cfg", "/data", "/cache");
+        let dirs = UserDirs::new("/cfg", "/data", "/cache", "/logs");
         let s = DocumentsSettings::default();
         let r = DataRoots::resolve_in(&dirs, None, None, &s);
         assert_eq!((r.catalogue(), r.player()), (Path::new("/data/saves"), Path::new("/data/saves")));

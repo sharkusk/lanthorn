@@ -1045,16 +1045,16 @@ pub(crate) fn boot_story(
 
     // Install the panic hook FIRST so that any panic after this point (including
     // one between enable_raw_mode and EnterAlternateScreen) restores the terminal.
-    install_panic_hook(state.config.user_dir.clone());
+    install_panic_hook(state.config.logs_root().to_path_buf());
 
-    // SQ-0586: from here until teardown, fd 2 goes to <user_dir>/stderr.log instead
+    // SQ-0586: from here until teardown, fd 2 goes to <logs>/stderr.log instead
     // of the terminal. C libraries (libasound through rodio/cpal) write there
     // directly — no Rust hook can catch them — and an ALSA underrun repeated during
     // power-save lands mid-frame and corrupts the render. Installed AFTER the panic
     // hook, whose `restore_terminal` puts fd 2 back before it prints, and after the
     // CLI/picker phases so ordinary terminal output is unaffected. A failure here is
     // not worth refusing to start over: the game runs, the chatter just stays visible.
-    if let Err(e) = app::stderr_redirect::install(&state.config.user_dir.join("stderr.log")) {
+    if let Err(e) = app::stderr_redirect::install(&state.config.logs_root().join("stderr.log")) {
         eprintln!("lanthorn: could not redirect OS error output ({e}); it may corrupt the display");
     }
 

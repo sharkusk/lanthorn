@@ -40,7 +40,7 @@ pub fn export_transcript(
     Ok(target)
 }
 
-/// The `/dump-windows` log, under the lanthorn home: `<user_dir>/dump-windows.log`.
+/// The `/dump-windows` log, in the logs folder: `<logs>/dump-windows.log`.
 pub fn window_dump_path(user_dir: &Path) -> PathBuf {
     user_dir.join("dump-windows.log")
 }
@@ -72,7 +72,7 @@ pub fn append_window_dump(user_dir: &Path, lines: &[String]) -> io::Result<PathB
     Ok(target)
 }
 
-/// The `/dump-terminal` log, under the lanthorn home: `<user_dir>/dump-terminal.log`.
+/// The `/dump-terminal` log, in the logs folder: `<logs>/dump-terminal.log`.
 pub fn terminal_dump_path(user_dir: &Path) -> PathBuf {
     user_dir.join("dump-terminal.log")
 }
@@ -101,7 +101,7 @@ pub fn append_terminal_dump(user_dir: &Path, lines: &[String]) -> io::Result<Pat
     Ok(target)
 }
 
-/// The `/dump-cells` log, under the lanthorn home: `<user_dir>/dump-cells.log`.
+/// The `/dump-cells` log, in the logs folder: `<logs>/dump-cells.log`.
 pub fn cell_dump_path(user_dir: &Path) -> PathBuf {
     user_dir.join("dump-cells.log")
 }

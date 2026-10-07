@@ -5102,7 +5102,7 @@ impl AppState {
                 if job.gen == graph.struct_gen() {
                     if self.config.trace.map {
                         let steps = self.render_steps_snapshot();
-                        write_map_trace(&self.config.user_dir, &steps, true);
+                        write_map_trace(self.config.logs_root(), &steps, true);
                     }
                     *self.map_render.borrow_mut() =
                         Some(MapRenderCache { gen: job.gen, layer: job.layer, rm });

@@ -8,7 +8,8 @@
 //!
 //! Mapping, by top-level entry of the legacy folder: `config.toml` and
 //! `style.toml` go to the config root; the children of `cache/` go straight into
-//! the cache root; everything else goes to the data root. OS clutter is deleted.
+//! the cache root; top-level `*.log` files go to the logs root; everything else
+//! goes to the data root. OS clutter is deleted.
 //! Nothing is merged: if any destination exists, the plan is refused whole.
 //! Entries are only renamed; nothing is copied or recursively deleted, so a
 //! rename the OS refuses (another disk) is reported for the person to do by hand.
@@ -94,6 +95,8 @@ pub fn plan(legacy: &Path, dest: &UserDirs) -> Result<Plan, PlanError> {
             cleanup.push(path);
         } else if name == "config.toml" || name == "style.toml" {
             moves.push(Move { to: dest.config().join(&name), from: path });
+        } else if name.ends_with(".log") && path.is_file() {
+            moves.push(Move { to: dest.logs().join(&name), from: path });
         } else {
             moves.push(Move { to: dest.data().join(&name), from: path });
         }
@@ -203,6 +206,7 @@ pub fn run(
             let _ = writeln!(out, "  config: {}", dest.config().display());
             let _ = writeln!(out, "  data:   {}", dest.data().display());
             let _ = writeln!(out, "  cache:  {}", dest.cache().display());
+            let _ = writeln!(out, "  logs:   {}", dest.logs().display());
             0
         }
         Err(e) => {
@@ -265,7 +269,7 @@ mod tests {
     }
 
     fn split(root: &Path) -> UserDirs {
-        UserDirs::new(root.join("cfg"), root.join("data"), root.join("cache"))
+        UserDirs::new(root.join("cfg"), root.join("data"), root.join("cache"), root.join("logs"))
     }
 
     fn go(legacy: &Path, dest: &UserDirs, yes: bool, answer: &str) -> (i32, String, String) {
@@ -279,7 +283,8 @@ mod tests {
         assert_eq!(fs::read_to_string(d.config().join("style.toml")).unwrap(), "sty");
         assert_eq!(fs::read_to_string(d.cache().join("covers/c.png")).unwrap(), "c");
         assert_eq!(fs::read_to_string(d.data().join("saves/zork/a.save")).unwrap(), "s");
-        assert_eq!(fs::read_to_string(d.data().join("crash.log")).unwrap(), "log");
+        assert_eq!(fs::read_to_string(d.logs().join("crash.log")).unwrap(), "log");
+        assert!(!d.data().join("crash.log").exists(), "logs do not land in the data root");
         assert_eq!(fs::read_to_string(d.data().join("mystery.bin")).unwrap(), "?");
         assert!(!d.data().join(".DS_Store").exists() && !d.config().join(".DS_Store").exists());
         assert!(!d.cache().join("cache").exists() && !d.data().join("cache").exists());
@@ -295,7 +300,13 @@ mod tests {
         assert_eq!(code, 0, "{out}");
         check_moved(&d, &legacy);
         assert!(!d.config().join("saves").exists(), "config root holds only config");
-        assert!(out.contains("config:") && out.contains("cache:"), "{out}");
+        assert!(out.contains("config:") && out.contains("cache:") && out.contains("logs:"), "{out}");
+        let roots = [d.config(), d.data(), d.cache(), d.logs()];
+        for (i, a) in roots.iter().enumerate() {
+            for b in &roots[i + 1..] {
+                assert_ne!(a, b, "split roots are four distinct folders");
+            }
+        }
     }
 
     #[test]
@@ -303,7 +314,8 @@ mod tests {
         let home = scratch_dir("migrate-coincide");
         let legacy = legacy_fixture(&home);
         let shared = home.join("new/support");
-        let d = UserDirs::new(&shared, &shared, home.join("new/caches"));
+        let d = UserDirs::new(&shared, &shared, home.join("new/caches"), home.join("new/logs"));
+        assert!(d.logs() != d.config() && d.config() == d.data(), "macOS-like: logs apart from config==data");
         let (code, out, _) = go(&legacy, &d, true, "");
         assert_eq!(code, 0, "{out}");
         check_moved(&d, &legacy);
@@ -317,12 +329,16 @@ mod tests {
         fs::create_dir_all(d.data().join("saves")).unwrap();
         fs::create_dir_all(d.config()).unwrap();
         fs::write(d.config().join("config.toml"), "mine").unwrap();
+        fs::create_dir_all(d.logs()).unwrap();
+        fs::write(d.logs().join("crash.log"), "old").unwrap();
         let (code, _, err) = go(&legacy, &d, true, "");
         assert_ne!(code, 0);
-        assert!(err.contains("saves") && err.contains("config.toml"), "{err}");
+        assert!(err.contains("saves") && err.contains("config.toml") && err.contains("crash.log"), "{err}");
         assert!(legacy.join("saves/zork/a.save").exists() && legacy.join(".DS_Store").exists());
         assert_eq!(fs::read_to_string(d.config().join("config.toml")).unwrap(), "mine");
-        assert!(!d.cache().exists() && !d.data().join("crash.log").exists());
+        assert!(!d.cache().exists());
+        assert_eq!(fs::read_to_string(d.logs().join("crash.log")).unwrap(), "old");
+        assert!(legacy.join("crash.log").exists());
     }
 
     #[test]

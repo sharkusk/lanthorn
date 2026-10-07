@@ -8,7 +8,7 @@
 //! the TUI.
 //!
 //! The only thing that catches all of them is the file descriptor itself. While the
-//! alternate screen is up, fd 2 points at `<user_dir>/stderr.log` instead of the
+//! alternate screen is up, fd 2 points at `<logs>/stderr.log` instead of the
 //! terminal; on teardown it is restored. That covers every source — ALSA, PulseAudio,
 //! JACK, any C dependency present or future — rather than the one we happen to know
 //! about, and it turns invisible spam into something a user can read afterwards.
@@ -45,6 +45,9 @@ pub fn install(path: &Path) -> std::io::Result<()> {
     use std::os::fd::AsRawFd;
     if SAVED_FD.load(std::sync::atomic::Ordering::Relaxed) >= 0 {
         return Ok(()); // already installed; installing twice would leak the first save
+    }
+    if let Some(parent) = path.parent().filter(|p| !p.as_os_str().is_empty()) {
+        std::fs::create_dir_all(parent)?;
     }
     let file = std::fs::OpenOptions::new().create(true).write(true).truncate(true).open(path)?;
     // SAFETY: dup/dup2 on a fd we own (`file`) and on fd 2. `saved` is stored and

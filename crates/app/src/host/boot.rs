@@ -802,7 +802,7 @@ pub fn boot_story(req: BootRequest<'_>, hooks: &mut dyn BootHooks) -> Result<Boo
     // sidecar in place (SQ-0290).
     let _ = std::fs::create_dir_all(&game_dir);
     let vfs_sidecar = crate::vfs_store::read_vfs(&game_dir);
-    crate::trace::hostio(&cfg.user_dir, cfg.trace.hostio,
+    crate::trace::hostio(cfg.logs_root(), cfg.trace.hostio,
         format!("vfs_read({} bytes)", vfs_sidecar.len()));
 
     // Resolve the look from style.toml (the single styling source) BEFORE the
@@ -1640,7 +1640,7 @@ pub fn boot_story(req: BootRequest<'_>, hooks: &mut dyn BootHooks) -> Result<Boo
     // Debug trace (trace feature): start a fresh log for this run and arm the
     // engine's screen-trace buffer per config; no-op when no section is active.
     if state.config.trace.any() {
-        crate::trace::truncate(&state.config.user_dir);
+        crate::trace::truncate(state.config.logs_root());
     }
     session.set_trace_screen(state.config.trace.screen);
 
@@ -1883,12 +1883,12 @@ pub fn boot_story(req: BootRequest<'_>, hooks: &mut dyn BootHooks) -> Result<Boo
         let drain_turns = startup_turns.unwrap_or(state.turns);
         crate::session::apply_room_description(&mut mapper, drain_turns, &seed_result);
         crate::session::apply_item_observations(&mut mapper, drain_turns, &seed_result);
-        flush_screen_trace(&state.config.user_dir, &mut *session, state.config.trace.screen);
-        flush_v6_trace(&state.config.user_dir, &mut *session, state.config.trace.v6);
+        flush_screen_trace(state.config.logs_root(), &mut *session, state.config.trace.screen);
+        flush_v6_trace(state.config.logs_root(), &mut *session, state.config.trace.v6);
         if state.config.trace.any() {
             let ptr = format!(
                 "[trace → {}: {}]",
-                state.config.user_dir.join("trace.log").display(),
+                state.config.logs_root().join("trace.log").display(),
                 state.config.trace.active_list(),
             );
             state.push_transcript_internal(&ptr, crate::state::TranscriptKind::Meta);

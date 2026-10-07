@@ -558,7 +558,7 @@ pub struct Cli {
     pub yes: bool,
 
     /// Debug trace sections to enable from boot: comma list of screen,map,hostio,v6
-    /// (or `all`/`none`). Output goes to <user_dir>/trace.log. (trace feature)
+    /// (or `all`/`none`). Output goes to <logs>/trace.log. (trace feature)
     #[arg(long, value_name = "LIST")]
     pub trace: Option<String>,
 
@@ -1989,6 +1989,10 @@ pub struct Config {
     /// Never persisted. Read it through [`Config::cache_root`].
     #[serde(skip)]
     pub cache_dir: Option<PathBuf>,
+    /// Where log files go (SQ-1726); `None` means [`Config::user_dir`] itself.
+    /// Never persisted. Read it through [`Config::logs_root`].
+    #[serde(skip)]
+    pub logs_dir: Option<PathBuf>,
     /// The named player this run belongs to (SQ-1676); `None` is the default
     /// player. When set, [`Config::config_file`] is that player's own bare-lines
     /// `users/<name>/config.toml`, layered over the shared one.
@@ -2148,9 +2152,14 @@ impl Config {
         self.cache_dir.clone().unwrap_or_else(|| self.user_dir.join("cache"))
     }
 
-    /// This run's three roots as one value, ready for `DataRoots::resolve_in`.
+    /// The folder for log files: the logs root, or [`Config::user_dir`].
+    pub fn logs_root(&self) -> &std::path::Path {
+        self.logs_dir.as_deref().unwrap_or(&self.user_dir)
+    }
+
+    /// This run's four roots as one value, ready for `DataRoots::resolve_in`.
     pub fn user_dirs(&self) -> UserDirs {
-        UserDirs::new(self.config_root(), &self.user_dir, self.cache_root())
+        UserDirs::new(self.config_root(), &self.user_dir, self.cache_root(), self.logs_root())
     }
 
     /// The configured documents root (SQ-1679), read from the SHARED config only.
@@ -2480,6 +2489,7 @@ impl Default for Config {
             config_file: default_config_file(),
             config_dir: None,
             cache_dir: None,
+            logs_dir: None,
             player: None,
             player_dir: None,
             inherited: None,
@@ -2712,6 +2722,7 @@ fn resolve_config_layers(
         user_dir: dirs.data().to_path_buf(),
         config_dir: Some(dirs.config().to_path_buf()),
         cache_dir: Some(dirs.cache().to_path_buf()),
+        logs_dir: Some(dirs.logs().to_path_buf()),
         ..Config::default()
     };
 
@@ -4069,7 +4080,7 @@ mod tests {
     #[test]
     fn resolve_with_dirs_reads_the_config_root_and_keeps_three_roots() {
         let base = crate::scratch_dir("resolve-with-dirs");
-        let dirs = UserDirs::new(base.join("cfg"), base.join("data"), base.join("cache"));
+        let dirs = UserDirs::new(base.join("cfg"), base.join("data"), base.join("cache"), base.join("logs"));
         std::fs::create_dir_all(dirs.config()).unwrap();
         std::fs::write(dirs.config().join("config.toml"), "volume = 33\n").unwrap();
         // A file in the DATA root must not be mistaken for the config.
@@ -4456,6 +4467,7 @@ use_defaults = false
             config_file: default_config_file(),
             config_dir: None,
             cache_dir: None,
+            logs_dir: None,
             player: None,
             player_dir: None,
             inherited: None,

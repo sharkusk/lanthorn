@@ -44,10 +44,13 @@ while any such tag, or this Unreleased section, still exists.*
   those of games no longer in your library.
 
 - **New installs keep their files in your platform's standard folders.** Config
-  and styles, saves, documents and the cache now live in `~/Library/Application
-  Support/lanthorn` and `~/Library/Caches/lanthorn` on macOS, `%APPDATA%\lanthorn`
-  and `%LOCALAPPDATA%\lanthorn` on Windows, and the XDG folders on Linux, instead
-  of a dot-folder in your home directory. If you already have `~/.lanthorn` it
+  and styles, saves, documents and the cache now live in the XDG folders
+  (`~/.config/lanthorn`, `~/.local/share/lanthorn`, `~/.cache/lanthorn`) on macOS
+  and Linux, and in `%APPDATA%\lanthorn` and `%LOCALAPPDATA%\lanthorn` on
+  Windows, instead of a dot-folder in your home directory. Log files (`crash.log`
+  and the `/dump-*` logs) get their own folder: `~/.local/state/lanthorn` on macOS
+  and Linux, `%LOCALAPPDATA%\lanthorn\logs` on Windows. `--migrate-user-dir`
+  moves an old `*.log` there too. If you already have `~/.lanthorn` it
   keeps being used exactly as before, and `--user-dir` still puts everything in
   one folder. On Windows, lanthorn no longer depends on a `HOME` variable being
   set to find your files.

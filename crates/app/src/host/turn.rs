@@ -323,8 +323,8 @@ pub fn finish_command_turn(
         first_line = before_push - 1;
     }
     apply_turn_events(state, &result);
-    flush_screen_trace(&state.config.user_dir, session, state.config.trace.screen);
-    flush_v6_trace(&state.config.user_dir, session, state.config.trace.v6);
+    flush_screen_trace(state.config.logs_root(), session, state.config.trace.screen);
+    flush_v6_trace(state.config.logs_root(), session, state.config.trace.v6);
     // [more] pager (SQ-0404, ruleset reworked in SQ-0539): arm for this command's
     // output whenever the game is now awaiting the player — LINE *or* CHAR — and
     // the v6 "never print [MORE]" veto is off. The old `!result.erase_lower`
@@ -896,7 +896,7 @@ pub fn persist_vfs_after_turn(
     let bytes = session.vfs_bytes();
     let _ = crate::vfs_store::write_vfs(game_dir, &bytes);
     session.clear_vfs_dirty();
-    crate::trace::hostio(&state.config.user_dir, state.config.trace.hostio,
+    crate::trace::hostio(state.config.logs_root(), state.config.trace.hostio,
         format!("vfs_write({} bytes)", bytes.len()));
 }
 
@@ -1082,13 +1082,14 @@ pub fn apply_launch_resume(
 
 // ── Game-driven input helpers (char-mode keypress, timed-input interrupt) ──────
 
-/// Append a gvm runtime fault (diagnostics + fault trace) to `user_dir/crash.log`.
+/// Append a gvm runtime fault (diagnostics + fault trace) to `<logs>/crash.log`.
 /// A fault ends the game via a silent `Quit`, so this makes the failure durable
 /// regardless of terminal state. IO errors are ignored (best-effort logging).
-fn log_gvm_fault(user_dir: &std::path::Path, fault: &[String], diagnostics: &[String]) {
+fn log_gvm_fault(logs: &std::path::Path, fault: &[String], diagnostics: &[String]) {
     use std::io::Write as _;
+    let _ = std::fs::create_dir_all(logs);
     let Ok(mut f) =
-        std::fs::OpenOptions::new().create(true).append(true).open(user_dir.join("crash.log"))
+        std::fs::OpenOptions::new().create(true).append(true).open(logs.join("crash.log"))
     else {
         return;
     };
@@ -1123,7 +1124,7 @@ fn apply_turn_events(state: &mut AppState, result: &TurnResult) {
         // A gvm runtime fault ends the game via a silent Quit; if the app then
         // exits before this transcript is rendered, the error would vanish. Record
         // it durably so a "silent" crash always leaves a trace.
-        log_gvm_fault(&state.config.user_dir, lines, &result.diagnostics);
+        log_gvm_fault(state.config.logs_root(), lines, &result.diagnostics);
         // Keep the app alive: a VM fault is not a clean glk_exit. The run loop's
         // exit checks all gate on `should_exit_on_turn`, which consults this flag.
         state.vm_halted = true;

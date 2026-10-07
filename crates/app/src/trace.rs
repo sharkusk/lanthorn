@@ -1,6 +1,6 @@
 //! Multi-section debug trace (SQ-0403 follow-up). Best-effort, std-only.
 //! Sections are toggled via `--trace <list>` and `/trace <list>`; output goes
-//! to `<user_dir>/trace.log`, one `[section] message` line per event.
+//! to `<logs>/trace.log`, one `[section] message` line per event.
 
 use std::io::Write as _;
 use std::path::Path;
@@ -74,8 +74,10 @@ impl TraceSections {
     }
 }
 
-fn log_path(user_dir: &Path) -> std::path::PathBuf {
-    user_dir.join("trace.log")
+/// `trace.log` inside the logs folder, which is created if missing.
+fn log_path(logs: &Path) -> std::path::PathBuf {
+    let _ = std::fs::create_dir_all(logs);
+    logs.join("trace.log")
 }
 
 /// Start a fresh trace log (best-effort). Used at boot so each run stands alone.

@@ -82,14 +82,14 @@ pub enum SlashOutcome {
     /// colours) to the transcript as Meta lines. Handled in `slash_dispatch`.
     DumpWindows,
     /// Diagnostic: write the last frame's rendered CELLS — glyphs plus per-cell
-    /// colours and attributes — to `~/.lanthorn/dump-cells.log` as plain text
+    /// colours and attributes — to `dump-cells.log` in the logs folder as plain text
     /// (SQ-0761). Handled in `slash_dispatch`.
     DumpCells,
     /// Diagnostic: what lanthorn detected about this TERMINAL — protocol, cell
     /// size and whether it was measured or guessed, capabilities, whether kitty
     /// uploads are compressed — plus the render state and byte counts that
     /// explain the traffic (SQ-0994). Printed to the transcript and mirrored to
-    /// `~/.lanthorn/dump-terminal.log`. Handled in `slash_dispatch`.
+    /// `dump-terminal.log` in the logs folder. Handled in `slash_dispatch`.
     DumpTerminal,
     /// Toggle the Z-machine debug inspector tiled pane. Handled in `slash_dispatch`
     /// (needs AppState + the engine's debugger capability).
@@ -723,13 +723,13 @@ pub static COMMANDS: &[CommandSpec] = &[
 
     // ── Help ──────────────────────────────────────────────────────────────
     CommandSpec { name: "dump-windows", category: Category::Help, context: Context::Global,
-        usage: "dump-windows", description: "dump the last game frame's window layout, here and to dump-windows.log in your data folder",
+        usage: "dump-windows", description: "dump the last game frame's window layout, here and to dump-windows.log in your logs folder",
         dispatch: |_| SlashOutcome::DumpWindows },
     CommandSpec { name: "dump-cells", category: Category::Help, context: Context::Global,
-        usage: "dump-cells", description: "write the last frame's cells — glyphs, colours and attributes — to dump-cells.log in your data folder",
+        usage: "dump-cells", description: "write the last frame's cells — glyphs, colours and attributes — to dump-cells.log in your logs folder",
         dispatch: |_| SlashOutcome::DumpCells },
     CommandSpec { name: "dump-terminal", category: Category::Help, context: Context::Global,
-        usage: "dump-terminal", description: "dump this terminal's detected protocol, cell size, capabilities and traffic — here and to dump-terminal.log in your data folder",
+        usage: "dump-terminal", description: "dump this terminal's detected protocol, cell size, capabilities and traffic — here and to dump-terminal.log in your logs folder",
         dispatch: |_| SlashOutcome::DumpTerminal },
     CommandSpec { name: "debug", category: Category::Help, context: Context::Global,
         usage: "debug", description: "toggle the Z-machine debug inspector pane",

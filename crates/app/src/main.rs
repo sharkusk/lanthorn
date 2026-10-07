@@ -422,7 +422,7 @@ fn exit_save_on_error_exit(
 /// A *recovered* worker panic still gets its `crash.log` record — the crash is
 /// real and worth diagnosing — but no teardown, no banner, and no chaining to the
 /// default hook, whose own stderr dump would land mid-frame on a live screen.
-fn install_panic_hook(user_dir: std::path::PathBuf) {
+fn install_panic_hook(logs_dir: std::path::PathBuf) {
     PANIC_HOOK_ONCE.call_once(move || {
         let _ = MAIN_THREAD.set(std::thread::current().id());
         let default_hook = std::panic::take_hook();
@@ -432,10 +432,11 @@ fn install_panic_hook(user_dir: std::path::PathBuf) {
                 restore_terminal();
             }
             let backtrace = std::backtrace::Backtrace::force_capture();
-            let log_path = user_dir.join("crash.log");
+            let _ = std::fs::create_dir_all(&logs_dir);
+            let log_path = logs_dir.join("crash.log");
             let path = match write_crash_log(&log_path, info, &backtrace) {
                 Ok(()) => log_path,
-                // Fall back to the temp dir if the user dir isn't writable.
+                // Fall back to the temp dir if the logs folder isn't writable.
                 Err(_) => {
                     let tmp = std::env::temp_dir().join("lanthorn-crash.log");
                     let _ = write_crash_log(&tmp, info, &backtrace);
@@ -3266,7 +3267,7 @@ fn run_event_loop(boot: startup::BootResult, launched_from_library: bool) -> Run
                         );
                         if !withhold_arrow {
                             if let Some(result) = ki.and_then(|ki| {
-                                app::trace::hostio(&state.config.user_dir, state.config.trace.hostio, format!("input_key({ki:?})"));
+                                app::trace::hostio(state.config.logs_root(), state.config.trace.hostio, format!("input_key({ki:?})"));
                                 session.submit_key(ki)
                             })
                             {
@@ -3966,7 +3967,7 @@ fn run_event_loop(boot: startup::BootResult, launched_from_library: bool) -> Run
                 // above still has to run here too, since a slash command never
                 // reaches that function at all.
 
-                app::trace::hostio(&state.config.user_dir, state.config.trace.hostio, format!("input_line({cmd:?})"));
+                app::trace::hostio(state.config.logs_root(), state.config.trace.hostio, format!("input_line({cmd:?})"));
                 let result = session.submit(&cmd);
                 if turn::finish_command_turn(
                     &cmd, true, result, &mut state, &mut mapper, &mut *session,

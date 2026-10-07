@@ -207,7 +207,7 @@ pub(crate) fn dispatch_slash_outcome(
             // a terminal selection over the dump takes them with it — the user's paste
             // came back placeholder-dense and truncated mid-field (SQ-0756). The log
             // is readable from another terminal while the game is still running.
-            let msg = match app::export::append_window_dump(&state.config.user_dir, &out) {
+            let msg = match app::export::append_window_dump(state.config.logs_root(), &out) {
                 Ok(p) => format!("  [dump appended to {} — copy it from there, not off the screen]", crate::abbreviate_home(&p)),
                 Err(e) => format!("  [dump log failed: {e}]"),
             };
@@ -224,7 +224,7 @@ pub(crate) fn dispatch_slash_outcome(
                 None => "[dump-cells] no frame has been drawn yet — nothing to dump".to_string(),
                 Some(frame) => {
                     let lines = frame.lines();
-                    match app::export::append_cell_dump(&state.config.user_dir, &lines) {
+                    match app::export::append_cell_dump(state.config.logs_root(), &lines) {
                         Ok(p) => format!(
                             "[dump-cells] {} rows x {} cols of glyphs + styling appended to {} \
                              — copy it from there, not off the screen",
@@ -265,7 +265,7 @@ pub(crate) fn dispatch_slash_outcome(
             // on-screen copy is exactly the thing that cannot be pasted into a bug
             // report. This is the report most likely to be wanted in one.
             let text = app::terminal_dump::dump_text(&snap);
-            let msg = match app::export::append_terminal_dump(&state.config.user_dir, &text) {
+            let msg = match app::export::append_terminal_dump(state.config.logs_root(), &text) {
                 Ok(p) => format!(
                     "  [report appended to {} — copy it from there, not off the screen]",
                     crate::abbreviate_home(&p)
@@ -418,7 +418,7 @@ pub(crate) fn dispatch_slash_outcome(
                     // The restore and everything the archive carries back is the
                     // library's (`host::persist::restore_file`, SQ-1539).
                     let restored = app::host::persist::restore_file(&mut *session, mapper, state, path, map_view(map_rect));
-                    app::trace::hostio(&state.config.user_dir, state.config.trace.hostio, format!("restore_state({})", path.display()));
+                    app::trace::hostio(state.config.logs_root(), state.config.trace.hostio, format!("restore_state({})", path.display()));
                     match restored {
                         Ok(app::host::persist::Restored::GameSave { .. }) => state.set_status("restored"),
                         Ok(app::host::persist::Restored::Resumed) => state.set_status("loaded"),
@@ -1145,7 +1145,7 @@ pub(crate) fn apply_slash_save_result(result: Result<String, String>, session: &
             // Progress is now captured in a Save State — quitting is safe.
             state.unsaved_progress = false;
             if state.config.trace.hostio {
-                app::trace::hostio(&state.config.user_dir, true, format!("save_state({} bytes)", session.save_state().bytes.len()));
+                app::trace::hostio(state.config.logs_root(), true, format!("save_state({} bytes)", session.save_state().bytes.len()));
             }
             state.set_status(msg);
         }

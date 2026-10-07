@@ -413,13 +413,13 @@ live under `~/.lanthorn/saves/<story-filename>.save/` by default; `--data-dir
 
 *Next release:* a new install keeps its files in your platform's standard
 folders instead of a dot-folder in your home directory. Config and styles
-(`config.toml`, `style.toml`) live in `~/Library/Application Support/lanthorn`
-on macOS, `%APPDATA%\lanthorn` on Windows and `~/.config/lanthorn` on Linux;
-saves, per-player folders, documents and your own system disks live in the same
-macOS and Windows folders, or `~/.local/share/lanthorn` on Linux; and the
-regenerable cache lives in `~/Library/Caches/lanthorn`, `%LOCALAPPDATA%\lanthorn`
-or `~/.cache/lanthorn`. (Linux honours `XDG_CONFIG_HOME`, `XDG_DATA_HOME` and
-`XDG_CACHE_HOME`.) If `~/.lanthorn` already exists it keeps being used, whole,
+(`config.toml`, `style.toml`) live in `~/.config/lanthorn` on macOS and Linux and
+`%APPDATA%\lanthorn` on Windows; saves, per-player folders, documents and your
+own system disks live in `~/.local/share/lanthorn` (Windows: the same folder as
+config); the regenerable cache lives in `~/.cache/lanthorn` or
+`%LOCALAPPDATA%\lanthorn`; and `crash.log` and the `/dump-*` logs live in
+`~/.local/state/lanthorn` or `%LOCALAPPDATA%\lanthorn\logs`. (macOS and Linux
+honour `XDG_CONFIG_HOME`, `XDG_DATA_HOME`, `XDG_CACHE_HOME` and `XDG_STATE_HOME`.) If `~/.lanthorn` already exists it keeps being used, whole,
 exactly as before, and `--user-dir <folder>` still puts everything in one
 folder of your choosing. *Next release:* `lanthorn --migrate-user-dir` moves an
 existing `~/.lanthorn` into the standard folders (it shows the plan and asks

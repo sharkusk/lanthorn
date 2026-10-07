@@ -4,10 +4,10 @@ Design for SQ-1721, SQ-1722 and SQ-1723, settled with the user on 2026-10-06.
 Lane A builds the roots (SQ-1721 + SQ-1722); lane B builds the shared IFDB
 store on top of them (SQ-1723).
 
-## The three roots
+## The four roots
 
-Everything lanthorn writes for a user hangs off three roots, carried together
-as one value, `UserDirs { config, data, cache }` — the same "facts that travel
+Everything lanthorn writes for a user hangs off four roots, carried together
+as one value, `UserDirs { config, data, cache, logs }` — the same "facts that travel
 together" rule as `DataRoots` and `MachineBoot`. `DataRoots` (catalogue /
 player / documents / cache) is derived from a `UserDirs`, never from a bare
 path.
@@ -16,15 +16,24 @@ path.
 |---|---|
 | **config** | `config.toml`, `style.toml` |
 | **data** | `saves/` (the catalogue and the default player), `users/<name>/`, `documents/`, the user's system disks (`system_fonts::user_media_dir`) |
+| **logs** (SQ-1726) | `crash.log`, `trace.log`, `stderr.log`, `dump-windows.log`, `dump-cells.log`, `dump-terminal.log`. Written through `Config::logs_root()`, which creates the folder on write. |
 | **cache** | only what can be regenerated without network traffic or user action (today: `miss_cache`). Fetched IFDB records and covers are **data**, not cache: the OS and users purge caches, and refetching means unprompted IFDB traffic. |
 
 ### Platform defaults (new installs only)
 
-| | config | data | cache |
-|---|---|---|---|
-| macOS | `~/Library/Application Support/lanthorn` | same as config | `~/Library/Caches/lanthorn` |
-| Linux / other Unix | `$XDG_CONFIG_HOME/lanthorn` (`~/.config/lanthorn`) | `$XDG_DATA_HOME/lanthorn` (`~/.local/share/lanthorn`) | `$XDG_CACHE_HOME/lanthorn` (`~/.cache/lanthorn`) |
-| Windows | `%APPDATA%\lanthorn` | same as config | `%LOCALAPPDATA%\lanthorn` |
+| | config | data | cache | logs |
+|---|---|---|---|---|
+| macOS, Linux / other Unix | `$XDG_CONFIG_HOME/lanthorn` (`~/.config/lanthorn`) | `$XDG_DATA_HOME/lanthorn` (`~/.local/share/lanthorn`) | `$XDG_CACHE_HOME/lanthorn` (`~/.cache/lanthorn`) | `$XDG_STATE_HOME/lanthorn` (`~/.local/state/lanthorn`) |
+| Windows | `%APPDATA%\lanthorn` | same as config | `%LOCALAPPDATA%\lanthorn` | `%LOCALAPPDATA%\lanthorn\logs` |
+
+macOS takes the XDG layout rather than `~/Library`: lanthorn is a terminal app,
+and terminal tools on macOS (git, gh, neovim, helix, Ghostty, kitty) keep their
+files in `~/.config`, so they sync with dotfiles across Mac and Linux. An XDG
+value counts only if it starts with `/`. A sandboxed Mac App Store build gets its
+container through the explicit `UserDirs` an embedding host hands in, so the
+defaults need not suit it. The single-folder layouts (`~/.lanthorn`,
+`--user-dir`, Docker) keep logs at the base folder itself, so log files stay
+where they always were.
 
 The folder name is plain `lanthorn` (no reverse-DNS bundle id). Resolved with
 the `dirs` crate's base directories plus our own name — not `ProjectDirs`,
@@ -45,7 +54,8 @@ that is what XDG asks for, and a user who wants one folder keeps (or creates)
    there is no prompt. The one way out is opt-in: `lanthorn --migrate-user-dir
    [--yes]` (`migrate_user_dir.rs`) lists every move, asks, then moves
    `config.toml`/`style.toml` to the platform config root, the contents of
-   `cache/` to the cache root and everything else to the data root, deletes OS
+   `cache/` to the cache root, top-level `*.log` files to the logs root and
+   everything else to the data root, deletes OS
    clutter (`.DS_Store`, `Thumbs.db`, `desktop.ini`), removes the emptied
    `~/.lanthorn`, and exits without starting the TUI. It refuses, changing
    nothing, if `~/.lanthorn` is missing, if `--user-dir` is also given, or if

@@ -31,7 +31,7 @@ It probably hasn't. A Glulx story whose turn runs for ten seconds without ever
 asking for input is taken to be caught in a runaway loop: lanthorn abandons
 that turn rather than freezing on it, and the map, your scrollback and your
 ability to quit all keep working throughout. A record of what happened lands
-in `crash.log` in your data folder.
+in `crash.log` in your logs folder (see below).
 
 ## On Windows: I closed the console and lost my progress
 
@@ -50,25 +50,28 @@ a game vanishes from where you expect it, check wherever Frotz moved it to
 
 ## Where does lanthorn keep everything?
 
-lanthorn keeps its files in three folders, which on a new install are your
+lanthorn keeps its files in four folders, which on a new install are your
 platform's standard ones:
 
-| | config | data | cache |
-|---|---|---|---|
-| macOS | `~/Library/Application Support/lanthorn` | the same folder | `~/Library/Caches/lanthorn` |
-| Windows | `%APPDATA%\lanthorn` | the same folder | `%LOCALAPPDATA%\lanthorn` |
-| Linux | `~/.config/lanthorn` | `~/.local/share/lanthorn` | `~/.cache/lanthorn` |
+| | config | data | cache | logs |
+|---|---|---|---|---|
+| macOS and Linux | `~/.config/lanthorn` | `~/.local/share/lanthorn` | `~/.cache/lanthorn` | `~/.local/state/lanthorn` |
+| Windows | `%APPDATA%\lanthorn` | the same folder | `%LOCALAPPDATA%\lanthorn` | `%LOCALAPPDATA%\lanthorn\logs` |
 
-On Linux the `XDG_CONFIG_HOME`, `XDG_DATA_HOME` and `XDG_CACHE_HOME` variables
-move them, as usual (a blank or relative value is ignored).
+On macOS and Linux the `XDG_CONFIG_HOME`, `XDG_DATA_HOME`, `XDG_CACHE_HOME` and
+`XDG_STATE_HOME` variables move them, as usual (a blank or relative value is
+ignored). macOS uses these terminal-tool folders, not `~/Library`, so your
+config can travel with your dotfiles.
 
 - **Config folder:** `config.toml` and `style.toml`.
 - **Data folder:** saves and per-game sidecars in `saves/<story>.save/`, one
   directory per game (a disk image keys on its release and serial rather than
   a filename, so different builds of the same story never collide); other
   players' trees in `users/`; each game's `documents/` folder; the system disks
-  and Kickstart ROMs you drop in; and crash and diagnostic logs such as
-  `crash.log` and `dump-terminal.log`.
+  and Kickstart ROMs you drop in.
+- **Logs folder:** `crash.log`, `trace.log`, `stderr.log` and what
+  `/dump-windows`, `/dump-cells` and `/dump-terminal` write. Attach these to a
+  bug report. With `~/.lanthorn` or `--user-dir` they sit in that one folder.
 - **Cache folder:** only things lanthorn can rebuild on its own, which is safe
   to delete.
 
