@@ -823,28 +823,7 @@ pub fn looks_like_story_file(filename: &str, bytes: &[u8]) -> bool {
 /// control chars and anything path-significant, and require it to still end in
 /// an accepted story extension. `None` if nothing safe/openable remains.
 pub fn sanitize_filename(raw: &str) -> Option<String> {
-    sanitize_basename(raw).filter(|c| is_named_story_file(Path::new(c)))
-}
-
-/// [`sanitize_filename`] without the story-extension requirement: the safe final
-/// component of an untrusted name, for the documents downloader (SQ-1680), whose
-/// files are manuals and maps rather than stories.
-pub(crate) fn sanitize_basename(raw: &str) -> Option<String> {
-    // Final component under BOTH separators — `a/../b`, `..\\evil`, `/etc/x`.
-    let base = raw.rsplit(['/', '\\']).next().unwrap_or(raw).trim();
-    // A lone/leading-dot name (".", "..", ".z5") is never a real story file.
-    if base.is_empty() || base.starts_with('.') {
-        return None;
-    }
-    let cleaned: String = base
-        .chars()
-        .filter(|c| !c.is_control() && !matches!(c, '/' | '\\' | '\0'))
-        .collect();
-    let cleaned = cleaned.trim().to_string();
-    if cleaned.is_empty() || cleaned == ".." {
-        return None;
-    }
-    Some(cleaned)
+    crate::documents::sanitise_filename(raw).filter(|c| is_named_story_file(Path::new(c)))
 }
 
 /// A non-colliding path in `dir` for `filename`: returns `dir/filename` if free,

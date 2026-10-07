@@ -63,7 +63,7 @@ use std::sync::mpsc;
 use crate::data_roots::DataRoots;
 use crate::documents::{DocMeta, Imported};
 use crate::ifdb_search::{
-    basename_from_url, child_text, one_line, sanitize_basename, subtitle_of, too_large_message,
+    basename_from_url, child_text, one_line, subtitle_of, too_large_message,
     IfdbGate, IfdbWorker, RangeProbe, SearchError, SearchSource, MAX_DOWNLOAD,
 };
 
@@ -180,21 +180,6 @@ fn classify(url: &str, format: Option<&str>) -> Option<LinkKind> {
         .then_some(LinkKind::Text)
 }
 
-/// A file name that is safe on Windows, macOS and Linux: [`sanitize_basename`]
-/// plus the characters Windows refuses, trailing dots and spaces dropped, and a
-/// device name (`CON`) defanged.
-fn document_filename(raw: &str) -> Option<String> {
-    let base = sanitize_basename(raw)?;
-    let replaced: String =
-        base.chars().map(|c| if matches!(c, ':' | '*' | '?' | '"' | '<' | '>' | '|') { '_' } else { c }).collect();
-    let trimmed = replaced.trim_end_matches(['.', ' ']).to_string();
-    if trimmed.is_empty() || trimmed.starts_with('.') {
-        return None;
-    }
-    let stem = trimmed.split('.').next().unwrap_or("").to_ascii_uppercase();
-    Some(if crate::documents::WINDOWS_RESERVED.contains(&stem.as_str()) { format!("_{trimmed}") } else { trimmed })
-}
-
 /// The documents among a viewgame iFiction record's download links, in record
 /// order. A record with none, or one that does not parse, yields an empty vec.
 pub fn parse_document_options(xml: &[u8]) -> Vec<DocumentOption> {
@@ -209,7 +194,7 @@ pub fn parse_document_options(xml: &[u8]) -> Vec<DocumentOption> {
             }
             let format = child_text(link, "format");
             let kind = classify(&url, format.as_deref())?;
-            let filename = document_filename(&basename_from_url(&url)?)?;
+            let filename = crate::documents::sanitise_filename(&basename_from_url(&url)?)?;
             let path = url_path(&url);
             let title = child_text(link, "title").and_then(|t| one_line(&t));
             let desc = child_text(link, "desc").and_then(|d| one_line(&d));
@@ -249,7 +234,7 @@ pub fn safe_entry_basename(path: &str) -> Option<String> {
     if norm.split('/').any(|c| c == "..") {
         return None;
     }
-    document_filename(norm.trim_end_matches('/').rsplit('/').next()?)
+    crate::documents::sanitise_filename(norm.trim_end_matches('/').rsplit('/').next()?)
 }
 
 fn squash(s: &str) -> String {

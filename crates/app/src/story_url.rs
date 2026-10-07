@@ -27,7 +27,7 @@
 //! - **The body is capped** at [`MAX_DOWNLOAD`], rejected on an honest
 //!   `Content-Length` before a byte is read and again while reading (the
 //!   `read_capped` the IFDB downloader already uses).
-//! - **The filename is derived, never adopted.** [`safe_basename`] keeps only
+//! - **The filename is derived, never adopted.** [`sanitise_filename`] keeps only
 //!   the final path component under BOTH separators, drops control and
 //!   path-significant characters and refuses `.`/`..`/leading-dot names, so a
 //!   `Content-Disposition: filename="../../.bashrc"` cannot escape the
@@ -44,6 +44,7 @@ use std::path::{Path, PathBuf};
 use std::sync::mpsc;
 use std::thread;
 
+use crate::documents::sanitise_filename;
 use crate::ifdb_search::{
     read_capped, unique_dest, BODY_TIMEOUT, CONNECT_TIMEOUT, HEADERS_TIMEOUT, MAX_DOWNLOAD,
 };
@@ -296,28 +297,6 @@ pub fn describe_payload(bytes: &[u8]) -> String {
 
 // ── Naming the local file ────────────────────────────────────────────────────
 
-/// Reduce an untrusted name to a safe basename — the final component under both
-/// separators, control and path characters dropped, `.`/`..`/leading-dot names
-/// refused. Unlike `ifdb_search::sanitize_filename` this does NOT require a
-/// story extension, because a fetched file's extension is settled by its
-/// CONTENT ([`local_filename`]) and plenty of legitimate download URLs end in
-/// `/download` or a query string.
-pub fn safe_basename(raw: &str) -> Option<String> {
-    let base = raw.rsplit(['/', '\\']).next().unwrap_or(raw).trim();
-    if base.is_empty() || base.starts_with('.') {
-        return None;
-    }
-    let cleaned: String = base
-        .chars()
-        .filter(|c| !c.is_control() && !matches!(c, '/' | '\\' | '\0' | ':'))
-        .collect();
-    let cleaned = cleaned.trim().to_string();
-    if cleaned.is_empty() || cleaned == ".." || cleaned.chars().all(|c| c == '.') {
-        return None;
-    }
-    Some(cleaned)
-}
-
 /// The last path segment of a URL, percent-decoded, query and fragment stripped.
 fn basename_from_url(url: &str) -> Option<String> {
     let no_frag = url.split('#').next().unwrap_or(url);
@@ -355,8 +334,8 @@ pub fn local_filename(disposition: Option<&str>, url: &str, bytes: &[u8]) -> Opt
     let ext = content_extension(bytes)?;
     let stem = disposition
         .and_then(filename_from_disposition)
-        .and_then(|n| safe_basename(&n))
-        .or_else(|| basename_from_url(url).and_then(|n| safe_basename(&n)))
+        .and_then(|n| sanitise_filename(&n))
+        .or_else(|| basename_from_url(url).and_then(|n| sanitise_filename(&n)))
         .unwrap_or_else(|| "story".to_string());
     // `picker::has_story_ext` includes `.zip` (SQ-1086), so an archive keeps its
     // own name rather than being relabelled after the story inside it — the
@@ -471,7 +450,7 @@ pub struct ArchiveImage {
     /// `Journey/disks/journey_s1.dsk`.
     pub entry: String,
     /// What it lands in the library as: the final component only
-    /// ([`safe_basename`]).
+    /// ([`sanitise_filename`]).
     ///
     /// **Flattened, never recreated.** A multi-disk release whose images landed
     /// in a subdirectory would not be found as siblings by
@@ -551,7 +530,7 @@ pub fn zip_disk_images(path: &Path) -> Result<Vec<ArchiveImage>, FetchError> {
         if escapes_destination(&entry) {
             return Err(FetchError::UnsafeEntry(entry));
         }
-        match safe_basename(&entry) {
+        match sanitise_filename(&entry) {
             Some(name) if is_disk_image_name(&name) => out.push(ArchiveImage { entry, name }),
             _ => return Err(FetchError::UnsafeEntry(entry)),
         }
@@ -579,7 +558,7 @@ pub fn unpack_disk_images(
     for image in &archive.images {
         // Re-asked at the write, not trusted from the scan: the value that
         // decides where bytes land must be checked where the bytes land.
-        if escapes_destination(&image.entry) || safe_basename(&image.name).as_deref() != Some(image.name.as_str()) {
+        if escapes_destination(&image.entry) || sanitise_filename(&image.name).as_deref() != Some(image.name.as_str()) {
             return Err(FetchError::UnsafeEntry(image.entry.clone()));
         }
         let plain = library_dir.join(&image.name);
@@ -587,7 +566,7 @@ pub fn unpack_disk_images(
             KeepMode::Replace if !written.contains(&plain) => plain,
             _ => unique_dest(library_dir, &image.name),
         };
-        // Belt and braces over `safe_basename`, the same guard `keep_in_library`
+        // Belt and braces over `sanitise_filename`, the same guard `keep_in_library`
         // applies: the destination must be a direct child of the library.
         if dest.parent() != Some(library_dir) {
             return Err(FetchError::UnsafeEntry(image.entry.clone()));
@@ -694,14 +673,14 @@ pub fn keep_in_library(
     let name = fetched
         .file_name()
         .and_then(|n| n.to_str())
-        .and_then(safe_basename)
+        .and_then(sanitise_filename)
         .ok_or(FetchError::NoFilename)?;
     std::fs::create_dir_all(library_dir).map_err(|e| FetchError::Io(e.to_string()))?;
     let dest = match mode {
         KeepMode::Replace => library_dir.join(&name),
         KeepMode::KeepBoth => unique_dest(library_dir, &name),
     };
-    // Belt and braces over `safe_basename`: the destination must be a direct
+    // Belt and braces over `sanitise_filename`: the destination must be a direct
     // child of the library directory, whatever the name claimed.
     if dest.parent() != Some(library_dir) {
         return Err(FetchError::NoFilename);
@@ -868,19 +847,20 @@ mod tests {
 
     /// A remote name must never escape the directory it is written into.
     #[test]
-    fn safe_basename_refuses_everything_that_escapes() {
-        assert_eq!(safe_basename("curses.z5").as_deref(), Some("curses.z5"));
-        assert_eq!(safe_basename("../../etc/passwd").as_deref(), Some("passwd"));
-        assert_eq!(safe_basename("..\\..\\windows\\system32\\x").as_deref(), Some("x"));
-        assert_eq!(safe_basename("/etc/passwd").as_deref(), Some("passwd"));
-        assert_eq!(safe_basename(".."), None);
-        assert_eq!(safe_basename("."), None);
-        assert_eq!(safe_basename(".bashrc"), None, "a leading dot is never a story file");
-        assert_eq!(safe_basename(""), None);
-        assert_eq!(safe_basename("   "), None);
+    fn sanitise_filename_refuses_everything_that_escapes() {
+        assert_eq!(sanitise_filename("curses.z5").as_deref(), Some("curses.z5"));
+        assert_eq!(sanitise_filename("../../etc/passwd").as_deref(), Some("passwd"));
+        assert_eq!(sanitise_filename("..\\..\\windows\\system32\\x").as_deref(), Some("x"));
+        assert_eq!(sanitise_filename("/etc/passwd").as_deref(), Some("passwd"));
+        assert_eq!(sanitise_filename(".."), None);
+        assert_eq!(sanitise_filename("."), None);
+        assert_eq!(sanitise_filename(".bashrc"), None, "a leading dot is never a story file");
+        assert_eq!(sanitise_filename(""), None);
+        assert_eq!(sanitise_filename("   "), None);
         // Control characters and a Windows drive colon are dropped, not kept.
-        assert_eq!(safe_basename("cur\u{7}ses.z5").as_deref(), Some("curses.z5"));
-        assert_eq!(safe_basename("C:evil.z5").as_deref(), Some("Cevil.z5"));
+        assert_eq!(sanitise_filename("cur\u{7}ses.z5").as_deref(), Some("curses.z5"));
+        // A colon is replaced, not dropped, so `C:evil.z5` cannot turn into a different name.
+        assert_eq!(sanitise_filename("C:evil.z5").as_deref(), Some("C_evil.z5"));
     }
 
     #[test]

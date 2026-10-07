@@ -37,6 +37,34 @@ pub(crate) const WINDOWS_RESERVED: [&str; 22] = [
     "LPT2", "LPT3", "LPT4", "LPT5", "LPT6", "LPT7", "LPT8", "LPT9",
 ];
 
+/// Unicode bidi and format controls: they let `exe.txt` display as `txt.exe`-style
+/// spoofs, and never belong in a file name.
+fn is_format_control(c: char) -> bool {
+    matches!(c, '\u{200E}' | '\u{200F}' | '\u{202A}'..='\u{202E}' | '\u{2066}'..='\u{2069}' | '\u{061C}' | '\u{FEFF}')
+}
+
+/// THE file-name sanitiser (SQ-1732) for every name that came off the network:
+/// story downloads, URL fetches and documents. Takes the last component under
+/// either separator, drops control characters and Unicode bidi/format controls,
+/// replaces `/ \ : * ? " < > |` with `_`, trims surrounding spaces and trailing
+/// dots (Windows), refuses an empty, all-dots or leading-dot name, and gives a
+/// Windows device name (`CON`, `con.z5`) a `_` prefix. Extension policy is the
+/// caller's.
+pub fn sanitise_filename(raw: &str) -> Option<String> {
+    let base = raw.rsplit(['/', '\\']).next().unwrap_or(raw);
+    let cleaned: String = base
+        .chars()
+        .filter(|c| !c.is_control() && !is_format_control(*c))
+        .map(|c| if matches!(c, ':' | '*' | '?' | '"' | '<' | '>' | '|') { '_' } else { c })
+        .collect();
+    let cleaned = cleaned.trim().trim_end_matches(['.', ' ']);
+    if cleaned.is_empty() || cleaned.starts_with('.') {
+        return None;
+    }
+    let stem = cleaned.split('.').next().unwrap_or("").trim_end().to_ascii_uppercase();
+    Some(if WINDOWS_RESERVED.contains(&stem.as_str()) { format!("_{cleaned}") } else { cleaned.to_string() })
+}
+
 /// Make `title` safe as a folder name on Windows, macOS and Linux. Spaces stay.
 /// `/ \ : * ? " < > |` and control characters become `_`; leading dots become `_`
 /// (no hidden folders); trailing dots and spaces go (Windows); the result is
@@ -1163,5 +1191,38 @@ mod tests {
         let got = list(&dir).unwrap();
         assert_eq!((got[0].display_name.as_str(), got[0].kind), ("Walkthrough.sol", DocKind::Text));
         let _ = std::fs::remove_dir_all(dir);
+    }
+
+    // ── the one file-name sanitiser (SQ-1732) ────────────────────────────────
+
+    #[test]
+    fn sanitise_filename_is_safe_on_every_platform() {
+        let f = |s: &str| sanitise_filename(s);
+        assert_eq!(f("curses.z5").as_deref(), Some("curses.z5"));
+        assert_eq!(f("../../etc/x.z5").as_deref(), Some("x.z5"));
+        assert_eq!(f("a\\b\\c.z5").as_deref(), Some("c.z5"));
+        assert_eq!(f("Zork: Part 1?.z5").as_deref(), Some("Zork_ Part 1_.z5"), "colon and friends");
+        assert_eq!(f("a*b\"c<d>e|f.txt").as_deref(), Some("a_b_c_d_e_f.txt"));
+        assert_eq!(f("CON.z5").as_deref(), Some("_CON.z5"));
+        assert_eq!(f("con").as_deref(), Some("_con"));
+        assert_eq!(f("Lpt1.txt").as_deref(), Some("_Lpt1.txt"));
+        assert_eq!(f("console.z5").as_deref(), Some("console.z5"), "only the whole device name");
+        assert_eq!(f("x.z5.").as_deref(), Some("x.z5"), "trailing dot");
+        assert_eq!(f("x.z5 ").as_deref(), Some("x.z5"), "trailing space");
+        assert_eq!(f("x.z5. . ").as_deref(), Some("x.z5"));
+        assert_eq!(f("cur\u{7}ses\0.z5").as_deref(), Some("curses.z5"), "controls and NUL");
+        for bad in ["", "   ", ".", "..", "...", ".bashrc", "dir/", "..\\", ". ."] {
+            assert_eq!(f(bad), None, "{bad:?}");
+        }
+    }
+
+    #[test]
+    fn sanitise_filename_drops_bidi_and_format_controls() {
+        // U+202E would show `story\u{202E}3z.exe` as `storyexe.z3`.
+        assert_eq!(sanitise_filename("story\u{202E}3z.exe").as_deref(), Some("story3z.exe"));
+        for c in ['\u{200E}', '\u{200F}', '\u{202A}', '\u{202D}', '\u{2066}', '\u{2069}', '\u{061C}', '\u{FEFF}'] {
+            assert_eq!(sanitise_filename(&format!("a{c}b.txt")).as_deref(), Some("ab.txt"), "U+{:04X}", c as u32);
+        }
+        assert_eq!(sanitise_filename("\u{202E}").as_deref(), None);
     }
 }
