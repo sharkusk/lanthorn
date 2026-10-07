@@ -250,6 +250,75 @@ impl DocKind {
     }
 }
 
+/// Extensions lanthorn lists on their own say-so (SQ-1730): a viewer type, or a
+/// zip as a container. Every other extension is admitted only if the file's
+/// bytes are text ([`admitted`]).
+const ALLOWED_EXTS: &[&str] =
+    &["pdf", "png", "jpg", "jpeg", "gif", "txt", "md", "rtf", "html", "htm", "zip"];
+/// The subset the system opener may ever be handed. The text types are left out
+/// because lanthorn's own pager shows them; zip is a container, never opened.
+const OPENER_EXTS: &[&str] = &["pdf", "png", "jpg", "jpeg", "gif", "html", "htm"];
+/// Executables and launchers: never downloaded or kept, even when their bytes
+/// are text, because in a documents folder a double-click would run them.
+const NEVER_EXTS: &[&str] = &[
+    "bat", "cmd", "com", "exe", "msi", "scr", "ps1", "vbs", "vbe", "js", "jse", "wsf", "wsh", "hta", "lnk", "url",
+    "pif", "reg", "jar", "app", "command", "terminal", "tool", "fileloc", "desktop", "sh", "csh", "bash", "zsh",
+    "appimage", "dmg", "pkg", "deb", "rpm", "apk",
+];
+/// Known non-text formats that would only be downloaded to be thrown away.
+const KNOWN_BINARY_EXTS: &[&str] = &[
+    "inv", "hqx", "sit", "sea", "bin", "cpt", "tar", "gz", "tgz", "bz2", "xz", "7z", "rar", "lzh", "lha", "arj", "z",
+    "mp3", "ogg", "wav", "aif", "aiff", "mid", "midi", "flac", "m4a", "mod", "hex", "hug", "inf", "t3", "gam", "taf",
+    "acd", "sna", "tzx", "d64", "adf", "blb", "ulx", "dat", "doc", "webp", "tif", "tiff", "bmp", "svg",
+];
+
+/// The lower-cased extension of `name` (empty when it has none).
+fn ext_of(name: &str) -> String {
+    Path::new(name).extension().and_then(|e| e.to_str()).unwrap_or("").to_ascii_lowercase()
+}
+
+/// What a name's extension says before any bytes are seen.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum NameVerdict {
+    /// Never downloaded or kept.
+    Refused,
+    /// An allowlisted type: admitted on its name.
+    Allowed,
+    /// Any other extension: admitted only if the bytes turn out to be text.
+    NeedsSniff,
+}
+
+/// The one decision every document gate asks (SQ-1730): link classification, zip
+/// entries, the post-download check and the opener guard all come through
+/// [`name_verdict`], [`admitted`] and [`opener_allowed`].
+pub fn name_verdict(name: &str) -> NameVerdict {
+    let ext = ext_of(name);
+    if NEVER_EXTS.contains(&ext.as_str()) || KNOWN_BINARY_EXTS.contains(&ext.as_str()) {
+        NameVerdict::Refused
+    } else if ALLOWED_EXTS.contains(&ext.as_str()) {
+        NameVerdict::Allowed
+    } else {
+        NameVerdict::NeedsSniff
+    }
+}
+
+/// Whether the file `name` with first bytes `head` may be listed and kept: an
+/// allowlisted extension, or any other (not [`NEVER_EXTS`]) whose bytes sniff as
+/// text. An empty `head` has nothing to sniff, so only the name decides.
+pub fn admitted(name: &str, head: &[u8]) -> bool {
+    match name_verdict(name) {
+        NameVerdict::Refused => false,
+        NameVerdict::Allowed => true,
+        NameVerdict::NeedsSniff => !head.is_empty() && sniff_kind_bytes(head, name) == DocKind::Text,
+    }
+}
+
+/// Whether `name` may be handed to the system opener. Only allowlisted viewer
+/// types; a text file of any name is shown in the pager, never opened outside.
+pub fn opener_allowed(name: &str) -> bool {
+    OPENER_EXTS.contains(&ext_of(name).as_str())
+}
+
 /// How much of a file [`sniff_kind`] reads.
 const SNIFF_BYTES: usize = 8 * 1024;
 
@@ -330,7 +399,7 @@ pub fn sniff_kind(path: &Path) -> io::Result<DocKind> {
 /// One file in a documents folder.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct DocEntry {
-    /// The name to show: the file name without its extension.
+    /// The name to show: the file name, extension included (SQ-1730).
     pub display_name: String,
     pub kind: DocKind,
     pub size: u64,
@@ -428,7 +497,7 @@ fn lock_dir(dir: &Path) -> io::Result<std::fs::File> {
 
 fn entry_for(path: PathBuf, size: u64, meta: Option<&DocMeta>) -> Option<DocEntry> {
     let id = path.file_name()?.to_str()?.to_string();
-    let display_name = Path::new(&id).file_stem().and_then(|s| s.to_str()).unwrap_or(&id).to_string();
+    let display_name = id.clone();
     let spoiler = meta.is_some_and(|m| m.spoiler) || crate::ifdb_documents::looks_like_spoiler(&id);
     Some(DocEntry {
         display_name,
@@ -872,7 +941,7 @@ mod tests {
         let manual = src_dir.join("Manual.pdf");
         std::fs::write(&manual, b"%PDF-1").unwrap();
         let a = import(&dir, &manual).unwrap().entry().clone();
-        assert_eq!((a.id.as_str(), a.kind, a.size, a.display_name.as_str()), ("Manual.pdf", DocKind::Pdf, 6, "Manual"));
+        assert_eq!((a.id.as_str(), a.kind, a.size, a.display_name.as_str()), ("Manual.pdf", DocKind::Pdf, 6, "Manual.pdf"));
         assert_eq!(a.path, dir.join("Manual.pdf"));
         // The same bytes again are not copied.
         assert_eq!(import(&dir, &manual).unwrap(), Imported::AlreadyPresent(a.clone()));
@@ -1056,5 +1125,43 @@ mod tests {
         let a = got.iter().find(|e| e.id == "a.pdf").unwrap();
         assert_eq!((a.title.as_deref(), a.recorded_size), (Some("Old"), None));
         let _ = std::fs::remove_dir_all(home);
+    }
+
+    // ── the allowlist (SQ-1730) ──────────────────────────────────────────────
+
+    #[test]
+    fn admission_is_an_allowlist_with_a_text_sniff_for_the_rest() {
+        let text = b"Walkthrough\n1. open mailbox\n";
+        let binary = [0u8, 1, 2, 3, 0, 0, 255, 254, 0, 9];
+        for n in ["a.pdf", "a.PNG", "a.jpg", "a.jpeg", "a.gif", "a.txt", "a.md", "a.rtf", "a.html", "a.htm", "a.zip"] {
+            assert!(admitted(n, &binary), "{n} is allowlisted on its name");
+        }
+        assert!(admitted("Walkthrough.sol", text), "text under an unknown extension");
+        assert!(admitted("feelie", text), "no extension");
+        assert!(!admitted("Walkthrough.sol", &binary), "binary under an unknown extension");
+        assert!(!admitted("Walkthrough.sol", b""), "nothing to sniff");
+        for n in ["a.bat", "a.CMD", "a.sh", "a.exe", "a.ps1", "a.js", "a.app", "a.command", "a.jar", "a.desktop", "a.lnk", "a.url", "a.dmg"] {
+            assert!(!admitted(n, text), "{n} is never kept, even as text");
+        }
+        assert!(!admitted("Manual.pdf.bat", text));
+    }
+
+    #[test]
+    fn only_viewer_types_may_reach_the_system_opener() {
+        for n in ["a.pdf", "a.PNG", "a.jpg", "a.jpeg", "a.gif", "a.html", "a.htm"] {
+            assert!(opener_allowed(n), "{n}");
+        }
+        for n in ["a.txt", "a.md", "a.rtf", "a.zip", "a.sol", "a.bat", "a.sh", "a.exe", "a.webp", "a", "Manual.pdf.bat"] {
+            assert!(!opener_allowed(n), "{n}");
+        }
+    }
+
+    #[test]
+    fn a_listed_file_shows_its_real_extension() {
+        let dir = crate::scratch_dir("docs-display");
+        std::fs::write(dir.join("Walkthrough.sol"), b"1. open mailbox\n").unwrap();
+        let got = list(&dir).unwrap();
+        assert_eq!((got[0].display_name.as_str(), got[0].kind), ("Walkthrough.sol", DocKind::Text));
+        let _ = std::fs::remove_dir_all(dir);
     }
 }

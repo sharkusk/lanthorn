@@ -8,17 +8,27 @@
 //! | URL | kind |
 //! |---|---|
 //! | `.pdf` | [`LinkKind::Pdf`] |
-//! | `.png .jpg .jpeg .gif .webp .tif .tiff` | [`LinkKind::Image`] |
-//! | `.txt .doc .rtf .md` | [`LinkKind::Text`] |
+//! | `.png .jpg .jpeg .gif` | [`LinkKind::Image`] |
+//! | `.txt .md .rtf .html .htm` | [`LinkKind::Text`] |
 //! | `.zip` | [`LinkKind::Archive`] |
-//! | no extension, or one nobody knows (`.step1`, `.many`), with `<format>` `text` or `document` | [`LinkKind::Text`] |
+//! | any other extension (or none), e.g. `.sol` | [`LinkKind::Text`], kept only if the downloaded bytes are text |
+//!
+//! **Allowlist (SQ-1730).** The decision lives in [`crate::documents::name_verdict`]
+//! and [`crate::documents::admitted`] and is shared by link classification, zip
+//! entries, [`save_document`] and the system-opener guard. The viewer types above
+//! are listed on their name; any other extension is listed as text and discarded
+//! after download unless its bytes sniff as text, and is shown only in the
+//! internal pager. A short list of executable and launcher extensions (`.bat`,
+//! `.sh`, `.exe`, `.app`, ...) is never downloaded or kept, even as text. A zip's
+//! members pass the same rules; a zip inside a zip is not offered.
 //!
 //! Left out: anything `<isGame/>`, executables and setup programs (by format, so
-//! the `setup` zip on Zork I's record goes), `.hqx`/StuffIt and other archives
-//! that are not zip, audio, web pages, and `.inv` (the Shift-H hint downloader
-//! owns those). A link under `/games/` whose extension is not a document one is
-//! source code, not a document — `hugozork.hug` is the case that decided that
-//! rule — so the unknown-extension fallback does not apply there.
+//! the `setup` zip on Zork I's record goes), story files, known binary formats
+//! (StuffIt and other non-zip archives, audio, `.webp`, `.doc`), and `.inv` (the
+//! Shift-H hint downloader owns those). A link under `/games/` whose extension is
+//! not an allowlisted one is source code, not a document — `hugozork.hug` is the
+//! case that decided that rule — so the unknown-extension fallback does not apply
+//! there.
 //!
 //! **Spoilers.** A URL path containing `/solutions/` or `/hints/` is flagged
 //! [`DocumentOption::spoiler`]; the chooser tags it so nobody opens a walkthrough
@@ -125,15 +135,8 @@ impl DocumentOption {
     }
 }
 
-const IMAGE_EXTS: &[&str] = &["png", "jpg", "jpeg", "gif", "webp", "tif", "tiff"];
-const TEXT_EXTS: &[&str] = &["txt", "doc", "rtf", "md"];
-/// Extensions that are never a document: audio, web pages, executables, the
-/// archive families a zip reader cannot open, and story/source files.
-const EXCLUDED_EXTS: &[&str] = &[
-    "html", "htm", "inv", "hqx", "sit", "sea", "exe", "com", "msi", "dmg", "bin", "cpt", "tar", "gz", "tgz", "bz2",
-    "xz", "7z", "rar", "lzh", "lha", "arj", "z", "mp3", "ogg", "wav", "aif", "aiff", "mid", "midi", "flac", "m4a",
-    "mod", "hex", "hug", "inf", "t3", "gam", "taf", "acd", "sna", "tzx", "d64", "adf", "blb", "ulx", "dat",
-];
+const IMAGE_EXTS: &[&str] = &["png", "jpg", "jpeg", "gif"];
+const TEXT_EXTS: &[&str] = &["txt", "rtf", "md", "html", "htm"];
 
 /// The lower-cased path of a URL: no scheme, host, query or fragment.
 fn url_path(url: &str) -> String {
@@ -150,6 +153,10 @@ fn classify(url: &str, format: Option<&str>) -> Option<LinkKind> {
     if matches!(format.as_deref(), Some("setup" | "executable")) {
         return None;
     }
+    use crate::documents::{name_verdict, NameVerdict};
+    if name_verdict(&name) == NameVerdict::Refused {
+        return None;
+    }
     let ext = Path::new(&name).extension().and_then(|e| e.to_str()).map(str::to_ascii_lowercase);
     let ext = ext.as_deref().unwrap_or("");
     if ext == "pdf" {
@@ -164,14 +171,13 @@ fn classify(url: &str, format: Option<&str>) -> Option<LinkKind> {
     if ext == "zip" {
         return Some(LinkKind::Archive);
     }
-    if EXCLUDED_EXTS.contains(&ext) || crate::picker::has_story_ext(Path::new(&name)) {
-        return None;
-    }
     // No extension, or one that names nothing we know (`zorkI.step1`,
-    // `hints.many`): IFDB's own word for it decides, and a `/games/` path is
-    // source code.
-    let texty = matches!(format.as_deref(), Some("text" | "document"));
-    (texty && !url_path(url).contains("/games/")).then_some(LinkKind::Text)
+    // `Walkthrough.sol`): listed as text and judged by its bytes after download.
+    // A `/games/` path is source code, and a story file is not a document.
+    // With no extension at all, IFDB's own word still has to say it is text.
+    let not_texty = ext.is_empty() && !matches!(format.as_deref(), Some("text" | "document"));
+    (!not_texty && !crate::picker::has_story_ext(Path::new(&name)) && !url_path(url).contains("/games/"))
+        .then_some(LinkKind::Text)
 }
 
 /// A file name that is safe on Windows, macOS and Linux: [`sanitize_basename`]
@@ -392,10 +398,17 @@ impl<'a> RemoteZip<'a> {
                 if r.path.ends_with('/') || r.path.ends_with('\\') || r.flags & 1 != 0 || !matches!(r.method, 0 | 8) {
                     return None;
                 }
+                let name = safe_entry_basename(&r.path)?;
+                // Same allowlist as a top-level link; a zip inside a zip is not offered.
+                if crate::documents::name_verdict(&name) == crate::documents::NameVerdict::Refused
+                    || name.to_ascii_lowercase().ends_with(".zip")
+                {
+                    return None;
+                }
                 Some(ZipEntry {
                     index,
                     path: r.path.clone(),
-                    name: safe_entry_basename(&r.path)?,
+                    name,
                     size: r.size,
                     spoiler: looks_like_spoiler(&r.path),
                 })
@@ -579,6 +592,12 @@ pub fn fetch_preview(source: &dyn SearchSource, url: &str, entry: Option<usize>)
 /// holds are not written again. `meta` goes into the folder's index (SQ-1687). The bytes go to a scratch
 /// file first, so nothing partial is ever in the folder.
 pub fn save_document(dir: &Path, name: &str, bytes: &[u8], meta: Option<DocMeta>) -> io::Result<Imported> {
+    if !crate::documents::admitted(name, &bytes[..bytes.len().min(8 * 1024)]) {
+        return Err(io::Error::new(
+            io::ErrorKind::InvalidInput,
+            format!("{name} is not a document type lanthorn keeps (not a viewer type, and not plain text)"),
+        ));
+    }
     static NTH: AtomicUsize = AtomicUsize::new(0);
     let scratch = std::env::temp_dir().join(format!(
         "lanthorn-doc-{}-{}",
@@ -843,6 +862,7 @@ pub(crate) mod tests {
         let got: Vec<(String, LinkKind, bool)> =
             parse_document_options(ZORK).into_iter().map(|d| (d.filename, d.kind, d.spoiler)).collect();
         let want: Vec<(&str, LinkKind, bool)> = vec![
+            ("zork-i-the-great-underground-empire.html", LinkKind::Text, true),
             ("Zork_Trilogy.zip", LinkKind::Archive, false),
             ("zork1.zip", LinkKind::Archive, true),
             ("Sols3.zip", LinkKind::Archive, true),
@@ -855,6 +875,7 @@ pub(crate) mod tests {
             ("zork1.txt", LinkKind::Text, false),
             ("sample.from.zork", LinkKind::Text, false),
             ("zorkI.txt", LinkKind::Text, true),
+            ("intfic_clubfloyd_20160401.html", LinkKind::Text, false),
         ];
         let want: Vec<(String, LinkKind, bool)> = want.into_iter().map(|(n, k, s)| (n.to_string(), k, s)).collect();
         assert_eq!(got, want);
@@ -864,16 +885,27 @@ pub(crate) mod tests {
     fn classification_follows_the_extension_not_the_format_alone() {
         let k = |url: &str, fmt: Option<&str>| classify(url, fmt);
         assert_eq!(k("https://x/a/Manual.PDF", Some("document")), Some(LinkKind::Pdf));
-        for e in ["png", "jpg", "jpeg", "gif", "webp", "tif", "tiff"] {
+        for e in ["png", "jpg", "jpeg", "gif"] {
             assert_eq!(k(&format!("https://x/map.{e}"), None), Some(LinkKind::Image), "{e}");
         }
-        for e in ["txt", "doc", "rtf", "md"] {
+        for e in ["txt", "rtf", "md", "html", "htm"] {
             assert_eq!(k(&format!("https://x/n.{e}"), None), Some(LinkKind::Text), "{e}");
         }
         assert_eq!(k("https://x/if-archive/x/feelie", Some("document")), Some(LinkKind::Text), "extensionless");
         assert_eq!(k("https://x/if-archive/x/feelie", Some("zcode")), None, "extensionless, not texty");
         assert_eq!(k("https://x/a/b.mp3", Some("document")), None, "audio");
-        assert_eq!(k("https://x/a/b.html", Some("html")), None);
+        assert_eq!(k("https://x/a/b.html", Some("html")), Some(LinkKind::Text), "html is on the allowlist");
+        for e in ["webp", "tif", "tiff", "doc"] {
+            assert_eq!(k(&format!("https://x/a/b.{e}"), None), None, "{e} is a known non-text format");
+        }
+        // Any other extension is a candidate, judged by its bytes after download.
+        assert_eq!(k("https://x/a/Walkthrough.sol", None), Some(LinkKind::Text));
+        // Executables and launchers are never offered, whatever IFDB calls them.
+        for e in ["bat", "cmd", "sh", "exe", "ps1", "js", "app", "command", "jar", "desktop", "lnk", "url", "dmg"] {
+            assert_eq!(k(&format!("https://x/a/Manual.{e}"), Some("document")), None, "{e}");
+            assert_eq!(k(&format!("https://x/a/Manual.{}", e.to_uppercase()), Some("text")), None, "{e}");
+        }
+        assert_eq!(k("https://x/a/Manual.pdf.bat", Some("document")), None, "the real extension decides");
         assert_eq!(k("https://x/a/b.hqx", Some("executable")), None);
         assert_eq!(k("https://x/a/b.zip", Some("setup")), None, "a setup zip");
         assert_eq!(k("https://x/a/B.inv", Some("document")), None, "Shift-H owns .inv");
@@ -1387,7 +1419,7 @@ pub(crate) mod tests {
         run_job(&host, &roots, DocJob::Preview { key: (7, None), url: "https://x/a.txt".into(), entry: None }, &tx);
         drop(tx);
         let evs: Vec<DocEvent> = rx.try_iter().collect();
-        assert!(matches!(&evs[0], DocEvent::Resolved(Ok(d)) if d.len() == 12));
+        assert!(matches!(&evs[0], DocEvent::Resolved(Ok(d)) if d.len() == 14));
         assert!(matches!(&evs[1], DocEvent::Probed { link: 4, size: Some(_), ranges: true }));
         assert!(matches!(&evs[2], DocEvent::Listed { link: 4, result: Ok(ZipListing::Entries(e)) } if e.len() == 2));
         assert_eq!(evs[3], DocEvent::Previewed { key: (7, None), result: Ok("hello\nworld".into()) });
@@ -1409,7 +1441,7 @@ pub(crate) mod tests {
             }
             std::thread::sleep(std::time::Duration::from_millis(1));
         }
-        assert!(matches!(&got[0], DocEvent::Resolved(Ok(d)) if d.len() == 12));
+        assert!(matches!(&got[0], DocEvent::Resolved(Ok(d)) if d.len() == 14));
         let _ = std::fs::remove_dir_all(home);
     }
 
@@ -1467,5 +1499,39 @@ pub(crate) mod tests {
         assert_eq!(format_size(812), "812 B");
         assert_eq!(format_size(12 * 1024), "12 KB");
         assert_eq!(format_size(1_500_000), "1.4 MB");
+    }
+
+    // ── the allowlist at the door (SQ-1730) ──────────────────────────────────
+
+    #[test]
+    fn zip_members_pass_the_same_allowlist() {
+        let zip = big_zip(
+            0,
+            0,
+            &[
+                ("d/Walkthrough.sol", b"1. open mailbox\n"),
+                ("d/run.bat", b"echo hi\n"),
+                ("d/inner.zip", b"PK"),
+                ("d/Manual.pdf", b"%PDF-1"),
+                ("d/blob.webp", b"RIFF"),
+            ],
+        );
+        let host = Host::new(true).with(URL, zip);
+        let names: Vec<String> = RemoteZip::open(&host, URL).unwrap().unwrap().entries().into_iter().map(|e| e.name).collect();
+        assert_eq!(names, ["Walkthrough.sol", "Manual.pdf"]);
+    }
+
+    #[test]
+    fn save_document_keeps_text_sol_and_refuses_binary_sol_and_text_bat() {
+        let home = crate::scratch_dir("docs-allow");
+        let dir = home.join("g");
+        let ok = save_document(&dir, "Walkthrough.sol", b"1. open mailbox\n", None).unwrap();
+        assert!(matches!(&ok, Imported::Added(e) if e.id == "Walkthrough.sol"));
+        for (name, bytes) in [("blob.sol", &[0u8, 1, 2, 0, 255, 0, 0, 9][..]), ("run.bat", b"echo hi\n"), ("x.sh", b"id\n")] {
+            let err = save_document(&dir, name, bytes, None).unwrap_err();
+            assert_eq!(err.kind(), io::ErrorKind::InvalidInput, "{name}");
+        }
+        assert_eq!(files_in(&dir), ["Walkthrough.sol"]);
+        let _ = std::fs::remove_dir_all(home);
     }
 }

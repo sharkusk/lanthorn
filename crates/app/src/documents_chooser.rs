@@ -961,8 +961,8 @@ mod tests {
         let (mut s, home, _) = open(&h, "chooser-open");
         settle(&mut s);
         let n = names(&s.chooser);
-        assert_eq!(n.len(), 12);
-        assert_eq!(n[0], "Zork_Trilogy.zip");
+        assert_eq!(n.len(), 14, "twelve before html joined the allowlist, plus the two html links");
+        assert_eq!(n[1], "Zork_Trilogy.zip");
         assert!(s.chooser.links[0].probed && s.chooser.links.iter().skip(1).all(|l| !l.probed), "only row 0 was probed");
         assert!(h.requested().is_empty(), "no zip was read: nothing was asked to be expanded");
         let _ = std::fs::remove_dir_all(home);
@@ -973,20 +973,20 @@ mod tests {
         let h = host(true);
         let (mut s, home, roots) = open(&h, "chooser-zip");
         settle(&mut s);
-        press(&mut s, &[Down, Down, Down, Down]);
-        assert_eq!(names(&s.chooser)[4], "Sols1.zip");
+        press(&mut s, &[Down, Down, Down, Down, Down]);
+        assert_eq!(names(&s.chooser)[5], "Sols1.zip");
         assert!(h.requested().is_empty(), "moving onto a zip does not open it");
-        assert!(s.chooser.links[4].size.is_some(), "but its size was probed");
+        assert!(s.chooser.links[5].size.is_some(), "but its size was probed");
 
         press(&mut s, &[Right]);
         assert_eq!(h.requested().len(), 1, "opening it read the tail, once");
         let n = names(&s.chooser);
-        assert_eq!(&n[5..9], ["game0.txt", "game1.txt", "game2.txt", "ZorkI.txt"]);
+        assert_eq!(&n[6..10], ["game0.txt", "game1.txt", "game2.txt", "ZorkI.txt"]);
         let shown = screen(&s.chooser, 100, 40);
         assert!(shown.contains("ZorkI.txt ★"), "the entry named for the game is highlighted:\n{shown}");
 
         press(&mut s, &[Down, Down, Down, Down, Char(' ')]);
-        assert_eq!(s.chooser.selected_key(), Some((4, Some(3))));
+        assert_eq!(s.chooser.selected_key(), Some((5, Some(3))));
         assert!(screen(&s.chooser, 100, 40).contains("[✓]"));
         press(&mut s, &[Enter]);
         let (status, failure) = s.chooser.status.clone().expect("a result line");
@@ -1003,8 +1003,8 @@ mod tests {
         let h = host(true);
         let (mut s, home, roots) = open(&h, "chooser-enter");
         settle(&mut s);
-        press(&mut s, &[Down, Down, Down, Down, Down, Down, Down, Down, Down]);
-        assert_eq!(names(&s.chooser)[9], "zork1.txt");
+        press(&mut s, &[Down, Down, Down, Down, Down, Down, Down, Down, Down, Down]);
+        assert_eq!(names(&s.chooser)[10], "zork1.txt");
         press(&mut s, &[Enter]);
         assert_eq!(files_in(&roots.documents().join("Zork I [abc123]")), ["zork1.txt"]);
         press(&mut s, &[Enter]);
@@ -1021,8 +1021,8 @@ mod tests {
         let h = host(false);
         let (mut s, home, _) = open(&h, "chooser-noranges");
         settle(&mut s);
-        press(&mut s, &[Down, Down, Down, Down, Right]);
-        assert_eq!(s.chooser.links[4].zip, ZipState::Unknown);
+        press(&mut s, &[Down, Down, Down, Down, Down, Right]);
+        assert_eq!(s.chooser.links[5].zip, ZipState::Unknown);
         assert!(h.requested().is_empty() && *h.whole.lock().unwrap() == 0, "nothing was fetched to find out");
         assert!(screen(&s.chooser, 100, 40).contains("Contents unknown"));
         let _ = std::fs::remove_dir_all(home);
@@ -1033,7 +1033,7 @@ mod tests {
         let h = host(true);
         let (mut s, home, _) = open(&h, "chooser-preview");
         settle(&mut s);
-        press(&mut s, &[Down, Down, Down, Down, Down, Down, Down, Down, Down, Char('p')]);
+        press(&mut s, &[Down, Down, Down, Down, Down, Down, Down, Down, Down, Down, Char('p')]);
         assert!(screen(&s.chooser, 100, 40).contains("GUE history"));
         press(&mut s, &[Up, Up, Up, Up, Up, Up, Up, Up, Up, Char('p')]);
         assert_eq!(s.chooser.status.as_ref().map(|s| s.0.as_str()), Some("Nothing to preview for this one"), "a zip row");
@@ -1045,7 +1045,7 @@ mod tests {
         let h = host(true);
         let (mut s, home, _) = open(&h, "chooser-preview-entry");
         settle(&mut s);
-        press(&mut s, &[Down, Down, Down, Down, Right, Down, Down, Down, Down, Char('p')]);
+        press(&mut s, &[Down, Down, Down, Down, Down, Right, Down, Down, Down, Down, Char('p')]);
         assert!(screen(&s.chooser, 100, 40).contains("walkthrough text"));
         let _ = std::fs::remove_dir_all(home);
     }
@@ -1091,14 +1091,14 @@ mod tests {
         assert!(matches!(ch.next_job(), Some(DocJob::Probe { link: 1, .. })));
     }
 
-    /// Save `zork1.txt` (link 9) and the zip entry `Sols/ZorkI.txt` (row 4/3)
+    /// Save `zork1.txt` (link 10) and the zip entry `Sols/ZorkI.txt` (row 5/3)
     /// through the chooser, leaving the cursor on `zork1.txt`.
     fn open_with_saved(h: &Arc<Host>, tag: &str) -> (DocumentsSession, PathBuf, DataRoots) {
         let (mut s, home, roots) = open(h, tag);
         settle(&mut s);
-        press(&mut s, &[Down, Down, Down, Down, Right, Down, Down, Down, Down, Char(' ')]);
+        press(&mut s, &[Down, Down, Down, Down, Down, Right, Down, Down, Down, Down, Char(' ')]);
         press(&mut s, &[Down, Down, Down, Down, Down, Char(' ')]);
-        assert_eq!(s.chooser.saved((9, None)), SavedState::NotSaved, "nothing is saved yet");
+        assert_eq!(s.chooser.saved((10, None)), SavedState::NotSaved, "nothing is saved yet");
         assert!(!screen(&s.chooser, 100, 40).contains("In your documents"));
         press(&mut s, &[Enter]);
         assert_eq!(files_in(&roots.documents().join("Zork I [abc123]")), ["ZorkI.txt", "zork1.txt"]);
@@ -1111,20 +1111,20 @@ mod tests {
         let (mut s, home, _) = open_with_saved(&h, "chooser-saved");
         let ch = &mut s.chooser;
         // The marks were refreshed when the batch finished, with no further key.
-        assert_eq!(ch.saved((4, Some(3))), SavedState::Saved);
-        assert_eq!(ch.saved((9, None)), SavedState::Saved);
-        assert_eq!(ch.saved((4, None)), SavedState::NotSaved, "the zip itself was not saved, one entry was");
+        assert_eq!(ch.saved((5, Some(3))), SavedState::Saved);
+        assert_eq!(ch.saved((10, None)), SavedState::Saved);
+        assert_eq!(ch.saved((5, None)), SavedState::NotSaved, "the zip itself was not saved, one entry was");
         let shown = screen(ch, 100, 40);
         assert_eq!(shown.matches("In your documents").count(), 2, "{shown}");
         assert!(ch.checked.is_empty(), "a saved row is not left ticked");
 
         // Space on the saved row ticks nothing.
-        assert_eq!(ch.selected_key(), Some((9, None)));
+        assert_eq!(ch.selected_key(), Some((10, None)));
         ch.on_key(Char(' '), &anim());
         assert!(ch.checked.is_empty(), "a saved row cannot be ticked");
 
         // Even forced into the set, it is left out of the download.
-        ch.checked.insert((9, None));
+        ch.checked.insert((10, None));
         ch.start_download();
         assert!(ch.queue.iter().all(|j| !matches!(j, DocJob::Download { .. })), "{:?}", ch.queue);
         assert_eq!(ch.phase, Phase::Ready);
@@ -1145,13 +1145,13 @@ mod tests {
         // The next batch to finish rescans the folder.
         s.chooser.on_event(&DocEvent::Finished { dir: None, saved: vec![], already: vec![], failed: vec![] });
         settle(&mut s);
-        assert_eq!(s.chooser.saved((9, None)), SavedState::Changed);
+        assert_eq!(s.chooser.saved((10, None)), SavedState::Changed);
         let shown = screen(&s.chooser, 100, 40);
         assert!(shown.contains("In your documents \u{2014} different size"), "{shown}");
         press(&mut s, &[Char(' ')]);
-        assert!(s.chooser.checked.contains(&(9, None)), "a changed row can be ticked");
+        assert!(s.chooser.checked.contains(&(10, None)), "a changed row can be ticked");
         // The entry beside it is untouched and still saved.
-        assert_eq!(s.chooser.saved((4, Some(3))), SavedState::Saved);
+        assert_eq!(s.chooser.saved((5, Some(3))), SavedState::Saved);
         let _ = std::fs::remove_dir_all(home);
     }
 
@@ -1259,7 +1259,7 @@ mod tests {
         let mut s = session_for_story(Some(&roots), &story, None, IfdbGate::default(), source()).expect("linked: a session");
         settle(&mut s);
         assert_eq!(s.chooser.tuid, "tuid123");
-        assert_eq!(s.chooser.links.len(), 12);
+        assert_eq!(s.chooser.links.len(), 14);
         let _ = std::fs::remove_dir_all(home);
     }
 }

@@ -36,6 +36,14 @@ while any such tag, or this Unreleased section, still exists.*
 
 ### Changed
 
+- **Game documents are safer, and show their real names.** lanthorn now
+  downloads and lists only manuals and notes it can show itself: PDFs, images,
+  text, web pages and zips of those, plus plain-text files with other extensions
+  (a `.sol` solution file, say), which open in lanthorn's own reader. Programs
+  and scripts (`.bat`, `.sh`, `.exe` and friends) are never downloaded, and only
+  PDFs, images and web pages are ever handed to your system viewer. Names keep
+  their extension, so a file shows as `Walkthrough.sol`, not `Walkthrough`.
+
 - **A game's IFDB details and cover are fetched once and shared by every copy of
   it.** Two copies of the same game, or the same game under another player, now
   show one record and one cover; refreshing either updates both, and the cover
