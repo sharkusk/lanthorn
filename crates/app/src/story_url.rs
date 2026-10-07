@@ -685,7 +685,24 @@ pub fn keep_in_library(
     if dest.parent() != Some(library_dir) {
         return Err(FetchError::NoFilename);
     }
-    std::fs::copy(fetched, &dest).map_err(|e| FetchError::Io(e.to_string()))?;
+    // Copy to a fresh file beside the destination, then rename over it. `fs::copy`
+    // straight onto `dest` would follow a symlink sitting there and overwrite
+    // its target; a rename replaces the link itself (SQ-1734).
+    static NTH: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);
+    let tmp = library_dir.join(format!(
+        ".keep-{}-{}.tmp",
+        std::process::id(),
+        NTH.fetch_add(1, std::sync::atomic::Ordering::Relaxed)
+    ));
+    let io_err = |e: std::io::Error| FetchError::Io(e.to_string());
+    let copied = std::fs::File::open(fetched).and_then(|mut src| {
+        let mut out = std::fs::OpenOptions::new().write(true).create_new(true).open(&tmp)?;
+        std::io::copy(&mut src, &mut out).map(|_| ())
+    });
+    if let Err(e) = copied.and_then(|()| std::fs::rename(&tmp, &dest)) {
+        let _ = std::fs::remove_file(&tmp);
+        return Err(io_err(e));
+    }
     Ok(dest)
 }
 
@@ -1104,5 +1121,28 @@ mod tests {
         let ua = user_agent();
         assert!(ua.starts_with("lanthorn/"));
         assert!(ua.contains("github.com/sharkusk/lanthorn"));
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn replace_does_not_write_through_a_symlink_at_the_destination() {
+        let root = crate::scratch_dir("keep-symlink");
+        let lib = root.join("lib");
+        std::fs::create_dir_all(&lib).unwrap();
+        let outside = root.join("outside.txt");
+        std::fs::write(&outside, b"precious").unwrap();
+        std::os::unix::fs::symlink(&outside, lib.join("curses.z5")).unwrap();
+        let fetched = root.join("curses.z5");
+        std::fs::write(&fetched, b"new story bytes").unwrap();
+
+        let dest = keep_in_library(&fetched, &lib, KeepMode::Replace).unwrap();
+        assert_eq!(std::fs::read(&outside).unwrap(), b"precious", "the symlink's target is untouched");
+        let meta = std::fs::symlink_metadata(&dest).unwrap();
+        assert!(meta.file_type().is_file() && !meta.file_type().is_symlink(), "a regular file now");
+        assert_eq!(std::fs::read(&dest).unwrap(), b"new story bytes");
+        let names: Vec<String> =
+            std::fs::read_dir(&lib).unwrap().flatten().map(|e| e.file_name().to_string_lossy().into_owned()).collect();
+        assert_eq!(names, ["curses.z5"], "no temp left behind");
+        let _ = std::fs::remove_dir_all(root);
     }
 }
