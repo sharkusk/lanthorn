@@ -33,7 +33,8 @@ while any such tag, or this Unreleased section, still exists.*
   it.** Two copies of the same game, or the same game under another player, now
   show one record and one cover; refreshing either updates both, and the cover
   keeps the format IFDB served it in. Existing records and covers are moved into
-  the shared store the first time they are used, with nothing downloaded again.
+  the shared store when lanthorn starts, with nothing downloaded again, including
+  those of games no longer in your library.
 
 - **New installs keep their files in your platform's standard folders.** Config
   and styles, saves, documents and the cache now live in `~/Library/Application

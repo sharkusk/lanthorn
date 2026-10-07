@@ -353,7 +353,9 @@ holds its own record (every build before SQ-1723) is read as before, and the fir
 store under the copy's tuid; nothing is refetched. If the store already holds that
 entry, the newer fetch wins and the copy's files are removed. "Newer" is decided
 by the record's own `scanned_at`; if either does not parse, or they are equal, by
-file modification time; on a tie the store's record stays. `save` never replaces a
+file modification time; on a tie the store's record stays. A startup sweep
+(`ifdb_store::adopt_catalogue`, background thread, SQ-1724) adopts every copy in the
+catalogue the same way, IFID mismatches and unscanned stories included. `save` never replaces a
 stored record with a strictly older `scanned_at`.
 
 `<story-key>` has **two rules**, because one disk image is no longer one game

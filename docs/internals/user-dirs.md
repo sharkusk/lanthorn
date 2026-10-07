@@ -91,6 +91,13 @@ copy's tuid, so copies cannot drift apart again. If the shared store already
 holds that entry, the newer fetch wins, and the other copy's stale files are
 removed. Nothing is refetched to do this.
 
+A startup sweep (SQ-1724, `ifdb_store::adopt_catalogue`, on a background thread)
+does the same for every `*.save` directory directly under the catalogue, without
+checking the IFID. That reaches copies lazy adoption never will: those whose
+stored IFID no longer matches what lanthorn computes, and those whose story is not
+in the scanned library. Copies with no shareable tuid are left exactly as they
+are. It is idempotent, so there is no marker file.
+
 ## Docs
 
 README describes the released build: the new locations go in with

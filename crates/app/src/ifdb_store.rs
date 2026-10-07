@@ -249,6 +249,30 @@ pub(crate) fn adopt_legacy(
     Ok(())
 }
 
+/// Startup sweep (SQ-1724): adopt every copy directly under `catalogue` that
+/// still holds its own IFDB record, whatever its IFID says today. Lazy adoption
+/// never reaches a copy whose stored IFID no longer matches, or whose story is
+/// not in the scanned library. One level only, no recursion, symlinks skipped;
+/// `ifdb/` and anything not named `*.save` are ignored. Returns how many copies
+/// were adopted. Idempotent: an adopted copy holds only a link afterwards.
+pub fn adopt_catalogue(catalogue: &Path) -> usize {
+    let Ok(rd) = std::fs::read_dir(catalogue) else { return 0 };
+    let mut adopted = 0;
+    for entry in rd.flatten() {
+        let name = entry.file_name();
+        if !name.to_string_lossy().ends_with(".save") || !entry.file_type().is_ok_and(|t| t.is_dir()) {
+            continue;
+        }
+        let dir = entry.path();
+        let before = std::fs::read(crate::story_info::info_path(&dir)).ok();
+        crate::story_info::adopt_if_legacy(&dir);
+        if before.is_some() && std::fs::read(crate::story_info::info_path(&dir)).ok() != before {
+            adopted += 1;
+        }
+    }
+    adopted
+}
+
 #[cfg(all(test, feature = "t-picker"))]
 mod tests {
     use super::*;
@@ -456,5 +480,49 @@ mod tests {
         assert!(!store_dir(&cat).join("t1.png").exists());
         assert!(write_cover(&cat, "t1", b"<html>").is_err(), "junk is not a cover");
         assert!(write_cover(&cat, "../t1", &p).is_err());
+    }
+
+    #[test]
+    fn the_sweep_adopts_copies_the_lazy_path_never_reaches() {
+        let cat = crate::scratch_dir("ifdb-store-sweep");
+        let (stale, none, nf) = (copy(&cat, "stale.z5"), copy(&cat, "none.z5"), copy(&cat, "nf.z5"));
+        let cover = encoded(image::ImageFormat::Png);
+        // An IFID nothing computes today: `load` would reject it before adopting.
+        write_legacy(&stale, &info("ZCODE-8202- - 31 -0A20", Some(meta(Some("t1"), "Zork", "2026-01-01T00:00:00Z"))), Some(&cover));
+        write_legacy(&none, &info("N", Some(meta(None, "Curated", "2026-01-01T00:00:00Z"))), Some(&cover));
+        let mut m = meta(None, "", "2026-01-01T00:00:00Z");
+        m.not_found = true;
+        write_legacy(&nf, &info("NF", Some(m)), None);
+        let (none_before, nf_before) =
+            (std::fs::read(story_info::info_path(&none)).unwrap(), std::fs::read(story_info::info_path(&nf)).unwrap());
+
+        assert_eq!(adopt_catalogue(&cat), 1);
+
+        assert_eq!(store_files(&cat), ["t1.json", "t1.png"]);
+        assert_eq!(std::fs::read(cover_path(&cat, "t1").unwrap()).unwrap(), cover);
+        assert_eq!(read_record(&cat, "t1").unwrap().title.as_deref(), Some("Zork"));
+        let own = std::fs::read_to_string(story_info::info_path(&stale)).unwrap();
+        assert!(own.contains("link") && !own.contains("fetched"), "{own}");
+        assert!(!stale.join(COPY_COVER).exists());
+        assert_eq!(std::fs::read(story_info::info_path(&none)).unwrap(), none_before);
+        assert_eq!(std::fs::read(story_info::info_path(&nf)).unwrap(), nf_before);
+        assert!(none.join(COPY_COVER).exists());
+        // Second run: nothing left to adopt.
+        assert_eq!(adopt_catalogue(&cat), 0);
+        let _ = std::fs::remove_dir_all(&cat);
+    }
+
+    #[test]
+    fn the_sweep_keeps_a_newer_store_record_and_removes_the_stale_copy_files() {
+        let cat = crate::scratch_dir("ifdb-store-sweep-newer");
+        write_record(&cat, "t1", &meta(Some("t1"), "New", "2026-06-01T00:00:00Z")).unwrap();
+        let a = copy(&cat, "a.z5");
+        write_legacy(&a, &info("OLD-IFID", Some(meta(Some("t1"), "Old", "2026-01-01T00:00:00Z"))), Some(&encoded(image::ImageFormat::Png)));
+        adopt_catalogue(&cat);
+        assert_eq!(read_record(&cat, "t1").unwrap().title.as_deref(), Some("New"));
+        assert!(!a.join(COPY_COVER).exists());
+        let own = std::fs::read_to_string(story_info::info_path(&a)).unwrap();
+        assert!(!own.contains("Old"), "{own}");
+        let _ = std::fs::remove_dir_all(&cat);
     }
 }

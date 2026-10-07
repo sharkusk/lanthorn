@@ -288,6 +288,15 @@ pub(crate) fn resolve_launch() -> LaunchCtx {
         &cfg.shared_documents_settings(),
     );
 
+    // SQ-1724: tidy every copy's own IFDB record/cover into the shared store, off
+    // the main thread. Idempotent; errors are swallowed by adoption itself.
+    {
+        let catalogue = roots.catalogue().to_path_buf();
+        std::thread::spawn(move || {
+            app::ifdb_store::adopt_catalogue(&catalogue);
+        });
+    }
+
     // A directory launches the pre-game picker (a library); a file plays directly.
     let (library_dir, single_file) = if story_path.is_dir() {
         (Some(story_path), None)
