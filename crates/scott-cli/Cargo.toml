@@ -19,8 +19,8 @@ name = "scott-cli"
 path = "src/main.rs"
 
 [dependencies]
-buildinfo = { package = "lanthorn-buildinfo", path = "../buildinfo", version = "0.9.2" }
-cli-host = { package = "lanthorn-cli-host", path = "../cli-host", version = "0.9.2" }
-scott = { package = "lanthorn-scott", path = "../scott", version = "0.9.2" }
-blorb = { package = "lanthorn-blorb", path = "../blorb", version = "0.9.2" }
+buildinfo = { package = "lanthorn-buildinfo", path = "../buildinfo", version = "0.9.3" }
+cli-host = { package = "lanthorn-cli-host", path = "../cli-host", version = "0.9.3" }
+scott = { package = "lanthorn-scott", path = "../scott", version = "0.9.3" }
+blorb = { package = "lanthorn-blorb", path = "../blorb", version = "0.9.3" }
 crossterm = "0.29"

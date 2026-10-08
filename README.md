@@ -226,8 +226,8 @@ itself.**
   over it, and the Documents tab reads a game's manuals and maps in place: text in a
   pager, pictures drawn in the pane, PDFs in your viewer.
   Every IFDB-linked game gets a documents folder
-  (`~/.lanthorn/documents/<Title> [<IFDB id>]`; *Next release:* new installs keep it in your
-  platform's data folder, see [Configuration](#configuration)) for its manual, feelies and maps,
+  (named `<Title> [<IFDB id>]`, in your platform's data folder, see
+  [Configuration](#configuration)) for its manual, feelies and maps,
   and you can fetch them without leaving lanthorn: pick from the files IFDB lists
   for the game (zips can be peeked inside, walkthroughs are flagged as spoilers,
   files you already have are marked), and they land in the folder. The Documents
@@ -359,8 +359,8 @@ beat at three speeds from one recording.
 
 **And the typeface.** *Arthur*'s Amiga floppy carries a real proportional font,
 drawn at the game's own per-glyph advances — try `/set-v6-render raster` to see
-it. Drop your own `Kick12.rom` or a Mac OS System file into `~/.lanthorn` (*Next release:* your
-data folder, see [Configuration](#configuration)) and the
+it. Drop your own `Kick12.rom` or a Mac OS System file into your data folder (see
+[Configuration](#configuration)) and the
 system faces come too: topaz 8, and Geneva, which lives on no Infocom disk at
 all.
 
@@ -405,25 +405,22 @@ see [**looks**](docs/guide/looks.md) for the font check, and
 
 ## Configuration
 
-lanthorn reads `~/.lanthorn/config.toml` (override with `--user-dir`, or point at
-a file with `--config`); every setting has a default, so the file is optional.
-CLI flags beat the config file, which beats built-in defaults. Saves and sidecars
-live under `~/.lanthorn/saves/<story-filename>.save/` by default; `--data-dir
-<path>` relocates just those.
-
-*Next release:* a new install keeps its files in your platform's standard
-folders instead of a dot-folder in your home directory. Config and styles
+lanthorn keeps its files in your platform's standard folders. Config and styles
 (`config.toml`, `style.toml`) live in `~/.config/lanthorn` on macOS and Linux and
 `%APPDATA%\lanthorn` on Windows; saves, per-player folders, documents and your
 own system disks live in `~/.local/share/lanthorn` (Windows: the same folder as
 config); the regenerable cache lives in `~/.cache/lanthorn` or
 `%LOCALAPPDATA%\lanthorn`; and `crash.log` and the `/dump-*` logs live in
 `~/.local/state/lanthorn` or `%LOCALAPPDATA%\lanthorn\logs`. (macOS and Linux
-honour `XDG_CONFIG_HOME`, `XDG_DATA_HOME`, `XDG_CACHE_HOME` and `XDG_STATE_HOME`.) If `~/.lanthorn` already exists it keeps being used, whole,
-exactly as before, and `--user-dir <folder>` still puts everything in one
-folder of your choosing. *Next release:* `lanthorn --migrate-user-dir` moves an
-existing `~/.lanthorn` into the standard folders (it shows the plan and asks
-first; `--yes` skips the question). See
+honour `XDG_CONFIG_HOME`, `XDG_DATA_HOME`, `XDG_CACHE_HOME` and `XDG_STATE_HOME`.)
+Every setting has a default, so the config file is optional; override its location
+with `--config <file>`. CLI flags beat the config file, which beats built-in
+defaults. `--data-dir <path>` relocates just the saves and sidecars.
+
+If `~/.lanthorn` already exists it keeps being used, whole, exactly as before, and
+`--user-dir <folder>` still puts everything in one folder of your choosing.
+`lanthorn --migrate-user-dir` moves an existing `~/.lanthorn` into the standard
+folders (it shows the plan and asks first; `--yes` skips the question). See
 [every setting](docs/reference/config.md) and
 [saves and rewind](docs/guide/saves-and-rewind.md).
 

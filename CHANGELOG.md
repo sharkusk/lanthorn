@@ -6,7 +6,7 @@ All notable changes to lanthorn are recorded here.
 [`.github/workflows/release.yml`](.github/workflows/release.yml)). A tag whose
 name contains a hyphen — `v0.1.0-beta.1`, `v0.2.0-rc.1` — is published as a
 **pre-release**; a bare `vMAJOR.MINOR.PATCH` is a full release. The workspace
-version in `Cargo.toml` (currently `0.9.2`) versions every crate and every
+version in `Cargo.toml` (currently `0.9.3`) versions every crate and every
 binary's `--version` at once, and carries any pre-release suffix so a build
 identifies itself without reading its git hash.
 
@@ -19,13 +19,21 @@ Absolute URLs or no link.
 
 ---
 
-## Unreleased
+## v0.9.3 — 2026-10-07
 
-*This section is drained when a version is cut. README.md describes the
-RELEASED build; prose for a feature that is in `main` but not yet released
-goes into the README in place, at its normal destination, marked with the
-visible tag `*Next release:*`. `release.yml` refuses to cut a release
-while any such tag, or this Unreleased section, still exists.*
+### Highlights
+
+- **lanthorn now keeps its files in your platform's standard folders**, not a
+  dot-folder in your home directory, and `lanthorn --migrate-user-dir` moves an
+  existing `~/.lanthorn` over. If you already have `~/.lanthorn`, it keeps
+  working exactly as before.
+- **A game's IFDB details and cover are fetched once and shared by every copy of
+  it**, so duplicates and other players' libraries show the same record and cover.
+- **Game documents are safer.** Only manuals, notes and pictures lanthorn can
+  show are downloaded; programs and scripts never are.
+- **A runaway game or a damaged file no longer hangs lanthorn.** A Z-machine
+  story stuck in a loop, or a corrupt disk image, sound or picture, now fails
+  cleanly.
 
 ### Added
 
@@ -66,6 +74,17 @@ while any such tag, or this Unreleased section, still exists.*
   keeps being used exactly as before, and `--user-dir` still puts everything in
   one folder. On Windows, lanthorn no longer depends on a `HOME` variable being
   set to find your files.
+
+### Fixed
+
+- **A runaway Z-machine game no longer freezes lanthorn.** A story stuck in a
+  loop that never asks for input is stopped after about ten seconds with an
+  error message, as Glulx games already were, instead of freezing lanthorn.
+- **One bad story file no longer stops the library index.** A file that crashed
+  the indexer used to cut the story list short; it now costs only that file.
+- **Damaged disk images, sounds and pictures no longer hang lanthorn or use up
+  all your memory.** Malformed disk images, audio files with absurd settings and
+  oversized or corrupt pictures are rejected, and picture caches are capped.
 
 ## v0.9.2 — 2026-10-06
 
