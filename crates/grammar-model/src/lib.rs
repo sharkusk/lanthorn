@@ -863,6 +863,30 @@ pub const ARTICLES: [&str; 4] = ["the", "a", "an", "some"];
 pub const GLUE: [&str; 11] =
     ["of", "on", "in", "at", "to", "with", "from", "for", "by", "under", "over"];
 
+/// Direction words that Inform stories file as OBJECTS (SQ-1748): the compass
+/// objects of the Standard Rules / Inform 6 library (`north`/`n`, `outside`/
+/// `out`, `up`/`u`, ...) carry these in their `name` arrays like any noun, so the
+/// object list answers yes to "would typing `north` name a thing" while the
+/// word is, to a player, a way to go and not a thing. [`ObjectWordSet`] leaves
+/// them out for the reveal's own promise that it never lights a direction.
+///
+/// English, curated by hand like [`GLUE`] (the dictionary has no bit for it):
+/// the eight compass directions with their abbreviations, plus `up`, `down`,
+/// `in`, `out`, `inside` and `outside`. A story with a thing genuinely and only
+/// named one of these loses that one light rather than gaining wrong ones.
+pub const DIRECTIONS: [&str; 24] = [
+    "north", "n", "northeast", "ne", "northwest", "nw", "south", "s", "southeast", "se",
+    "southwest", "sw", "east", "e", "west", "w", "up", "u", "down", "d", "in", "out", "inside",
+    "outside",
+];
+
+/// Personal pronouns, which Inform 7's pronoun-group objects (`man`/`woman`
+/// groups answering to `he him she her`) and the library's `me`/`yourself`
+/// objects store as `name` words (SQ-1748). A pronoun stands for a thing, it
+/// never names one, so [`ObjectWordSet`] leaves them out. English, curated.
+pub const PRONOUNS: [&str; 13] =
+    ["he", "him", "she", "her", "it", "them", "you", "me", "us", "they", "his", "hers", "its"];
+
 /// "Does ANY object answer to this word?" — [`ObjectWords::refers_to`] asked of
 /// a whole story at once, as one membership set.
 ///
@@ -896,7 +920,8 @@ impl ObjectWordSet {
     /// Fold a story's objects into the set. Nouns and adjectives both count,
     /// exactly as [`ObjectWords::refers_to`] counts them: each stored word is
     /// kept truncated by its own object's rule, verbatim otherwise — except
-    /// the [`ARTICLES`] and the curated [`GLUE`] words, which are dropped
+    /// the [`ARTICLES`], the curated [`GLUE`], [`DIRECTIONS`] and [`PRONOUNS`]
+    /// words, which are dropped
     /// (see each for why and for the sources).
     pub fn build<'a>(objects: impl IntoIterator<Item = &'a ObjectWords>) -> ObjectWordSet {
         let mut keys: Vec<(Option<usize>, HashSet<String>)> = Vec::new();
@@ -911,6 +936,8 @@ impl ObjectWordSet {
             for w in o.words.iter().chain(o.adjectives.words()) {
                 if ARTICLES.iter().any(|a| a.eq_ignore_ascii_case(w))
                     || GLUE.iter().any(|g| g.eq_ignore_ascii_case(w))
+                    || DIRECTIONS.iter().any(|d| d.eq_ignore_ascii_case(w))
+                    || PRONOUNS.iter().any(|p| p.eq_ignore_ascii_case(w))
                 {
                     continue;
                 }
@@ -1181,6 +1208,31 @@ mod tests {
         assert!(objects[0].refers_to("of"), "in the phrase, `of` still counts");
         // The real nouns in the same name array are untouched by either filter.
         assert!(set.contains("tavern") && set.contains("back"));
+    }
+
+    /// SQ-1748: Inform's compass objects and I7's pronoun-group objects keep
+    /// `north`/`out`/`he`/`him` in their `name` arrays; none of those may be in
+    /// the set, while the same objects' real nouns still are.
+    #[test]
+    fn direction_words_and_pronouns_stay_out_of_the_set() {
+        let objects = [
+            ObjectWords::new(1, String::new(), vec!["north".into(), "direction".into(), "n".into()], Some(1), Some(9)),
+            ObjectWords::new(2, String::new(), vec!["outside".into(), "out".into(), "up".into(), "u".into()], Some(1), Some(9)),
+            ObjectWords::new(
+                3,
+                String::new(),
+                vec!["mangroup".into(), "man".into(), "men".into(), "he".into(), "him".into()],
+                Some(1),
+                Some(9),
+            ),
+            ObjectWords::new(4, String::new(), vec!["north".into(), "door".into()], Some(1), Some(9)),
+        ];
+        let set = ObjectWordSet::build(&objects);
+        for w in DIRECTIONS.iter().chain(PRONOUNS.iter()) {
+            assert!(!set.contains(w), "{w:?} must not be lit");
+        }
+        assert!(set.contains("man") && set.contains("door") && set.contains("direction"));
+        assert!(objects[2].refers_to("he"), "the object itself still answers to its words");
     }
 
     #[test]

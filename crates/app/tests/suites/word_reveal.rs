@@ -678,6 +678,36 @@ fn glulx_glue_words_stay_out_of_the_object_word_set() {
     }
 }
 
+/// **SQ-1748's contract.** Inform's compass objects (`north`/`n`, `up`/`u`,
+/// `outside`/`out`, ...) and I7's pronoun-group objects (`man`/`woman` groups
+/// answering to `he him she her`) store those words in their `name` arrays, and
+/// the reveal lit `up`, `out` and `he` in Toby's Nose's opening text. Asked of
+/// the SET directly. `carpet` and `sofa` — real nouns the story's own tutorial
+/// types — stay lit, and so does `direction` (a kind word, not a direction).
+///
+/// Non-vacuity: the specimen's object list really does carry the words, so the
+/// case fails the moment `DIRECTIONS`/`PRONOUNS` come out of
+/// `ObjectWordSet::build`.
+#[test]
+fn glulx_direction_words_and_pronouns_stay_out_of_the_object_word_set() {
+    use app::engine::Introspect;
+    let Some(session) = glulx_session("Toby's Nose.gblorb") else { return };
+    let all = Introspect::all_object_words(&session).expect("Toby's Nose answers");
+    for carried in ["north", "out", "he", "him", "she", "her"] {
+        assert!(
+            all.iter().any(|o| o.words.iter().any(|w| w == carried)),
+            "sanity: an object of this story must carry {carried:?}, or this proves nothing"
+        );
+    }
+    let set = Introspect::object_word_set(&session).expect("Toby's Nose answers");
+    for w in grammar_model::DIRECTIONS.iter().chain(grammar_model::PRONOUNS.iter()) {
+        assert!(!set.contains(w), "{w:?} is a direction or pronoun and must not light (SQ-1748)");
+    }
+    for thing in ["carpet", "sofa", "direction"] {
+        assert!(set.contains(thing), "{thing:?} is a real name word and stays lit");
+    }
+}
+
 /// The Glulx set is cached for a turn and rebuilt after the VM runs — the same
 /// SQ-1176 discipline `GameSession` proves in `session.rs`'s unit test, held
 /// here at the adapter's seam because the invalidation lives in its drive
