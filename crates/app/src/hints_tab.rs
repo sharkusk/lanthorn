@@ -43,6 +43,16 @@ const BUILTIN_LINE: &str = "This game has its own hints \u{2014} type HINT in th
 /// Lines scrolled per PageUp/PageDown while the session has the keyboard.
 const HINT_PAGE_LINES: i32 = 10;
 
+/// The dictionary the built-in-HINT check reads: empty when the story's `HINT`
+/// only advertises Infocom's InvisiClues booklets (SQ-1745).
+fn builtin_hint_words(state: &AppState) -> &[String] {
+    if state.hint_booklet_notice {
+        &[]
+    } else {
+        &state.dict_words
+    }
+}
+
 /// Where the tab's session stands.
 #[derive(Debug, Clone, PartialEq, Eq, Default)]
 pub enum Phase {
@@ -208,7 +218,7 @@ pub fn ensure_started_in_with_tuid(
     state.hints_tab.phase = Phase::NotStarted;
     let index = crate::hints::load_hint_index(&state.config.user_dir);
     state.hints_tab.status = game_hint_status_with_tuid(story_path, story, tuid, &index);
-    match start_with_tuid(story_path, story, tuid, picked.as_deref(), running.as_deref(), &state.dict_words, &state.config) {
+    match start_with_tuid(story_path, story, tuid, picked.as_deref(), running.as_deref(), builtin_hint_words(state), &state.config) {
         HintStart::Started(session) => {
             state.overlays.hints = Some(*session);
             state.hints_tab.phase = Phase::Running;
@@ -723,8 +733,9 @@ fn draw_session(state: &AppState, session: &HintSession, st: &Styles, area: Rect
     }
 
     // The built-in-HINT suggestion takes the first row under the menu.
-    let hint_rows: u16 = u16::from(session.builtin_hint);
-    if session.builtin_hint && transcript_area.height >= 1 {
+    let show_builtin = session.shows_builtin_line();
+    let hint_rows: u16 = u16::from(show_builtin);
+    if show_builtin && transcript_area.height >= 1 {
         crate::render::draw_str_clipped(
             buf, transcript_area.x, transcript_area.y, BUILTIN_LINE, st.builtin, transcript_area,
         );
@@ -842,15 +853,26 @@ mod tests {
     }
 
     #[test]
-    fn tab_renders_transcript_suggestion_and_input() {
+    fn a_booklet_only_hint_word_does_not_count_as_builtin_hints() {
+        let mut state = AppState::default();
+        state.dict_words = vec!["hint".to_string(), "look".to_string()];
+        assert!(crate::hints::story_supports_hint(builtin_hint_words(&state).iter().cloned()));
+        state.hint_booklet_notice = true;
+        assert!(!crate::hints::story_supports_hint(builtin_hint_words(&state).iter().cloned()));
+    }
+
+    #[test]
+    fn tab_renders_transcript_and_input_without_the_builtin_suggestion_while_a_companion_runs() {
         let Some(hs) = make_hint_session() else {
             eprintln!("SKIP: minizork.z3 fixture absent");
             return;
         };
+        assert!(hs.builtin_hint, "non-vacuity: the session was told the story has a HINT word");
+        assert!(!hs.shows_builtin_line());
         let state = tab_state(hs);
         let all = screen_rows(80, 30, &state).join("\n");
         assert!(all.contains("pick a topic"), "transcript text must appear");
-        assert!(all.contains("HINT"), "built-in hint suggestion ('type HINT') must appear");
+        assert!(!all.contains("type HINT"), "SQ-1745: no 'type HINT' line above a running companion");
         assert!(all.contains("> 3"), "the input row shows the buffer");
         assert!(state.hints_tab.hits().input.height == 1, "the input row's rect is recorded");
     }

@@ -63,10 +63,37 @@ const PRINT_RET: u8 = 0xB3;
 /// a fault for the CPU to raise, and a scan that decodes code as text will read
 /// wild abbreviation addresses. That must never reach the live machine.
 pub fn zmachine_words(live: &Memory) -> BTreeSet<String> {
-    let Ok(mem) = Memory::new(live.raw_bytes().to_vec()) else {
-        return BTreeSet::new();
-    };
     let mut out = BTreeSet::new();
+    scan_text(live, |text, at_boundary| harvest(text, !at_boundary, &mut out));
+    out
+}
+
+/// Does the story's own text carry Infocom's stock InvisiClues booklet advert
+/// (`[If you're really stuck, maps and InvisiClues(TM) Hint Booklets are
+/// available...]`)? That is all the `HINT` verb prints in such a story, so a
+/// `hint` dictionary entry there is no evidence of built-in hints (SQ-1745).
+///
+/// Matched as a phrase inside one decoded string, not as loose words, so a story
+/// with real hints that merely mentions the booklets elsewhere is not caught
+/// unless one string holds both names.
+pub fn advertises_hint_booklet(live: &Memory) -> bool {
+    let mut found = false;
+    scan_text(live, |text, _| {
+        let lower = text.to_ascii_lowercase();
+        if lower.contains("invisiclues") && lower.contains("hint booklet") {
+            found = true;
+        }
+    });
+    found
+}
+
+/// Walk every string the story can print — high memory decoded end to end, then
+/// object short names — calling `f(text, at_boundary)`; `at_boundary` is false
+/// when the decode may have begun part-way into a word.
+fn scan_text(live: &Memory, mut f: impl FnMut(&str, bool)) {
+    let Ok(mem) = Memory::new(live.raw_bytes().to_vec()) else {
+        return;
+    };
     let high = (mem.read_word(0x04) as u32).min(mem.len() as u32);
     let end = mem.len() as u32;
     let mut p = high;
@@ -75,7 +102,7 @@ pub fn zmachine_words(live: &Memory) -> BTreeSet<String> {
         let (text, next) = zvm::text::decode_string(&mem, p);
         if reads_as_text(&text) {
             let at_boundary = synced || matches!(mem.read_byte(p.saturating_sub(1)), PRINT | PRINT_RET);
-            harvest(&text, !at_boundary, &mut out);
+            f(&text, at_boundary);
             p = next.max(p + 1);
             synced = true;
         } else {
@@ -84,9 +111,8 @@ pub fn zmachine_words(live: &Memory) -> BTreeSet<String> {
         }
     }
     for obj in 1..=zvm::objects::object_count(&mem) {
-        harvest(&zvm::objects::short_name(&mem, obj), false, &mut out);
+        f(&zvm::objects::short_name(&mem, obj), true);
     }
-    out
 }
 
 /// Add `text`'s words to `out`, skipping the first when the decode may have
@@ -173,5 +199,39 @@ mod tests {
         assert!(out.contains("lantern") && out.contains("the"));
         harvest("brass lantern", false, &mut out);
         assert!(out.contains("brass"));
+    }
+
+    fn load(rel: &str) -> Option<Memory> {
+        let p = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../stories").join(rel);
+        Memory::new(std::fs::read(p).ok()?).ok()
+    }
+
+    fn has_hint_word(mem: &Memory) -> bool {
+        zvm::dictionary::load(mem)
+            .words(mem)
+            .iter()
+            .any(|w| w.eq_ignore_ascii_case("hint") || w.eq_ignore_ascii_case("hints"))
+    }
+
+    /// Beyond Zork r57: `hint` is in the dictionary but only prints the booklet advert.
+    #[test]
+    fn beyond_zork_hint_is_only_the_booklet_advert() {
+        let Some(mem) = load("beyondzork-r57-s871221.z5") else {
+            eprintln!("SKIP: stories/beyondzork-r57-s871221.z5 absent");
+            return;
+        };
+        assert!(has_hint_word(&mem), "non-vacuity: the dictionary has `hint`");
+        assert!(advertises_hint_booklet(&mem));
+    }
+
+    /// Lost Pig has a real HINT verb and no booklet advert: still counts as built-in hints.
+    #[test]
+    fn a_story_with_real_hints_is_not_flagged() {
+        let Some(mem) = load("LostPig.z8") else {
+            eprintln!("SKIP: stories/LostPig.z8 absent");
+            return;
+        };
+        assert!(has_hint_word(&mem));
+        assert!(!advertises_hint_booklet(&mem));
     }
 }

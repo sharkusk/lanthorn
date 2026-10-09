@@ -6491,6 +6491,10 @@ impl Engine for GameSession {
         Some(crate::story_text::zmachine_words(&self.machine.mem))
     }
 
+    fn advertises_hint_booklet(&self) -> bool {
+        crate::story_text::advertises_hint_booklet(&self.machine.mem)
+    }
+
     /// The story's OWN tokeniser, run over prose the story itself printed
     /// (SQ-1116) — `zvm::dictionary::tokenise`, which is the routine `read`
     /// calls, so the dictionary's declared separators (ZMSD §13.1) are the ones

@@ -1708,6 +1708,8 @@ pub fn boot_story(req: BootRequest<'_>, hooks: &mut dyn BootHooks) -> Result<Boo
         None => words,
     };
 
+    state.hint_booklet_notice = session.advertises_hint_booklet();
+
     // Open whichever panel this story starts with (SQ-1123): the per-game override, or the global
     // `[command_panel] auto_open` fallback resolved into `initial_panel` above.
     // Instant (no slide) so the first frame is already the settled layout.

@@ -1376,6 +1376,13 @@ pub trait Engine {
         None
     }
 
+    /// Does the story's own text carry only Infocom's stock InvisiClues booklet
+    /// advert where a built-in `HINT` would be (SQ-1745)? Then a `hint`
+    /// dictionary entry says nothing about built-in hints. `false` by default.
+    fn advertises_hint_booklet(&self) -> bool {
+        false
+    }
+
     /// Split prose the way this story's own parser splits an input line
     /// (SQ-1116).
     ///

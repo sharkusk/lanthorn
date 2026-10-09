@@ -48,6 +48,14 @@ pub struct HintSession {
 }
 
 impl HintSession {
+    /// Whether the panel draws the "this game has its own hints" suggestion.
+    /// Never while a companion hint program is running (SQ-1745): the player is
+    /// already reading hints, and pointing at the story's `HINT` on top of them
+    /// is noise.
+    pub fn shows_builtin_line(&self) -> bool {
+        self.builtin_hint && !matches!(self.source, HintSource::Zcode(_))
+    }
+
     /// Scroll the transcript by `delta` rows, clamped to `[0, max]`, easing the
     /// displayed offset per the `[animation]` config (instant when disabled).
     ///
@@ -3478,6 +3486,9 @@ pub struct AppState {
     /// `zvm::dictionary::load(&session.machine.mem).words(&session.machine.mem)`.
     /// If empty, autocomplete draws only from room-description words.
     pub dict_words: Vec<String>,
+    /// The story's only `HINT` text is Infocom's InvisiClues booklet advert
+    /// (SQ-1745), so `hint` in [`Self::dict_words`] is not a built-in-hints signal.
+    pub hint_booklet_notice: bool,
     /// The words the story has PRINTED that its own dictionary holds — deduped,
     /// **most recently printed first**, extended once a turn by
     /// [`crate::input::refresh_seen_words`] (SQ-1116, accumulated by SQ-1135).
@@ -4053,6 +4064,7 @@ impl Default for AppState {
             pending_filename: None,
             filename_submitted: None,
             dict_words: Vec::new(),
+            hint_booklet_notice: false,
             seen_words: Vec::new(),
             seen_nouns: Vec::new(),
             seen_scanned: 0,
