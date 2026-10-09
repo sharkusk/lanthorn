@@ -249,22 +249,31 @@ cleared it. The lane's real finding is the section below.
   arm — and do not appear as frames because they inline into their callers. There
   is no loop to hoist a check out of, either: one decode reads one to six bytes
   at unrelated addresses.
+- **Locals in a flat stack** rather than a `Vec<u16>` per `Frame` (SQ-1441,
+  2026-10-09). Built: one shared `State::locals`, `Frame` holding a base and a
+  length, no allocation per call. 20,000 turns of minizork, seven runs each: the
+  baseline's median was 0.606 s (0.611 s on a same-load rerun) against 0.604 s
+  after — **−0.3% to −1.1%**, inside this machine's run-to-run drift, and the
+  rerun's *min* beat the new build's. Output and the Quetzal Stks bytes were
+  identical. It does not move because the allocator's ~3% was the only real cost
+  it removed; what remains in `read_var`/`write_var` is the variable dispatch
+  itself, which a flat stack still pays. The price decided it: `Frame::locals()`
+  leaves zvm's public surface (a `Frame` alone cannot see a shared stack), and
+  call, return, throw, interrupt and Quetzal frame handling are all rewritten, for
+  no gain. Dropped.
 
-Two things left could plausibly matter, and neither is filed as work because
-neither has a measured case yet:
+One idea is left, and it was weighed and declined (SQ-1441):
 
-- **Locals in a flat stack** rather than a `Vec<u16>` per `Frame`. It would turn
-  `read_var`'s `frames.last()` plus bounds check (8.6%, and `write_var`'s 5.1%
-  beside it) into a direct index, and delete a `malloc`/`free` pair per routine
-  call. It changes `Frame`, which Quetzal serializes.
 - **Fused decode-and-dispatch** — no `Instr` value at all, operands read straight
   into stack slots by the opcode's own arm, a known dispatch-loop technique
   (dfrotz and glulxe both use some form of it, though neither's source was
-  read to arrive at it here). That is the only change with real headroom left;
-  the 63% above is its target, per SQ-1441's own inline-operand measurement below.
-  It is also a second interpreter to keep correct beside the one the corpus
-  covers, and the inline-operand measurement says the *struct* is only 2.6
-  points of that 63 — so most of it is work no change of shape avoids.
+  read to arrive at it here). It is the only change with any headroom left, but
+  the headroom is uncertain: the inline-operand measurement above says the
+  *struct* is only 2.6 points of the 63%, so most of it is work no change of shape
+  avoids. The cost is high risk — a second decoder beside the public
+  `zvm::cpu::decode` that the disassembler, tracer and embedders use, with every
+  opcode rewritten and a second interpreter to keep correct beside the one the
+  corpus covers — for no player-visible gain at 1.57× dfrotz. Declined.
 
 ### gvm
 
