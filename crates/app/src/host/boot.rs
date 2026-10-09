@@ -1494,7 +1494,7 @@ pub fn boot_story(req: BootRequest<'_>, hooks: &mut dyn BootHooks) -> Result<Boo
     // archive predating this gate could carry a bogus room from exactly that
     // false positive, and this stops it from ever growing further, though it
     // does not retroactively clean one out.
-    if crate::engine_helpers::zmachine_story_has_no_grammar(&*session) {
+    if crate::engine_helpers::zmachine_story_is_menu_driven_v6(&*session) {
         mapper.disable_mapping();
     }
 

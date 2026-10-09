@@ -290,22 +290,27 @@ pub fn is_v6_session(session: &dyn Engine) -> bool {
     zvm_session_opt(session).is_some_and(|z| z.machine.mem.version() == 6)
 }
 
-/// Whether `session` is a Z-machine story with NO grammar table at all —
-/// `zvm::grammar::Grammar::load` answers [`Absent`](zvm::grammar::GrammarError::Absent)
-/// for a menu-driven Version 6 game (Journey) or a Dialog story, neither of which
-/// has any verb-driven navigation to build a map out of. `false` for Glulx/Scott
-/// and for a bare `dyn Engine` that doesn't downcast to a Z-machine session — this
-/// exists only to gate the automapper (SQ-1579), and every other engine's own
-/// detection heuristics are unrelated to the v6 status-band false-positive this
-/// suppresses.
+/// Whether `session` is a menu-driven Z-machine Version 6 story: V6 AND no
+/// grammar table at all (`zvm::grammar::Grammar::load` answers
+/// [`Absent`](zvm::grammar::GrammarError::Absent)), as Journey does. Such a story has
+/// no verb-driven navigation to build a map out of, and its status band can paint
+/// room-shaped text a detector mistakes for a location. `false` for Glulx/Scott
+/// and for a bare `dyn Engine` that doesn't downcast to a Z-machine session. This
+/// exists only to gate the automapper (SQ-1579).
+///
+/// The V6 condition is load-bearing (SQ-1742): a Dialog story is not V6 and
+/// writes no Inform grammar table (so is `Absent` too), yet is an ordinary parser
+/// game whose rooms the name detectors read fine; gating on `Absent` alone
+/// switched its map off.
 ///
 /// Only `Absent` counts. Any other error means the grammar reader did not
 /// recognise a table that IS there (a story from a compiler whose layout it has
 /// not met), which says nothing against the story being a map-worthy parser game;
 /// gating on `is_err()` switched the map off for every ZILF-built story.
-pub fn zmachine_story_has_no_grammar(session: &dyn Engine) -> bool {
+pub fn zmachine_story_is_menu_driven_v6(session: &dyn Engine) -> bool {
     zvm_session_opt(session).is_some_and(|z| {
-        matches!(zvm::grammar::Grammar::load(&z.machine.mem), Err(zvm::grammar::GrammarError::Absent))
+        z.machine.mem.version() == 6
+            && matches!(zvm::grammar::Grammar::load(&z.machine.mem), Err(zvm::grammar::GrammarError::Absent))
     })
 }
 

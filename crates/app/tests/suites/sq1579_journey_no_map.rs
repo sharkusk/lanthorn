@@ -37,7 +37,7 @@
 use std::path::PathBuf;
 
 use app::engine::Engine;
-use app::engine_helpers::zmachine_story_has_no_grammar;
+use app::engine_helpers::zmachine_story_is_menu_driven_v6;
 use app::graphics::PictSource;
 use app::interpreter::InterpreterProfile;
 use app::machine_boot::MachineBoot;
@@ -90,7 +90,7 @@ fn amiga_journey_has_no_grammar_and_stays_unmapped() {
     // the fact the boot-time gate (`host::boot`/`host::reset`) reads to call
     // `Mapper::disable_mapping` before the first turn is ever applied.
     assert!(
-        zmachine_story_has_no_grammar(&session),
+        zmachine_story_is_menu_driven_v6(&session),
         "the Amiga Journey floppy must have no grammar table (Grammar::load == Absent)"
     );
 
@@ -153,7 +153,7 @@ fn pc_r83_journey_has_no_grammar_and_stays_unmapped() {
     session.flush_boot_pictures();
 
     assert!(
-        zmachine_story_has_no_grammar(&session),
+        zmachine_story_is_menu_driven_v6(&session),
         "journey-r83-s890706.z6 must have no grammar table (Grammar::load == Absent)"
     );
 

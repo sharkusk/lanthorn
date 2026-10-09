@@ -454,7 +454,7 @@ pub fn reset_game(
                 // always comes back with mapping enabled, and a restart is the
                 // same story, so the same "no grammar → no map" decision boot
                 // made must be made again. See `host::boot`'s call for why.
-                if crate::engine_helpers::zmachine_story_has_no_grammar(&*session) {
+                if crate::engine_helpers::zmachine_story_is_menu_driven_v6(&*session) {
                     mapper.disable_mapping();
                 }
             }

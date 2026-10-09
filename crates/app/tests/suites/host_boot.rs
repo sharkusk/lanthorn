@@ -869,3 +869,30 @@ fn a_loose_known_version_six_release_keeps_its_own_basename_game_dir() {
 
     let _ = std::fs::remove_dir_all(&home);
 }
+
+/// SQ-1742: a Dialog story has no Inform grammar table, and the SQ-1579 no-map
+/// gate used to read that as "menu-driven", so `The Impossible Bottle` never
+/// mapped through the real boot path (a bare `Mapper::default()` in
+/// `nameonly_room_corroboration` could not see the gate). Answer the opening menu
+/// with `1` five times, then `look`, `south`: Kitchen and the room south of it
+/// must reach the map.
+#[test]
+fn a_dialog_story_maps_through_boot_story() {
+    let story = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../stories/the-impossible-bottle.zblorb.blorb");
+    if !story.is_file() {
+        eprintln!("SKIP: stories/the-impossible-bottle.zblorb.blorb absent in this checkout");
+        return;
+    }
+    let home = app::scratch_dir("host-boot-sq1742-dialog");
+    let mut b = boot(story, headless_config(&home), &home.join("saves"));
+    for cmd in ["1", "1", "1", "1", "1", "look", "south"] {
+        play(&mut b, cmd);
+    }
+    let rooms: Vec<String> = b.mapper.graph.rooms().map(|r| r.name.clone()).collect();
+    assert!(rooms.contains(&"Kitchen".to_string()), "the Bottle's opening room is mapped: {rooms:?}");
+    assert!(
+        rooms.contains(&"Smooth surface".to_string()),
+        "walking south out of the Kitchen maps the next room: {rooms:?}"
+    );
+    let _ = std::fs::remove_dir_all(&home);
+}

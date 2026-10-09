@@ -1,6 +1,6 @@
 //! A story built with ZILF + ZAPF gets an automap (SQ-1718).
 //!
-//! The SQ-1579 gate (`zmachine_story_has_no_grammar`) switched mapping off on
+//! The SQ-1579 gate (`zmachine_story_is_menu_driven_v6`) switched mapping off on
 //! ANY `Grammar::load` error, and a ZILF build made `load` fail with
 //! `BadVerbTable` — its serial is the build date, ZAPF stamps `"ZAPF"` at $3C
 //! and lays the verb tables out in a different order — so rooms were detected
@@ -13,7 +13,7 @@
 
 use std::path::PathBuf;
 
-use app::engine_helpers::zmachine_story_has_no_grammar;
+use app::engine_helpers::zmachine_story_is_menu_driven_v6;
 use app::session::{apply_turn, DeathWatch, GameSession};
 use mapper::mapper::Mapper;
 
@@ -36,7 +36,7 @@ fn session_for(bytes: Vec<u8>) -> GameSession {
 fn walk_and_map(bytes: Vec<u8>) -> Vec<String> {
     let mut session = session_for(bytes);
     let mut mapper = Mapper::default();
-    if zmachine_story_has_no_grammar(&session) {
+    if zmachine_story_is_menu_driven_v6(&session) {
         mapper.disable_mapping(); // exactly what `host::boot` does
     }
     let mut death = DeathWatch::default();
@@ -53,7 +53,7 @@ fn zilf_zork1_has_a_grammar_and_is_mapped() {
     let path = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../unit_tests/zork1-mit.z3");
     let bytes = std::fs::read(&path).unwrap_or_else(|e| panic!("{}: {e}", path.display()));
     assert!(
-        !zmachine_story_has_no_grammar(&session_for(bytes.clone())),
+        !zmachine_story_is_menu_driven_v6(&session_for(bytes.clone())),
         "a ZILF build has a grammar table, so the map gate must stay open"
     );
     let rooms = walk_and_map(bytes);
@@ -77,7 +77,7 @@ fn an_unreadable_grammar_does_not_switch_the_map_off() {
         Some(zvm::grammar::GrammarError::BadVerbTable),
         "non-vacuity: the reader must refuse this story"
     );
-    assert!(!zmachine_story_has_no_grammar(&session_for(bytes.clone())));
+    assert!(!zmachine_story_is_menu_driven_v6(&session_for(bytes.clone())));
     assert_eq!(walk_and_map(bytes).len(), 5);
 }
 
@@ -93,14 +93,14 @@ fn infocom_zork1_maps_the_same_walk() {
 }
 
 /// The other half of the gate: a Dialog story has no grammar table of any shape
-/// and must still answer `Absent`, i.e. stay unmapped. (Journey, the other
-/// SQ-1579 case, is `sq1579_journey_no_map`'s.)
+/// (`Absent`) but is not menu-driven V6, so the gate stays open and it is mapped
+/// (SQ-1742). (Journey, the SQ-1579 case, is `sq1579_journey_no_map`'s.)
 #[test]
-fn a_dialog_story_still_has_no_grammar_and_stays_unmapped() {
+fn a_dialog_story_has_no_grammar_but_is_still_mapped() {
     let path = fixture_path("ImpossibleStairs.z8");
     let Ok(bytes) = std::fs::read(&path) else {
         eprintln!("SKIP: fetched story missing at {}", path.display());
         return;
     };
-    assert!(zmachine_story_has_no_grammar(&session_for(bytes)));
+    assert!(!zmachine_story_is_menu_driven_v6(&session_for(bytes)));
 }
