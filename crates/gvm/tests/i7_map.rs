@@ -320,6 +320,23 @@ fn a_story_that_builds_its_map_at_run_time_is_refused_rather_than_guessed_at() {
     assert!(I7World::detect(&mem, &pn).is_none());
 }
 
+#[test]
+fn a_story_whose_rooms_declare_no_exits_still_yields_its_room_set() {
+    // SQ-1747. `Toby's Nose.gblorb` (Inform 7 build 6M62) has two rooms and no
+    // connection between them, so the reciprocity scan finds no `Map_Storage`;
+    // the rooms are read from the object tree instead (the one instance-count
+    // kind whose members are all contained by nothing). Exits are NOT claimed.
+    let Some(mem) = story("Toby's Nose.gblorb") else {
+        return;
+    };
+    let pn = ParseNames::detect(&mem).expect("an object tree");
+    let w = I7World::detect(&mem, &pn).expect("the room set is recovered");
+    assert!(!w.has_map());
+    assert_eq!(w.rooms(), &[0x136b0f, 0x13ba2f]);
+    assert!(w.exits(&mem, &pn, 0x136b0f).is_empty());
+    assert_eq!(w.exit(&mem, &pn, 0x136b0f, 0), None);
+}
+
 // ── The corpus sweep ────────────────────────────────────────────────────────
 
 #[test]

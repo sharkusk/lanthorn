@@ -119,6 +119,10 @@ pub struct I7World {
     dir_prop: u16,
     name_prop: Option<u16>,
     map_storage: u32,
+    /// False for a world recovered by [`PropIndex::rooms_by_tree`] (SQ-1747):
+    /// the room set is known but no `Map_Storage` was found, so `map_storage`
+    /// is meaningless and no exit is claimed either way.
+    has_map: bool,
     rooms: Vec<u32>,
     directions: Vec<u32>,
     room_index: HashMap<u32, usize>,
@@ -219,8 +223,18 @@ impl I7World {
         let counts = props.instance_counts();
 
         let (dir_prop, directions) = props.direction_property(mem, names, &counts)?;
-        let (room_prop, rooms, map_storage) =
-            props.locate_map(mem, &objects, &counts, dir_prop, directions.len())?;
+        // SQ-1747: a story whose rooms declare no exits at all (Toby's Nose: two
+        // rooms, no connection) has no map for the reciprocity scan to find, but
+        // its rooms are still a fact the object tree states. Only when the scan
+        // finds nothing; a story it does find is read exactly as before.
+        let (room_prop, rooms, map_storage, has_map) =
+            match props.locate_map(mem, &objects, &counts, dir_prop, directions.len()) {
+                Some((p, r, a)) => (p, r, a, true),
+                None => {
+                    let (p, r) = props.rooms_by_tree(mem, names, &counts, dir_prop)?;
+                    (p, r, 0, false)
+                }
+            };
 
         let room_index = rooms.iter().enumerate().map(|(i, &a)| (a, i)).collect();
         let name_prop = props.printed_name_property(mem);
@@ -230,11 +244,20 @@ impl I7World {
             dir_prop,
             name_prop,
             map_storage,
+            has_map,
             rooms,
             directions,
             room_index,
             dir_compass,
         })
+    }
+
+    /// Whether a `Map_Storage` was found. `false` means only the room set is
+    /// known (SQ-1747): [`exits`](Self::exits) is then empty and
+    /// [`exit`](Self::exit) is `None`, which is NOT a claim that the rooms are
+    /// unconnected — a caller that needs to tell must check this first.
+    pub fn has_map(&self) -> bool {
+        self.has_map
     }
 
     /// Every room, in `IK1_Count` order — which is also `Map_Storage` row order.
@@ -294,7 +317,7 @@ impl I7World {
     /// `room`/`dir` that is not one of ours.
     pub fn raw_exit(&self, mem: &Memory, room: u32, dir: usize) -> Option<u32> {
         let r = *self.room_index.get(&room)?;
-        if dir >= self.directions.len() {
+        if !self.has_map || dir >= self.directions.len() {
             return None;
         }
         let cell = self.map_storage + ((r * self.directions.len() + dir) as u32) * 4;
@@ -606,6 +629,39 @@ impl PropIndex {
         }
         let (_, _, prop, addr) = best?;
         Some((prop, counts[&prop].clone(), addr))
+    }
+
+    /// The room set when no `Map_Storage` could be found (SQ-1747): the
+    /// instance-count property whose members are ALL contained by nothing in the
+    /// story's own object tree, when exactly one property is.
+    ///
+    /// Inform 7 never puts a room inside another object, so the room kind's
+    /// instances are all parentless in the boot image; the compass directions sit
+    /// inside the compass object and the instances of every other kind that
+    /// needs an index are placed somewhere (a kind whose instances are ALL
+    /// off-stage would also qualify, which is why a second candidate refuses
+    /// rather than guesses). The avatar cannot corroborate this — Inform 7 moves
+    /// the player into the first room at run time, so at boot it has no parent
+    /// either — so the rule is stated as the narrow fact it is: one candidate or
+    /// none. Measured: Toby's Nose (two rooms, no exits) has exactly one.
+    fn rooms_by_tree(
+        &self,
+        mem: &Memory,
+        names: &ParseNames,
+        counts: &HashMap<u16, Vec<u32>>,
+        dir_prop: u16,
+    ) -> Option<(u16, Vec<u32>)> {
+        let mut found: Option<(u16, Vec<u32>)> = None;
+        for (&prop, members) in counts {
+            if prop == dir_prop || !members.iter().all(|&m| names.parent(mem, m).is_none()) {
+                continue;
+            }
+            if found.is_some() {
+                return None;
+            }
+            found = Some((prop, members.clone()));
+        }
+        found
     }
 
     /// The `printed name` property: the one whose decoded text most often
