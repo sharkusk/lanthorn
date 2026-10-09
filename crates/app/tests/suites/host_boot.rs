@@ -870,6 +870,24 @@ fn a_loose_known_version_six_release_keeps_its_own_basename_game_dir() {
     let _ = std::fs::remove_dir_all(&home);
 }
 
+/// SQ-1749: a fresh boot seeds the mapper only; `current_room_name` must be set
+/// too, or a Save State / exit autosave before the first turn records no location.
+#[test]
+fn a_fresh_boot_sets_current_room_name_before_any_turn() {
+    let story = fixture_path("Tangle.z5");
+    if !story.is_file() {
+        eprintln!("SKIP: {} absent", story.display());
+        return;
+    }
+    let home = app::scratch_dir("host-boot-sq1749");
+    let b = boot(story, headless_config(&home), &home.join("saves"));
+    assert_eq!(b.state.turns, 0, "premise: no turn has been played");
+    let room = b.state.current_room_name.clone();
+    assert!(room.is_some(), "the opening room name is set on a fresh boot");
+    assert_eq!(app::engine_helpers::save_summary(&*b.session, &b.state).0, room);
+    let _ = std::fs::remove_dir_all(&home);
+}
+
 /// SQ-1742: a Dialog story has no Inform grammar table, and the SQ-1579 no-map
 /// gate used to read that as "menu-driven", so `The Impossible Bottle` never
 /// mapped through the real boot path (a bare `Mapper::default()` in

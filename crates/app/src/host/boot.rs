@@ -1907,6 +1907,9 @@ pub fn boot_story(req: BootRequest<'_>, hooks: &mut dyn BootHooks) -> Result<Boo
             24,
         );
     }
+    // The seed above feeds only the mapper; the status line, `save_summary` and a
+    // Save State taken before the first turn read `current_room_name` (SQ-1749).
+    crate::host::turn::sync_current_room(&mut state, &*session);
 
     // [more] pager for the OPENING BANNER (SQ-0532 wave-5). The banner is one
     // batch of game output exactly like a turn's, and a v6 story box is small —
