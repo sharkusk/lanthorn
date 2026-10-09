@@ -870,6 +870,69 @@ fn a_loose_known_version_six_release_keeps_its_own_basename_game_dir() {
     let _ = std::fs::remove_dir_all(&home);
 }
 
+/// SQ-1743: resuming at Beyond Zork's character sheet (a room-shaped status line
+/// that names the player, "Frank Booth") must not seed that name as the map's first
+/// room — the seed on resume gets the same NameOnly corroboration check a live turn
+/// gets. `stories/`-only; skips without it.
+#[test]
+fn resuming_at_the_beyond_zork_character_sheet_maps_no_non_room() {
+    let story = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../stories/beyondzork-r57-s871221.z5");
+    if !story.is_file() {
+        eprintln!("SKIP: stories/beyondzork-r57-s871221.z5 absent in this checkout");
+        return;
+    }
+    let home = app::scratch_dir("host-boot-sq1743");
+    let data_base = home.join("saves");
+    let mut first = boot(story.clone(), headless_config(&home), &data_base);
+    let mut at_sheet = false;
+    for cmd in ["yes", "begin", "", "", "", "", "", ""] {
+        let on_sheet = |b: &BootedStory| b.session.current_location().is_some_and(|l| l.name == "Frank Booth");
+        if on_sheet(&first) {
+            at_sheet = true;
+            break;
+        }
+        match first.session.pending_input() {
+            InputKind::Char => {
+                if let Some(r) = first.session.submit_key(app::engine::KeyInput::Enter) {
+                    app::session::apply_turn(&mut first.mapper, "", &r, &mut first.state.death_watch);
+                }
+            }
+            InputKind::Line => play(&mut first, cmd),
+            _ => break,
+        }
+    }
+    assert!(at_sheet, "premise: the probe reached the character sheet");
+    assert_eq!(first.mapper.graph.rooms().count(), 0, "premise: the live game rejected the name");
+    write_resume_archive(&mut first);
+
+    // A fresh boot in its own home (so it auto-resumes nothing), then the TUI's
+    // launch-resume (`main.rs` -> `apply_launch_resume`) applies the saved state.
+    let home2 = app::scratch_dir("host-boot-sq1743-b");
+    let mut second = boot(story, headless_config(&home2), &home2.join("saves"));
+    let save = first.session.save_state();
+    // The status line the name-only detector reads lives in the screen state.
+    let screen = app::engine_helpers::zvm_session_opt(&*first.session).map(|z| z.machine.screen.clone());
+    app::host::turn::apply_launch_resume(
+        &save,
+        Vec::new(),
+        Vec::new(),
+        screen,
+        &mut *second.session,
+        &mut second.mapper,
+        &mut second.state,
+        None,
+        &first.arc_file,
+    );
+    assert!(
+        second.session.current_location().is_some_and(|l| l.name == "Frank Booth"),
+        "premise: the resumed game stands at the character sheet"
+    );
+    let rooms: Vec<String> = second.mapper.graph.rooms().map(|r| r.name.clone()).collect();
+    assert!(rooms.is_empty(), "the resumed map holds no non-room: {rooms:?}");
+    let _ = std::fs::remove_dir_all(&home2);
+    let _ = std::fs::remove_dir_all(&home);
+}
+
 /// SQ-1749: a fresh boot seeds the mapper only; `current_room_name` must be set
 /// too, or a Save State / exit autosave before the first turn records no location.
 #[test]

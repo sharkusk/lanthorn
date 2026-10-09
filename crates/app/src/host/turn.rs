@@ -188,7 +188,7 @@ pub fn reobserve_location(
     sync_current_room(state, session);
     let Some(snap) = session.current_location() else { return };
     let rid = snap.number as mapper::graph::RoomId;
-    let restore_result = TurnResult::observation(snap);
+    let restore_result = TurnResult::observation_of(session, snap, String::new());
     apply_turn(mapper, "", &restore_result, &mut state.death_watch);
     state.set_viewed_layer(None);
     state.select_room(Some(rid));

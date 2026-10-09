@@ -1869,7 +1869,12 @@ pub fn boot_story(req: BootRequest<'_>, hooks: &mut dyn BootHooks) -> Result<Boo
     // comment). Applied UNCONDITIONALLY, before the location test below, because a story whose
     // starting room is undetectable still has a boot to drain.
     if let Some(snap_number) = seed_result.location.as_ref().map(|snap| snap.number) {
+        // SQ-1743: the seed carries its detection method, so a NameOnly opening room
+        // must be corroborated like any turn's — by the banner, which `seed_result` no
+        // longer holds (lifted out above), lent to `apply_turn` for this one call.
+        let seed_text = std::mem::replace(&mut seed_result.transcript, banner.clone());
         apply_turn(&mut mapper, "", &seed_result, &mut state.death_watch);
+        seed_result.transcript = seed_text;
         // SQ-1629 Fix 2: the starting room's own description/items, off the SAME boot drain —
         // `apply_room_description`/`apply_item_observations` are the identical engine-neutral
         // calls `finish_command_turn`/`finish_resumed_turn` already make for every later turn

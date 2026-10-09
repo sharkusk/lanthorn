@@ -461,9 +461,12 @@ pub fn reset_game(
             // Glulx returns ordered elements (text + any startup images); the
             // Z-machine returns empty and uses the flat string path.
             let banner_elems = session.take_transcript_elems();
+            // The restart banner is the seed's corroboration (SQ-1743), as at boot.
+            let mut seed_evidence = String::new();
             if banner_elems.is_empty() {
                 let banner = session.take_transcript();
                 state.push_transcript(&banner);
+                seed_evidence = banner;
             } else {
                 crate::state::apply_transcript_elems(state, &banner_elems);
             }
@@ -478,7 +481,7 @@ pub fn reset_game(
                 // (SQ-1625: rather than add `description: None` as one more explicit line to
                 // this literal, use the helper that exists for exactly this "location only"
                 // seed shape — see its own doc).
-                let seed_result = TurnResult::observation(snap);
+                let seed_result = TurnResult::observation_of(&*session, snap, seed_evidence);
                 apply_turn(mapper, "", &seed_result, &mut state.death_watch);
                 let rid = snap_number as mapper::graph::RoomId;
                 state.select_room(Some(rid));

@@ -1176,6 +1176,13 @@ pub trait Engine {
     /// The player's current location, for the mapper.
     fn current_location(&self) -> Option<LocationInfo>;
 
+    /// How [`current_location`](Self::current_location) was detected, when the engine
+    /// distinguishes (the Z-machine does). A seed that carries it lets `apply_turn`'s
+    /// NameOnly first-room check run on boot/resume/restore (SQ-1743). `None` = unchecked.
+    fn current_location_method(&self) -> Option<zvm::location::LocationMethod> {
+        None
+    }
+
     /// What `origin`'s own map data declares for `dir` (SQ-1257) — read from
     /// the story's compiled exit table, never from anything ever walked.
     ///

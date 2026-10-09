@@ -780,6 +780,19 @@ impl TurnResult {
     pub fn observation(location: LocationInfo) -> TurnResult {
         TurnResult { location: Some(location), ..TurnResult::default() }
     }
+
+    /// [`observation`](Self::observation) for a seed taken from `engine`'s present
+    /// state (resume, restore, rewind, restart): it carries the detection method so
+    /// [`apply_turn`]'s NameOnly first-room check also runs on a seed (SQ-1743).
+    /// `evidence` is text the story printed that can corroborate the room (the
+    /// opening banner on a restart); empty when there is none.
+    pub fn observation_of(engine: &dyn Engine, location: LocationInfo, evidence: String) -> TurnResult {
+        TurnResult {
+            transcript: evidence,
+            location_method: engine.current_location_method(),
+            ..TurnResult::observation(location)
+        }
+    }
 }
 
 /// One `erase_window`'s background fill: the screen rect it painted (0-based pixels,
@@ -6049,12 +6062,14 @@ impl Engine for GameSession {
         let transcript_elems = self.take_transcript_elems();
         let transcript = if transcript_elems.is_empty() { self.take_transcript() } else { String::new() };
         let location = self.current_location();
+        let location_method = self.current_location_method();
         let description = zvm_room_description(&transcript, location.as_ref());
         let items = self.zvm_item_observations(location.as_ref(), &transcript);
         TurnResult {
             transcript,
             transcript_elems,
             location,
+            location_method,
             quit: self.has_quit(),
             erase_lower: self.drain_screen_clear(),
             description,
@@ -6334,6 +6349,10 @@ impl Engine for GameSession {
         // `_with` + the cached candidate pool: this runs every rendered FRAME
         // via `command_band.rs`, not once a turn (SQ-1259).
         detect_location_with(&self.machine, self.player_candidates()).as_ref().map(location_to_snapshot)
+    }
+
+    fn current_location_method(&self) -> Option<LocationMethod> {
+        detect_location_with(&self.machine, self.player_candidates()).as_ref().map(Location::method)
     }
 
     fn declared_exit(
