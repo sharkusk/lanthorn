@@ -1561,6 +1561,10 @@ pub fn load_archive(path: &Path) -> io::Result<ArchiveContents> {
                     location: e.location,
                     location_name: e.location_name,
                     cleared: e.cleared,
+                    transcript_len: None,
+                    transcript_epoch: None,
+                    transcript_tail_chars: None,
+                    transcript_anchors: None,
                 }));
             }
             out
@@ -2078,10 +2082,10 @@ mod tests {
         let history = vec![
             std::sync::Arc::new(TurnRecord { turn: 1, command: "look".into(), save: vec![1, 2, 3],
                 map_snapshot: Some(map_json.clone()), transcript: "West of House".into(),
-                location: Some(1), location_name: Some("West of House".into()), cleared: false }),
+                location: Some(1), location_name: Some("West of House".into()), cleared: false, transcript_len: None, transcript_epoch: None, transcript_tail_chars: None, transcript_anchors: None }),
             std::sync::Arc::new(TurnRecord { turn: 2, command: "wait".into(), save: vec![4, 5, 6, 7],
                 map_snapshot: None, transcript: "Time passes.".into(),
-                location: None, location_name: None, cleared: false }),
+                location: None, location_name: None, cleared: false, transcript_len: None, transcript_epoch: None, transcript_tail_chars: None, transcript_anchors: None }),
         ];
 
         let path = temp_archive_path("history-rt");
@@ -2206,12 +2210,12 @@ mod tests {
             std::sync::Arc::new(TurnRecord {
                 turn: 1, command: "look".into(), save: vec![1, 2, 3],
                 map_snapshot: None, transcript: "West of House".into(),
-                location: None, location_name: None, cleared: false,
+                location: None, location_name: None, cleared: false, transcript_len: None, transcript_epoch: None, transcript_tail_chars: None, transcript_anchors: None,
             }),
             std::sync::Arc::new(TurnRecord {
                 turn: 2, command: "wait".into(), save: vec![4, 5, 6, 7],
                 map_snapshot: None, transcript: "Time passes.".into(),
-                location: None, location_name: None, cleared: false,
+                location: None, location_name: None, cleared: false, transcript_len: None, transcript_epoch: None, transcript_tail_chars: None, transcript_anchors: None,
             }),
         ];
         let path = temp_archive_path("reuse-basic");
@@ -2236,7 +2240,7 @@ mod tests {
             std::sync::Arc::new(TurnRecord {
                 turn: 3, command: "north".into(), save: vec![8, 9],
                 map_snapshot: None, transcript: "Forest".into(),
-                location: None, location_name: None, cleared: false,
+                location: None, location_name: None, cleared: false, transcript_len: None, transcript_epoch: None, transcript_tail_chars: None, transcript_anchors: None,
             }),
         ];
         let session2 = SessionRecord { history: &history2, ..SessionRecord::empty() };
@@ -2299,7 +2303,7 @@ mod tests {
         let history: Vec<std::sync::Arc<TurnRecord>> = vec![std::sync::Arc::new(TurnRecord {
             turn: 1, command: "look".into(), save: vec![9, 9, 9],
             map_snapshot: None, transcript: "A room.".into(),
-            location: None, location_name: None, cleared: false,
+            location: None, location_name: None, cleared: false, transcript_len: None, transcript_epoch: None, transcript_tail_chars: None, transcript_anchors: None,
         })];
         let session = SessionRecord { history: &history, ..SessionRecord::empty() };
 
@@ -2330,7 +2334,7 @@ mod tests {
         let other_history: Vec<std::sync::Arc<TurnRecord>> = vec![std::sync::Arc::new(TurnRecord {
             turn: 1, command: "xyzzy".into(), save: vec![1, 1, 1, 1, 1],
             map_snapshot: None, transcript: "Somewhere else entirely, a long way from here.".into(),
-            location: None, location_name: None, cleared: false,
+            location: None, location_name: None, cleared: false, transcript_len: None, transcript_epoch: None, transcript_tail_chars: None, transcript_anchors: None,
         })];
         let other_session = SessionRecord { history: &other_history, ..SessionRecord::empty() };
         let other_bytes = build_archive_bytes(
@@ -2396,12 +2400,12 @@ mod tests {
             std::sync::Arc::new(TurnRecord {
                 turn: 1, command: "one".into(), save: save1.clone(),
                 map_snapshot: None, transcript: "First turn text.".into(),
-                location: None, location_name: None, cleared: false,
+                location: None, location_name: None, cleared: false, transcript_len: None, transcript_epoch: None, transcript_tail_chars: None, transcript_anchors: None,
             }),
             std::sync::Arc::new(TurnRecord {
                 turn: 2, command: "two".into(), save: save2.clone(),
                 map_snapshot: None, transcript: "Second turn text.".into(),
-                location: None, location_name: None, cleared: false,
+                location: None, location_name: None, cleared: false, transcript_len: None, transcript_epoch: None, transcript_tail_chars: None, transcript_anchors: None,
             }),
         ];
         let path = temp_archive_path("reuse-rewind-replay");

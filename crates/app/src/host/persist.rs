@@ -420,20 +420,22 @@ pub fn resume_from_turn(
     }
     // Linear: discard later turns.
     state.history.truncate(idx + 1);
-    let (lines, kinds) = crate::history::rebuild_transcript(&state.history, idx);
-    state.transcript = lines;
-    // History replay carries the game's clears as a flag per turn, so the rewound
-    // transcript keeps the same scrollback hidden (SQ-1713).
-    let anchor = crate::history::rebuild_clear_anchor(&state.history, idx);
-    state.clear_anchor = anchor;
-    state.top_anchor = anchor;
-    state.pending_clear = false;
-    state.transcript_kinds = kinds;
-    // History replay carries no style runs; keep the parallel vecs length-synced
-    // (unstyled, left rows).
-    state.transcript_runs = vec![Vec::new(); state.transcript.len()];
-    state.transcript_para = vec![crate::state::ParaFmt::default(); state.transcript.len()];
-    state.reset_transcript_sidecars();
+    if !cut_back_transcript(state, idx) {
+        let (lines, kinds) = crate::history::rebuild_transcript(&state.history, idx);
+        state.transcript = lines;
+        // History replay carries the game's clears as a flag per turn, so the rewound
+        // transcript keeps the same scrollback hidden (SQ-1713).
+        let anchor = crate::history::rebuild_clear_anchor(&state.history, idx);
+        state.clear_anchor = anchor;
+        state.top_anchor = anchor;
+        state.pending_clear = false;
+        state.transcript_kinds = kinds;
+        // The rebuild carries no style runs; keep the parallel vecs length-synced
+        // (unstyled, left rows).
+        state.transcript_runs = vec![Vec::new(); state.transcript.len()];
+        state.transcript_para = vec![crate::state::ParaFmt::default(); state.transcript.len()];
+        state.reset_transcript_sidecars();
+    }
     // Rebuilt from the replayed transcript (SQ-1135): a rewind to turn 4 offers
     // the words turn 4 had printed.
     crate::input::refresh_seen_words(state, &*session);
@@ -441,4 +443,35 @@ pub fn resume_from_turn(
     reobserve_location(state, mapper, &*session, map_view);
     state.push_notice(&format!("[Resumed from turn {}]", plan.turn));
     Rewound { ok: true, redraw: true }
+}
+
+/// Cut the LIVE transcript back to what record `idx` left behind (SQ-1715), so a
+/// rewind keeps the styled lines the player saw -- including the output of
+/// game-driven turns (a key, a timer) that record nothing and that a rebuild from
+/// the records cannot know. Valid only while the record's epoch is still the
+/// live one, i.e. nothing has shortened the transcript or moved an earlier line
+/// since; otherwise (and for a record without a mark, e.g. loaded from an
+/// archive) returns `false` having touched nothing, and the caller rebuilds.
+fn cut_back_transcript(state: &mut AppState, idx: usize) -> bool {
+    let rec = state.history[idx].clone();
+    let (Some(len), Some(epoch), Some(tail), Some(anchors)) =
+        (rec.transcript_len, rec.transcript_epoch, rec.transcript_tail_chars, rec.transcript_anchors)
+    else {
+        return false;
+    };
+    if epoch != state.transcript_epoch || len > state.transcript.len() {
+        return false;
+    }
+    state.truncate_transcript(len);
+    // The line the player was prompted on has since been grown (the echoed
+    // command, a folded game echo); trim it back to the prompt it was.
+    state.shrink_last_transcript_line(tail);
+    // Everything up to `len` is exactly as it was at the record, so the records
+    // up to `idx` stay comparable: truncating bumped the epoch, put it back.
+    state.transcript_epoch = epoch;
+    state.clear_anchor = anchors.clear;
+    state.top_anchor = anchors.top;
+    state.pending_clear = false;
+    state.reset_transcript_derived();
+    true
 }

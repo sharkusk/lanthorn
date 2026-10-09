@@ -2838,6 +2838,17 @@ pub struct AppState {
     /// changed", which is the difference between the wrap cache appending and
     /// rebuilding. (SQ-1034)
     pub transcript_edits: u64,
+    /// Transcript REWRITE epoch (SQ-1715): bumped whenever the transcript is
+    /// shortened, an earlier line is shifted or replaced, or it is replaced
+    /// wholesale -- everything EXCEPT appending lines and growing the last line
+    /// in place (the typed-command echo, a game-driven fold onto the prompt).
+    /// A [`crate::history::TurnRecord`] stamps the epoch it was made under, so a
+    /// rewind can tell "the live transcript still starts with exactly the lines
+    /// that turn left behind" (cut it back) from "it has been reshaped since"
+    /// (rebuild from the records). Never persisted: an archive filters the
+    /// transcript on write, so a loaded transcript's line indices are not the
+    /// live ones the records measured.
+    pub transcript_epoch: u64,
     /// The current unbroken run of [`TranscriptEdit::Inserted`] edits, if any
     /// (SQ-1179) — what lets the wrap cache REPAIR through an
     /// insert-above-the-prompt instead of rebuilding. A `Cell` because the
@@ -3972,6 +3983,7 @@ impl Default for AppState {
             top_anchor: None,
             transcript_gen: 0,
             transcript_edits: 0,
+            transcript_epoch: 0,
             transcript_tail_insert: std::cell::Cell::new(None),
             transcript_wrap: std::cell::RefCell::new(None),
             raster_wrap: std::cell::RefCell::new(None),
@@ -5464,6 +5476,33 @@ impl AppState {
         self.transcript_runs.truncate(len);
         self.transcript_para.truncate(len);
         self.transcript_images.truncate(len);
+        self.bump_transcript_epoch();
+        self.touch_transcript(TranscriptEdit::Rewrote);
+    }
+
+    /// Record that the transcript was shortened or an earlier line moved or was
+    /// replaced (see [`AppState::transcript_epoch`]). Called by the shared
+    /// mutators; a site that clears `transcript` by hand must call it too.
+    pub fn bump_transcript_epoch(&mut self) {
+        self.transcript_epoch = self.transcript_epoch.wrapping_add(1);
+    }
+
+    /// Trim the last transcript line to its first `chars` chars, dropping or
+    /// clamping its style runs to match -- the inverse of
+    /// [`append_to_last_transcript_line`](Self::append_to_last_transcript_line),
+    /// used by a rewind to undo the echo that grew the prompt line (SQ-1715). A
+    /// no-op when the line is already that short. Not an epoch bump: it only
+    /// undoes a tail-grow.
+    pub fn shrink_last_transcript_line(&mut self, chars: usize) {
+        let Some(last) = self.transcript.last_mut() else { return };
+        let Some((byte, _)) = last.char_indices().nth(chars) else { return };
+        last.truncate(byte);
+        if let Some(runs) = self.transcript_runs.last_mut() {
+            runs.retain(|r| r.start < chars);
+            for r in runs.iter_mut() {
+                r.end = r.end.min(chars);
+            }
+        }
         self.touch_transcript(TranscriptEdit::Rewrote);
     }
 
@@ -5558,6 +5597,8 @@ impl AppState {
             }
             TranscriptEdit::Inserted { at, count } => {
                 debug_assert!(count > 0, "an insert of zero lines is a no-op mischaracterized as Inserted");
+                // Lines at and after `at` shifted down (SQ-1715).
+                self.bump_transcript_epoch();
                 self.transcript_edits = self.transcript_edits.wrapping_add(1);
                 let since_edits = self.transcript_edits - 1;
                 let run = match self.transcript_tail_insert.take() {
@@ -5815,6 +5856,12 @@ impl AppState {
     /// rather than on a detached line below (SQ-0274). A no-op for `idx == 0` or
     /// out of range. Assumes the parallel arrays are length-aligned (the push
     /// methods maintain this).
+    ///
+    /// Does NOT bump [`AppState::transcript_epoch`] (SQ-1715): both callers fold a
+    /// line just pushed at the end onto the prompt line before it, which only
+    /// GROWS the old last line. A rewind's cut-back undoes that growth with the
+    /// record's `transcript_tail_chars`; a caller that merged anywhere else would
+    /// have to bump the epoch itself.
     pub fn merge_line_into_previous(&mut self, idx: usize) {
         if idx == 0 || idx >= self.transcript.len() {
             return;
@@ -6199,9 +6246,19 @@ impl AppState {
     /// `Some(..)` at retained head indices (e.g. an inline image a Glulx game drew
     /// before the load, now indexing a different, shorter transcript).
     pub fn reset_transcript_sidecars(&mut self) {
+        self.bump_transcript_epoch();
         self.touch_transcript(TranscriptEdit::Rewrote);
         self.transcript_styles = vec![None; self.transcript.len()];
         self.transcript_images = vec![None; self.transcript.len()];
+        self.reset_transcript_derived();
+    }
+
+    /// The state DERIVED from the transcript rather than parallel to it: the
+    /// scraped word set and the `[more]` pager's baseline. Dropped whenever the
+    /// transcript is replaced or cut back, rebuilt from what is left (SQ-1715
+    /// splits this out of [`reset_transcript_sidecars`](Self::reset_transcript_sidecars)
+    /// so a rewind that KEEPS its styles and images can still reset these).
+    pub fn reset_transcript_derived(&mut self) {
         // The scraped word set is a sidecar too, and the most derived one of the
         // lot: it is the transcript read through the story's dictionary
         // (SQ-1135). A wholesale replacement — a restore, a resume — is exactly
@@ -7068,6 +7125,30 @@ mod tests {
         assert_eq!(st.transcript_para.len(), st.transcript.len());
         assert_eq!(st.transcript_para[0], ParaFmt::default(), "first line is left/no-indent");
         assert_eq!(st.transcript_para[1], centered, "second line takes its run's Centered layout");
+    }
+
+    #[test]
+    fn transcript_epoch_moves_on_a_rewrite_and_not_on_an_append_or_tail_growth() {
+        // SQ-1715: the epoch is what lets a rewind trust a recorded transcript
+        // length. Appends and growing the prompt line leave it alone (every typed
+        // turn does both); a shorten, an insert above the prompt and a wholesale
+        // replacement move it.
+        let mut s = AppState::default();
+        s.push_transcript("room\n>");
+        let e = s.transcript_epoch;
+        s.append_to_last_transcript_line("look");
+        s.push_transcript("reply\n>");
+        s.merge_line_into_previous(s.transcript.len() - 1);
+        assert_eq!(s.transcript_epoch, e, "append / echo / fold do not move the epoch");
+        s.shrink_last_transcript_line(1);
+        assert_eq!(s.transcript_epoch, e, "undoing a tail growth does not either");
+        s.truncate_transcript(s.transcript.len());
+        assert_eq!(s.transcript_epoch, e, "a no-op truncate does not");
+        s.truncate_transcript(1);
+        assert_ne!(s.transcript_epoch, e, "a shorten does");
+        let e = s.transcript_epoch;
+        s.reset_transcript_sidecars();
+        assert_ne!(s.transcript_epoch, e, "a wholesale replacement does");
     }
 
     #[test]

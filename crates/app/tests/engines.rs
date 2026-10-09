@@ -210,6 +210,8 @@ mod lost_treasures_iso_dedupe;
 mod sq1515_kerkerkruip_restore_arrange;
 #[path = "suites/sq1712_restore_window_contents.rs"]
 mod sq1712_restore_window_contents;
+#[path = "suites/sq1715_rewind_transcript.rs"]
+mod sq1715_rewind_transcript;
 #[path = "suites/sq1529_kerkerkruip_grid_fg_ground.rs"]
 mod sq1529_kerkerkruip_grid_fg_ground;
 #[path = "suites/sq1565_kerkerkruip_title_rule_pixel_height.rs"]

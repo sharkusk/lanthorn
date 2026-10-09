@@ -731,8 +731,10 @@ fn post_turn_bookkeeping(
         // arbitrarily long session.
         // Remember a game-driven clear so a rewind can re-pin it (SQ-1713). The
         // record was pushed a moment ago, so its `Arc` is still unique.
+        let mark = crate::history::TranscriptMark::of(state);
         if let Some(rec) = state.history.last_mut().and_then(std::sync::Arc::get_mut) {
             rec.cleared = crate::history::clear_noted(result.erase_lower, pending_clear);
+            rec.note_transcript(mark);
         }
         crate::history::cap_history(&mut state.history, state.config.history_turns);
     }

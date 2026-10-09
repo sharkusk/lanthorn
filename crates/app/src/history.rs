@@ -44,6 +44,58 @@ pub struct TurnRecord {
     /// the game had wiped. Set by the per-turn capture site after
     /// [`record_turn`]; `false` for every other caller.
     pub cleared: bool,
+    /// The live transcript's length when this record was made (SQ-1715), with
+    /// [`transcript_epoch`](Self::transcript_epoch) and the two fields below: what
+    /// lets a rewind CUT BACK the real transcript (styles, paragraph layout, the
+    /// output of game-driven turns that record nothing) instead of rebuilding a
+    /// plain one from `command` + `transcript`. `None` for a record made without
+    /// them, or loaded from an archive (which filters the transcript, so the
+    /// length would not index the live one) -- those rewind by rebuilding.
+    pub transcript_len: Option<usize>,
+    /// [`AppState::transcript_epoch`](crate::state::AppState::transcript_epoch)
+    /// at record time; the cut-back is valid only while it still matches.
+    pub transcript_epoch: Option<u64>,
+    /// Chars in the last transcript line at record time. The next typed command's
+    /// echo grows that line (`>` becomes `>look`) after the record is made, so the
+    /// cut-back trims it back to what the player saw at this prompt.
+    pub transcript_tail_chars: Option<usize>,
+    /// The clear anchors at record time (indices into the first `transcript_len`
+    /// lines), since the live ones only remember the LAST clear.
+    pub transcript_anchors: Option<crate::archive::ClearAnchors>,
+}
+
+/// The live transcript's shape at one moment (SQ-1715): the facts a
+/// [`TurnRecord`] stamps so a rewind can cut the transcript back. Taken before the
+/// record is borrowed mutably, then applied with [`TurnRecord::note_transcript`].
+#[derive(Debug, Clone, Copy)]
+pub struct TranscriptMark {
+    len: usize,
+    epoch: u64,
+    tail_chars: usize,
+    anchors: crate::archive::ClearAnchors,
+}
+
+impl TranscriptMark {
+    pub fn of(state: &crate::state::AppState) -> Self {
+        TranscriptMark {
+            len: state.transcript.len(),
+            epoch: state.transcript_epoch,
+            tail_chars: state.transcript.last().map_or(0, |l| l.chars().count()),
+            anchors: crate::archive::ClearAnchors::of(state),
+        }
+    }
+}
+
+impl TurnRecord {
+    /// Stamp the live transcript's shape onto this record. Called by the per-turn
+    /// capture site right after [`record_turn`], once the turn's output and every
+    /// app-side line are in.
+    pub fn note_transcript(&mut self, mark: TranscriptMark) {
+        self.transcript_len = Some(mark.len);
+        self.transcript_epoch = Some(mark.epoch);
+        self.transcript_tail_chars = Some(mark.tail_chars);
+        self.transcript_anchors = Some(mark.anchors);
+    }
 }
 
 /// Append a record for a completed turn. The caller computes `map_changed`
@@ -81,6 +133,10 @@ pub fn record_turn(
         location,
         location_name,
         cleared: false,
+        transcript_len: None,
+        transcript_epoch: None,
+        transcript_tail_chars: None,
+        transcript_anchors: None,
     }));
 }
 
@@ -448,6 +504,10 @@ mod tests {
                     location: None,
                     location_name: None,
                     cleared: false,
+                    transcript_len: None,
+                    transcript_epoch: None,
+                    transcript_tail_chars: None,
+                    transcript_anchors: None,
                 })
             })
             .collect();

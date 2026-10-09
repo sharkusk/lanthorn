@@ -671,14 +671,17 @@ fn resume_from_turn_rewinds_engine_transcript_map_and_recenters() {
     );
     assert_eq!(b.state.transcript_para.len(), b.state.transcript.len());
     let transcript = b.state.transcript.join("\n");
-    assert!(transcript.contains("> south"), "the echoed command survives the rebuild: {transcript:?}");
+    // SQ-1715: the live transcript is cut back, so it is the screen the player saw
+    // -- the game's own `>south` echo and the opening banner included -- not a
+    // rebuild's `> south`.
+    assert!(transcript.contains(">south"), "the echoed command survives the cut-back: {transcript:?}");
     assert!(
         transcript.contains("facing the south side"),
         "and turn 1's own output: {transcript:?}"
     );
     assert!(
-        !transcript.contains("mailbox") && !transcript.contains("> west"),
-        "only turn 1 is rebuilt, nothing from the discarded turns 2-3: {transcript:?}"
+        !transcript.contains(">west") && !transcript.contains("> west"),
+        "only turn 1 is kept, nothing from the discarded turns 2-3: {transcript:?}"
     );
     assert_ne!(b.state.scroll, (999, 999), "the map pane recenters on the resumed room");
     assert_eq!(
