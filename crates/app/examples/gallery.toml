@@ -511,6 +511,27 @@ size = "122x44"
 show_map = true
 expect = ["Forest Path", "Up a Tree", "West of House"]
 
+# ── The Journal's Hints tab ──────────────────────────────────────────────────
+#
+# Zork I with its InvisiClues companion (`stories/zork1izm.z5`, found beside the
+# story) running in the Journal's Hints tab. The frame stops at the program's MAIN
+# MENU on purpose: no question is opened, so no clue text is ever on screen.
+# Wide, so the hint program is not narrowed.
+
+[[shots]]
+id = "journal-hints"
+title = "Zork I"
+press = "story file, with its InvisiClues open in the Journal's Hints tab"
+media = "stories/zork1-r88-s840726.z3"
+caption = """
+Zork I with its InvisiClues running in the Journal's Hints tab, beside the story \
+instead of over it. The hint program is a story in its own right; this is its \
+main menu, before any question has been opened."""
+keys = "wait:2000,text:look,cr,wait:900,text:/journal-tab hints,cr,wait:2500"
+size = "190x40"
+expect = ["West of House", "Above Ground", "General Questions"]
+expect_prose_cells = 100
+
 # ── The release's own typeface ───────────────────────────────────────────────
 #
 # `v6_render` is the only shot field that changes a render MODE: hybrid draws text as

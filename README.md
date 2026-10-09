@@ -49,6 +49,13 @@ bring up the story info panel.
 |:--|
 | *Grid view with cover art and metadata from IFDB; Tab opens the info panel.* |
 
+**Stuck? The hints sit beside the story.** The Journal's Hints tab runs a game's InvisiClues next to the
+story instead of over it.
+
+| ![Zork I at the white house on the left; the Journal's Hints tab on the right shows the InvisiClues main menu](docs/journal-hints.png) |
+|:--|
+| *Zork I with its InvisiClues open in the Journal's Hints tab.* |
+
 <details>
 <summary>More screenshots</summary>
 
