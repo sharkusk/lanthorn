@@ -126,6 +126,11 @@ pub fn no_hint_message(documents: Option<&Path>) -> String {
 /// [`hints::story_supports_hint`], which decides `HintSession::builtin_hint`
 /// (the "this game has its own hints — type HINT" suggestion).
 ///
+/// `screen` is the `(rows, cols)` the companion should boot at (its host's real panel size);
+/// `None` boots the Z-machine's default 80x24. A hint program reads its width at boot --
+/// centring its title, wrapping its hint screens -- so a size given later is not the same as
+/// one given here (SQ-1753).
+///
 /// - `Ok(None)`: resolution found nothing to open automatically
 ///   ([`HintResolution::AskUser`]/[`HintResolution::None`]) or a choice is
 ///   pending ([`HintAvailability::Choose`]) — [`no_hint_message`] is the TUI's
@@ -140,8 +145,9 @@ pub fn open(
     index: &HintIndex,
     dict_words: &[String],
     cfg: &Config,
+    screen: Option<(u16, u16)>,
 ) -> Result<Option<HintSession>, HintOpenError> {
-    open_with_tuid(story_path, story, None, index, dict_words, cfg)
+    open_with_tuid(story_path, story, None, index, dict_words, cfg, screen)
 }
 
 /// [`open`] for a story that may carry an IFDB tuid.
@@ -152,6 +158,7 @@ pub fn open_with_tuid(
     index: &HintIndex,
     dict_words: &[String],
     cfg: &Config,
+    screen: Option<(u16, u16)>,
 ) -> Result<Option<HintSession>, HintOpenError> {
     let builtin_hint = hints::story_supports_hint(dict_words.iter().cloned());
     let resolution = hints::resolve_hint_source_with_tuid(story_path, story, tuid, index);
@@ -173,8 +180,18 @@ pub fn open_with_tuid(
         HintResolution::Choose(_) | HintResolution::AskUser | HintResolution::None => return Ok(None),
     };
 
-    let mut vm = GameSession::new(bytes, cfg.honor_game_colours, false, cfg.interpreter_number)
-        .map_err(|e| HintOpenError::BootFailed(format!("{e:?}")))?;
+    let mut vm = GameSession::new_with_trace(
+        bytes,
+        cfg.honor_game_colours,
+        false,
+        cfg.interpreter_number,
+        false,
+        Vec::new(),
+        None,
+        None,
+        screen,
+    )
+    .map_err(|e| HintOpenError::BootFailed(format!("{e:?}")))?;
     vm.machine.undo_cap = cfg.undo_levels;
     let opening = hint_opening(&mut vm, cfg.hint_skip_screen_warning);
     let transcript: Vec<String> = opening.split('\n').map(|l| l.to_owned()).collect();
@@ -215,7 +232,8 @@ pub fn already_running(running_label: Option<&str>, picked: &Path) -> bool {
 /// `picked` file (the answer to an earlier [`HintStart::Choose`]) is remembered
 /// first, unless it is the program already running (`running_label`, a no-op);
 /// then a tie becomes the chooser, nothing found becomes [`no_hint_message`], and
-/// anything else is [`open`]ed. `story` carries the documents folder.
+/// anything else is [`open`]ed. `story` carries the documents folder; `screen` is
+/// [`open`]'s boot size.
 pub fn start(
     story_path: &Path,
     story: HintStory<'_>,
@@ -223,8 +241,9 @@ pub fn start(
     running_label: Option<&str>,
     dict_words: &[String],
     cfg: &Config,
+    screen: Option<(u16, u16)>,
 ) -> HintStart {
-    start_with_tuid(story_path, story, None, picked, running_label, dict_words, cfg)
+    start_with_tuid(story_path, story, None, picked, running_label, dict_words, cfg, screen)
 }
 
 /// [`start`] for a story that may carry an IFDB tuid.
@@ -236,6 +255,7 @@ pub fn start_with_tuid(
     running_label: Option<&str>,
     dict_words: &[String],
     cfg: &Config,
+    screen: Option<(u16, u16)>,
 ) -> HintStart {
     if let Some(p) = picked {
         if already_running(running_label, p) {
@@ -249,7 +269,7 @@ pub fn start_with_tuid(
     if let HintAvailability::Choose(candidates) = available_with_tuid(story_path, story, tuid, &index) {
         return HintStart::Choose(candidates);
     }
-    match open_with_tuid(story_path, story, tuid, &index, dict_words, cfg) {
+    match open_with_tuid(story_path, story, tuid, &index, dict_words, cfg, screen) {
         Ok(Some(session)) => HintStart::Started(Box::new(session)),
         Ok(None) => HintStart::NoHint(no_hint_message(story.documents)),
         Err(e) => HintStart::Failed(e),

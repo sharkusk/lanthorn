@@ -302,7 +302,7 @@ fn check_hints_machinery_agrees(story_path: &Path, story_bytes: &[u8]) {
         "hhgginv.z5 sits beside hitchhiker-r59-s851108.z3, so a hint source resolves"
     );
     let cfg = Config::default();
-    let session = open(story_path, HintStory::new(&ifid, ""), &index, &[], &cfg)
+    let session = open(story_path, HintStory::new(&ifid, ""), &index, &[], &cfg, None)
         .expect("a resolved hint source boots")
         .expect("available() said yes, so open() must find the same source");
     let opening = session.transcript.join("\n");

@@ -346,7 +346,7 @@ fn check_hints_machinery_agrees(story_path: &Path, story_bytes: &[u8]) {
 
     let avail = available(story_path, HintStory::new(&ifid, ""), &index);
     let cfg = Config::default();
-    let opened = open(story_path, HintStory::new(&ifid, ""), &index, &[], &cfg);
+    let opened = open(story_path, HintStory::new(&ifid, ""), &index, &[], &cfg, None);
     match avail {
         HintAvailability::None | HintAvailability::Choose(_) => {
             let result = opened.expect("no hint source is not an error");

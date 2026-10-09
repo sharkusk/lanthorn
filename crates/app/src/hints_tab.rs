@@ -138,6 +138,14 @@ impl HintsTab {
     }
 
     /// Where the last draw put things.
+    /// The `(rows, cols)` the hint program should be laid out at: the panel the last
+    /// draw gave it, less the input row. `None` before the tab has been drawn at all
+    /// (SQ-1753).
+    pub fn panel_screen(&self) -> Option<(u16, u16)> {
+        let area = self.hits.borrow().area;
+        (area.width > 0 && area.height > 1).then(|| (area.height - 1, area.width))
+    }
+
     pub fn hits(&self) -> HintsHits {
         self.hits.borrow().clone()
     }
@@ -218,7 +226,7 @@ pub fn ensure_started_in_with_tuid(
     state.hints_tab.phase = Phase::NotStarted;
     let index = crate::hints::load_hint_index(&state.config.user_dir);
     state.hints_tab.status = game_hint_status_with_tuid(story_path, story, tuid, &index);
-    match start_with_tuid(story_path, story, tuid, picked.as_deref(), running.as_deref(), builtin_hint_words(state), &state.config) {
+    match start_with_tuid(story_path, story, tuid, picked.as_deref(), running.as_deref(), builtin_hint_words(state), &state.config, state.hints_tab.panel_screen()) {
         HintStart::Started(session) => {
             state.overlays.hints = Some(*session);
             state.hints_tab.phase = Phase::Running;
@@ -231,6 +239,29 @@ pub fn ensure_started_in_with_tuid(
         HintStart::NoHint(_) => state.hints_tab.phase = Phase::NoHint,
         HintStart::Failed(e) => state.hints_tab.phase = Phase::Failed(e.to_string()),
     }
+    true
+}
+
+/// Tell a running hint program the panel's size when the panel has been resized since
+/// it booted, the way the story pane's `sync_zvm_screen_dims` does for the story (SQ-1753).
+/// Returns `true` when the program's header changed. The boot size is what the program
+/// laid itself out at (see [`crate::host::hints::open`]); this keeps its later menu
+/// redraws and wrapping in step.
+pub fn sync_screen_dims(state: &mut AppState) -> bool {
+    use crate::engine::Engine;
+    let Some((rows, cols)) = state.hints_tab.panel_screen() else { return false };
+    let Some(HintSession { source: HintSource::Zcode(vm), .. }) = state.overlays.hints.as_mut() else {
+        return false;
+    };
+    let version = vm.machine.mem.version();
+    if version < 4 || version == 6 {
+        return false;
+    }
+    let current = (vm.machine.mem.read_byte(0x20) as u16, vm.machine.mem.read_byte(0x21) as u16);
+    if current == (rows.min(255), cols.min(255)) {
+        return false;
+    }
+    vm.set_screen_dims(rows, cols);
     true
 }
 
@@ -850,6 +881,43 @@ mod tests {
             rows[i / w].push_str(cell.symbol());
         }
         rows
+    }
+
+    /// SQ-1753: the panel's drawn size is what a running hint program is told, and a later
+    /// resize of the panel is re-declared; before the first draw there is no size to give.
+    #[test]
+    fn a_running_hint_program_follows_the_panel_size() {
+        let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/stories/Tangle.z5");
+        let Ok(bytes) = std::fs::read(&path) else {
+            eprintln!("SKIP: Tangle.z5 fixture absent");
+            return;
+        };
+        let vm = crate::session::GameSession::new(bytes, true, false, None).expect("v5 session");
+        let hs = HintSession {
+            source: HintSource::Zcode(vm),
+            transcript: Vec::new(),
+            scroll: 0,
+            clear_anchor: None,
+            scroll_anim: None,
+            input: String::new(),
+            label: "Hints: X".to_string(),
+            builtin_hint: false,
+        };
+        let mut state = tab_state(hs);
+        assert_eq!(state.hints_tab.panel_screen(), None, "nothing drawn yet, so no size to give");
+        assert!(!sync_screen_dims(&mut state));
+
+        let _ = screen_rows(60, 20, &state);
+        assert_eq!(state.hints_tab.panel_screen(), Some((17, 58)), "the framed panel less its input row");
+        assert!(sync_screen_dims(&mut state), "the header changes to the panel's size");
+        let HintSource::Zcode(vm) = &state.overlays.hints.as_ref().unwrap().source;
+        assert_eq!((vm.machine.mem.read_byte(0x20), vm.machine.mem.read_byte(0x21)), (17, 58));
+        assert!(!sync_screen_dims(&mut state), "a second call has nothing to change");
+
+        let _ = screen_rows(50, 14, &state);
+        assert!(sync_screen_dims(&mut state), "a later resize is re-declared");
+        let HintSource::Zcode(vm) = &state.overlays.hints.as_ref().unwrap().source;
+        assert_eq!((vm.machine.mem.read_byte(0x20), vm.machine.mem.read_byte(0x21)), (11, 48));
     }
 
     #[test]

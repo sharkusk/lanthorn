@@ -2144,6 +2144,7 @@ fn run_event_loop(boot: startup::BootResult, launched_from_library: bool) -> Run
         // host — the story pane's measured size in $20/$21, and our own default
         // page/ink in $2C/$2D (which a live style reload can change mid-game).
         needs_redraw |= loop_tick::poll_zvm_screen_dims(&mut *session, &state, &last_panes);
+        needs_redraw |= app::hints_tab::sync_screen_dims(&mut state);
         loop_tick::poll_zvm_default_colours(&mut *session, &state);
         // Settle the layout a hidden map deferred, now its pane is back (SQ-1136).
         // Before the poll, so the job it schedules is picked up on the next pass

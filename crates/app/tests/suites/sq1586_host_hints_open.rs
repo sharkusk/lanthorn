@@ -70,7 +70,7 @@ fn available_and_open_agree_on_zork1_izm_and_skip_its_banner() {
     );
 
     let cfg = Config::default();
-    let session = open(&story_path, HintStory::new(&ifid, ""), &index, &[], &cfg)
+    let session = open(&story_path, HintStory::new(&ifid, ""), &index, &[], &cfg, None)
         .expect("a resolved hint source boots")
         .expect("available() said yes, so open() must find the same source");
 
@@ -123,7 +123,7 @@ fn available_and_open_agree_on_zork2_inv_slag_naming() {
     );
 
     let cfg = Config::default();
-    let session = open(&story_path, HintStory::new(&ifid, ""), &index, &[], &cfg)
+    let session = open(&story_path, HintStory::new(&ifid, ""), &index, &[], &cfg, None)
         .expect("a resolved hint source boots")
         .expect("available() said yes, so open() must find the same source");
 
@@ -157,7 +157,7 @@ fn a_story_with_no_hint_sidecar_says_no_and_returns_ok_none() {
     );
 
     let cfg = Config::default();
-    let result = open(&story_path, HintStory::new(&ifid, ""), &index, &[], &cfg).expect("no hint source is not an error");
+    let result = open(&story_path, HintStory::new(&ifid, ""), &index, &[], &cfg, None).expect("no hint source is not an error");
     assert!(result.is_none(), "open() finds nothing, exactly as available() said");
 }
 
@@ -199,7 +199,7 @@ fn solid_gold_release_is_not_treated_as_a_hint_sidecar() {
     );
     let cfg = Config::default();
     let result =
-        open(&plain_story, HintStory::new(&ifid, ""), &index, &[], &cfg).expect("no hint source is not an error");
+        open(&plain_story, HintStory::new(&ifid, ""), &index, &[], &cfg, None).expect("no hint source is not an error");
     assert!(result.is_none(), "open() must not open the Solid Gold release as a hint VM");
 
     let _ = std::fs::remove_dir_all(&home);
@@ -222,7 +222,7 @@ fn zork1_adf_finds_its_own_hint_file_in_game() {
     let index = empty_index();
 
     assert_eq!(available(&adf, HintStory::new(&ifid, ""), &index), HintAvailability::Available);
-    let session = open(&adf, HintStory::new(&ifid, ""), &index, &[], &Config::default())
+    let session = open(&adf, HintStory::new(&ifid, ""), &index, &[], &Config::default(), None)
         .expect("a resolved hint source boots")
         .expect("available() said yes, so open() must find the same source");
     assert_eq!(session.label, "zork1izm.z5");
@@ -266,7 +266,7 @@ fn sq1690_the_documents_folder_is_searched_first_and_a_lone_odd_name_is_accepted
     let index = hints::load_hint_index(&l.user);
     let story = HintStory::new("IFID", "Zork").with_documents(Some(&l.docs));
     assert_eq!(available(&l.story, story, &index), HintAvailability::Available);
-    let session = open(&l.story, story, &index, &[], &Config::default()).unwrap().expect("opens");
+    let session = open(&l.story, story, &index, &[], &Config::default(), None).unwrap().expect("opens");
     assert_eq!(label_of(&session), "clues-from-the-web-hints.z3", "documents first");
 }
 
@@ -276,7 +276,7 @@ fn sq1690_an_empty_documents_folder_falls_back_to_the_sidecar_beside_the_story()
     std::fs::write(l.story.with_file_name("zork1inv.z3"), &l.hint_bytes).unwrap();
     let index = hints::load_hint_index(&l.user);
     let story = HintStory::new("IFID", "Zork").with_documents(Some(&l.docs));
-    let session = open(&l.story, story, &index, &[], &Config::default()).unwrap().expect("opens");
+    let session = open(&l.story, story, &index, &[], &Config::default(), None).unwrap().expect("opens");
     assert_eq!(label_of(&session), "zork1inv.z3");
 }
 
@@ -292,12 +292,12 @@ fn sq1690_tied_candidates_are_offered_and_a_pick_is_remembered() {
         panic!("two unrankable hint programs are a choice")
     };
     assert_eq!(candidates, vec![l.docs.join("aaa-inv.z3"), l.docs.join("bbb-inv.z3")]);
-    assert!(open(&l.story, story, &index, &[], &Config::default()).unwrap().is_none(), "nothing opens until picked");
+    assert!(open(&l.story, story, &index, &[], &Config::default(), None).unwrap().is_none(), "nothing opens until picked");
 
     app::host::hints::remember(&l.user, "IFID", &candidates[1]).unwrap();
     let index = hints::load_hint_index(&l.user); // a fresh load, as the next run does
     assert_eq!(available(&l.story, story, &index), HintAvailability::Available);
-    let session = open(&l.story, story, &index, &[], &Config::default()).unwrap().expect("opens");
+    let session = open(&l.story, story, &index, &[], &Config::default(), None).unwrap().expect("opens");
     assert_eq!(label_of(&session), "bbb-inv.z3");
 }
 
@@ -315,3 +315,68 @@ fn sq1690_the_no_hint_message_names_the_folder_or_says_to_link_first() {
     }
 }
 
+
+/// The text of each active row of the hint program's upper (grid) window, trailing blanks kept.
+fn grid_rows(session: &app::state::HintSession) -> Vec<String> {
+    let app::state::HintSource::Zcode(vm) = &session.source;
+    let model = app::session::screen_model_from_machine(&vm.machine);
+    let grid = model.grid().expect("the hint program draws a grid (upper) window");
+    let cols = grid.cols as usize;
+    (0..grid.active_rows as usize)
+        .map(|r| grid.cells[r * cols..(r + 1) * cols].iter().map(|c| c.ch).collect())
+        .collect()
+}
+
+/// SQ-1753: a host can boot a hint program at its panel's real size. `bzorkizm.z5` reads its
+/// width at boot, so 40 columns must centre the title inside 40 (not cut it off), while
+/// `None` still boots the default 80x24.
+#[test]
+fn a_hint_program_boots_at_the_size_the_host_gives_it() {
+    let Some((story_path, story_bytes)) = read_story("beyondzork-r57-s871221.z5") else {
+        eprintln!("SKIP: stories/beyondzork-r57-s871221.z5 absent");
+        return;
+    };
+    if !stories_dir().join("bzorkizm.z5").is_file() {
+        eprintln!("SKIP: stories/bzorkizm.z5 absent");
+        return;
+    }
+    let ifid = compute_ifid(&story_bytes);
+    let index = empty_index();
+    let cfg = Config::default();
+    let boot = |screen| {
+        open(&story_path, HintStory::new(&ifid, ""), &index, &[], &cfg, screen)
+            .expect("the hint file boots")
+            .expect("bzorkizm.z5 sits beside the story")
+    };
+
+    // At 40 columns the program is told 40 and lays out for it: nothing it draws is a cut-off
+    // fragment of the 80-column layout (its 41-character title does not fit, so it omits it).
+    let narrow = boot(Some((24, 40)));
+    let app::state::HintSource::Zcode(vm) = &narrow.source;
+    assert_eq!(
+        (vm.machine.mem.read_byte(0x20), vm.machine.mem.read_byte(0x21)),
+        (24, 40),
+        "the program is told the panel's size at boot"
+    );
+    let rows = grid_rows(&narrow);
+    assert!(rows.iter().all(|r| !r.contains("Beyond Zork: The Coc")), "no clipped title fragment: {rows:?}");
+    assert!(rows.iter().any(|r| r.contains("ENTER = select item   Q = quit program")), "the menu fits 40: {rows:?}");
+
+    // At 56 the 41-character title fits, and is centred in 56 (not in 80, and not clipped).
+    let mid = boot(Some((24, 56)));
+    let rows = grid_rows(&mid);
+    let title = rows.iter().find(|r| r.contains("Beyond Zork")).unwrap_or_else(|| panic!("title row in {rows:?}"));
+    assert_eq!(title.chars().count(), 56, "the title row is the panel's width: {title:?}");
+    assert!(title.contains("Beyond Zork: The Coconut of Quendor"), "the title is not cut off: {title:?}");
+    let lead = title.chars().take_while(|c| *c == ' ').count();
+    let trail = title.chars().count() - lead - title.trim_end().chars().count() + lead;
+    assert!((5..=10).contains(&lead) && trail >= 5, "the title is centred within 56: {title:?}");
+
+    let default = boot(None);
+    let app::state::HintSource::Zcode(vm) = &default.source;
+    assert_eq!(
+        (vm.machine.mem.read_byte(0x20), vm.machine.mem.read_byte(0x21)),
+        (24, 80),
+        "None still boots the default 80x24"
+    );
+}

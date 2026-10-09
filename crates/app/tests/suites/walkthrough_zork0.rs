@@ -386,7 +386,7 @@ fn check_hints_machinery_agrees(story_path: &Path, story_bytes: &[u8]) {
         "stories/zork0izm.z5 is a real InvisiClues sidecar for this game and must resolve"
     );
     let cfg = Config::default();
-    let session = open(story_path, HintStory::new(&ifid, ""), &index, &[], &cfg)
+    let session = open(story_path, HintStory::new(&ifid, ""), &index, &[], &cfg, None)
         .expect("resolving to Available must mean open() can actually boot it")
         .expect("open() must return a session when available() said Available");
     assert!(

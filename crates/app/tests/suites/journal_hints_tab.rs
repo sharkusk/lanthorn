@@ -722,20 +722,20 @@ fn host_start_decides_choose_nohint_started_and_already_running() {
     let Some((st, story, docs)) = with_docs("host-hints-start", &["a-hints.z3", "b-hints.z3"]) else { return };
     let story_ref = app::hints::HintStory::new("IFID", "Game").with_documents(Some(&docs));
     // A tie: the chooser, nothing remembered yet.
-    let HintStart::Choose(c) = start(&story, story_ref, None, None, &[], &st.config) else { panic!("tie must choose") };
+    let HintStart::Choose(c) = start(&story, story_ref, None, None, &[], &st.config, None) else { panic!("tie must choose") };
     assert_eq!(c.len(), 2);
     // A pick is remembered and opened; the same pick again while running is a no-op.
-    let HintStart::Started(sess) = start(&story, story_ref, Some(&c[1]), None, &[], &st.config) else {
+    let HintStart::Started(sess) = start(&story, story_ref, Some(&c[1]), None, &[], &st.config, None) else {
         panic!("a pick must start")
     };
     assert_eq!(sess.label, "b-hints.z3");
     assert!(matches!(
-        start(&story, story_ref, Some(&c[1]), Some(&sess.label), &[], &st.config),
+        start(&story, story_ref, Some(&c[1]), Some(&sess.label), &[], &st.config, None),
         HintStart::AlreadyRunning
     ));
     // Nothing found: the TUI's own message.
     let none = app::hints::HintStory::new("OTHER", "Game");
-    let HintStart::NoHint(msg) = start(&story, none, None, None, &[], &st.config) else { panic!("no hint") };
+    let HintStart::NoHint(msg) = start(&story, none, None, None, &[], &st.config, None) else { panic!("no hint") };
     assert_eq!(msg, app::host::hints::no_hint_message(None));
 }
 
