@@ -370,11 +370,13 @@ fn glulx_item_observations_reaches_an_inform_7_object_with_no_printed_name() {
     );
 
     // Confirm the premise directly against the object list: this room really does hold an
-    // object with an empty raw printed name but a real display name.
+    // object the story gives no short name, only parse words. (SQ-1751: the room-contents list
+    // now names such an object by the word the room text used, so the raw name is no longer
+    // empty here; the item tracker below still resolves from the unfiltered object list.)
     let loc = r.location.clone().unwrap();
     let room_objects = s.introspect().unwrap().room_objects_excluding(loc.number, None);
     let unnamed: Vec<_> =
-        room_objects.iter().filter(|o| o.printed_name.is_empty() && o.display_name().is_some()).collect();
+        room_objects.iter().filter(|o| o.words.len() > 1 && o.display_name().is_some()).collect();
     assert!(
         !unnamed.is_empty(),
         "premise: the lobby holds an Inform-7-style object with no printed name: {room_objects:?}"

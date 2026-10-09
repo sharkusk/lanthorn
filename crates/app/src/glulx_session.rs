@@ -230,6 +230,10 @@ pub struct GlulxSession {
     /// The current room, derived from the last Inform `Subheader` heading and
     /// held sticky across heading-less turns (examine/talk/failed-move).
     last_room: Option<LocationInfo>,
+    /// SQ-1751: the text the story printed for the current room — the transcript of the turn
+    /// that last announced or changed it. An unnamed Inform 7 object is a thing in the room
+    /// only if one of its words appears here; see [`Self::room_objects_excluding`].
+    room_text: String,
     /// SQ-1629 Fix 2: the starting room's own description, captured once at construction
     /// (`new_with_store`, immediately after the SAME `take_room_heading` drain that resolves
     /// `last_room` there — see `AppGlk::take_room_description`'s own doc for why it must follow
@@ -768,6 +772,7 @@ impl GlulxSession {
             aux: BTreeMap::new(),
             aux_dirty: false,
             last_room: None,
+            room_text: String::new(),
             boot_description: None,
             room_lock: crate::glulx_roomlock::RoomLock::new(0, 0),
             player_lock: crate::glulx_playerlock::PlayerLock::new(0),
@@ -1756,6 +1761,7 @@ impl GlulxSession {
         // and trim_elems_to_len applies the same shortening to the element list so
         // the ordered elems stay consistent with the flat `transcript`.
         let transcript = if self.strip_prompt { strip_read_prompt_for(&raw, self.pending).to_owned() } else { raw };
+        let prev_room_id = self.last_room.as_ref().map(|r| r.number);
         let kept = transcript.chars().count();
         let transcript_runs = clamp_runs(raw_runs, kept);
         trim_elems_to_len(&mut elems, kept);
@@ -1870,6 +1876,12 @@ impl GlulxSession {
         // story gave this turn, whichever channel it came from.
         self.check_room_lock_against_story(&ram, movement, story_named.as_deref());
         let location = self.last_room.clone();
+        self.note_room_text(
+            prev_room_id,
+            location.as_ref().map(|l| l.number),
+            story_named.is_some() || description.is_some(),
+            &transcript,
+        );
         let location_method = location.as_ref().map(|_| LocationMethod::RoomHeading);
         // SQ-1655: before computing this turn's items — a confirmed pickup this turn
         // may just have identified the avatar for the very first time, and that fresh
@@ -1953,7 +1965,7 @@ impl GlulxSession {
 
         let room: Vec<grammar_model::ObjectWords> = match location {
             Some(loc) => self
-                .room_objects_excluding(loc.number, player)
+                .room_children_unfiltered(loc.number, player)
                 .into_iter()
                 .filter(|ow| !is_scenery_or_door(ow.id))
                 .collect(),
@@ -1991,6 +2003,52 @@ impl GlulxSession {
             out.push(ItemObservation { key: ow.id, name, location: ObservedItemLocation::Carried, words: ow.clone() });
         }
         out
+    }
+
+    /// The room's child objects as the story's model gives them, minus the avatar and the
+    /// pronoun-group placeholders — before any use of the room's printed text.
+    fn room_children_unfiltered(
+        &self,
+        room: mapper::graph::RoomId,
+        exclude: Option<u16>,
+    ) -> Vec<crate::engine::ObjectWords> {
+        let (Some(names), Some(addr)) = (self.parse_names(), self.resolve_handle(room)) else {
+            return Vec::new();
+        };
+        // The avatar is structurally a child of the room it stands in, so
+        // without this it appears in every room of every game (SQ-0667). By
+        // handle, never by name: an Inform 7 object prints nothing at all.
+        let skip = exclude.and_then(|h| self.resolve_handle(h.into()));
+        names
+            .children(self.machine.mem(), addr)
+            .into_iter()
+            .filter(|&c| Some(c) != skip)
+            .filter_map(|c| names.of(self.machine.mem(), c))
+            // SQ-1747: I7's pronoun-group placeholders ("he"/"him", "she"/"her")
+            // sit in the room's child list but are not things in it.
+            .filter(|ow| !ow.is_pronoun_group())
+            .collect()
+    }
+
+    /// SQ-1751: keep [`Self::room_text`] current. A turn that names the room, or moves
+    /// to a different one, replaces it with that turn's text; before any room is known the
+    /// text accumulates so the opening room's description is not lost to the prologue turn
+    /// that precedes the lock; otherwise it stands.
+    fn note_room_text(&mut self, prev: Option<u32>, now: Option<u32>, named: bool, transcript: &str) {
+        const CAP: usize = 16 * 1024;
+        if named || (prev.is_some() && prev != now) {
+            self.room_text = transcript.to_string();
+        } else if prev.is_none() {
+            self.room_text.push('\n');
+            self.room_text.push_str(transcript);
+            if self.room_text.len() > CAP {
+                let mut cut = self.room_text.len() - CAP;
+                while !self.room_text.is_char_boundary(cut) {
+                    cut += 1;
+                }
+                self.room_text.drain(..cut);
+            }
+        }
     }
 
     /// Words of RAM the room-lock learner scans, from `ramstart`.
@@ -3182,6 +3240,22 @@ pub struct GlkLayout {
     pub windows: Vec<GlkWindowRect>,
 }
 
+/// The lower-cased whole words of `text`, once split at every non-alphanumeric and once
+/// keeping hyphens and apostrophes inside a word (`suction-cup`, `player's`), so a stored
+/// hyphenated dictionary word can match and so can its parts (SQ-1751).
+fn room_text_words(text: &str) -> Vec<String> {
+    let lower = text.to_lowercase();
+    let mut out: Vec<String> = Vec::new();
+    for keep in [&['\''][..], &['\'', '-'][..]] {
+        for w in lower.split(|c: char| !c.is_alphanumeric() && !keep.contains(&c)) {
+            if !w.is_empty() && !out.iter().any(|o| o == w) {
+                out.push(w.to_string());
+            }
+        }
+    }
+    out
+}
+
 fn blank_screen() -> ScreenModel {
     ScreenModel {
         root: WinNode::Blank,
@@ -3296,6 +3370,7 @@ impl Engine for GlulxSession {
         let transcript = if transcript_elems.is_empty() { self.take_transcript() } else { String::new() };
         let location = self.current_location();
         let description = self.boot_description.take();
+        self.room_text = transcript.clone();
         let items = self.glulx_item_observations(location.as_ref(), &transcript);
         TurnResult {
             transcript,
@@ -3836,21 +3911,24 @@ impl Introspect for GlulxSession {
         room: mapper::graph::RoomId,
         exclude: Option<u16>,
     ) -> Vec<crate::engine::ObjectWords> {
-        let (Some(names), Some(addr)) = (self.parse_names(), self.resolve_handle(room)) else {
-            return Vec::new();
-        };
-        // The avatar is structurally a child of the room it stands in, so
-        // without this it appears in every room of every game (SQ-0667). By
-        // handle, never by name: an Inform 7 object prints nothing at all.
-        let skip = exclude.and_then(|h| self.resolve_handle(h.into()));
-        names
-            .children(self.machine.mem(), addr)
-            .into_iter()
-            .filter(|&c| Some(c) != skip)
-            .filter_map(|c| names.of(self.machine.mem(), c))
-            // SQ-1747: I7's pronoun-group placeholders ("he"/"him", "she"/"her")
-            // sit in the room's child list but are not things in it.
-            .filter(|ow| !ow.is_pronoun_group())
+        let all = self.room_children_unfiltered(room, exclude);
+        // SQ-1751: for the room the player is standing in, an object with no printable name
+        // is a thing in the room only if the story's own text for the room uses one of its
+        // words; the rest (Inform 7's scent, kind and analogy scaffolding) is not shown.
+        // Any other room, or no text yet, is answered as the story's model gives it.
+        let here = self.last_room.as_ref().is_some_and(|r| r.number == room);
+        if !here || self.room_text.trim().is_empty() {
+            return all;
+        }
+        let words = room_text_words(&self.room_text);
+        all.into_iter()
+            .filter_map(|mut ow| {
+                if !ow.printed_name.is_empty() {
+                    return Some(ow);
+                }
+                ow.printed_name = ow.first_word_in(&words)?;
+                Some(ow)
+            })
             .collect()
     }
 

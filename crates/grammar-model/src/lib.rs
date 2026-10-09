@@ -776,6 +776,23 @@ impl ObjectWords {
         seen.len() >= 2
     }
 
+    /// The first of this object's stored words that `text_words` (lower-cased
+    /// whole words of text the player has read) actually uses, spelled as the
+    /// text spells it (SQ-1751). A stored word cut to `truncated_at` characters
+    /// matches a longer printed word that starts with it; a shorter stored word
+    /// must match exactly. `None` when no stored word appears.
+    pub fn first_word_in(&self, text_words: &[String]) -> Option<String> {
+        self.words.iter().find_map(|stored| {
+            text_words
+                .iter()
+                .find(|w| match self.truncated_at {
+                    Some(n) if stored.chars().count() >= n => w.chars().take(n).collect::<String>() == *stored,
+                    _ => *w == stored,
+                })
+                .cloned()
+        })
+    }
+
     /// What to SHOW a player for this object, or `None` when the story holds
     /// no text for it at all.
     ///
@@ -1128,6 +1145,26 @@ mod tests {
         assert_eq!(r.raw, 0x41);
         assert!(!r.verb && !r.noun && !r.adjective && !r.singular);
         assert_eq!(r, WordRoles { raw: 0x41, ..WordRoles::default() });
+    }
+
+    #[test]
+    fn first_word_in_spells_a_truncated_word_from_the_text_and_wants_whole_words() {
+        let o = ObjectWords {
+            id: 1,
+            printed_name: String::new(),
+            words: vec!["dr-door".into(), "things".into(), "extravaga".into(), "door".into()],
+            property: None,
+            truncated_at: Some(9),
+            adjectives: Adjectives::Unavailable,
+        };
+        let w = |s: &str| s.split_whitespace().map(str::to_string).collect::<Vec<_>>();
+        assert_eq!(o.first_word_in(&w("an extravagant door")), Some("extravagant".into()));
+        // Stored order wins, not text order.
+        assert_eq!(o.first_word_in(&w("a door and things")), Some("things".into()));
+        // A short stored word is complete: "doors" is not "door".
+        assert_eq!(o.first_word_in(&w("two doors")), None);
+        // A prefix of a truncated word is not the word.
+        assert_eq!(o.first_word_in(&w("extrava")), None);
     }
 
     #[test]

@@ -97,3 +97,24 @@ fn the_opening_room_has_its_contents_before_the_player_moves() {
         }
     }
 }
+
+/// SQ-1751: the contents are NAMED, not listed as runs of parse words, and the Inform 7
+/// scaffolding (scent, kind, pronoun and analogy groups) the room text never mentions is gone.
+#[test]
+fn the_opening_room_lists_named_things_not_runs_of_parse_words() {
+    let Some(s) = opening_room() else { return };
+    let here = s.current_location().expect("the opening room is known");
+    let objs = s.room_objects_excluding(here.number, None);
+    let names: Vec<String> = objs.iter().filter_map(|o| o.display_name()).collect();
+    for thing in ["carpet", "sofa", "door"] {
+        assert!(names.iter().any(|n| n == thing), "{thing:?} is named in the Drawing-Room: {names:?}");
+    }
+    for n in &names {
+        assert!(!n.contains(' '), "a space-joined synonym run was listed: {n:?} in {names:?}");
+        for scaffold in ["dr-door", "persongro", "analogy", "smell scents"] {
+            assert!(!n.contains(scaffold), "{scaffold:?} scaffolding leaked: {n:?}");
+        }
+    }
+    // The kept objects still answer to every word the parser takes.
+    assert!(objs.iter().any(|o| o.display_name().as_deref() == Some("sofa") && o.refers_to("couch")));
+}
