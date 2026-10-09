@@ -2086,6 +2086,13 @@ impl GlkBackend for AppGlk {
         // was already on screen; rescue it into `orphaned_primary` so the next drain
         // still returns it, in the same order, ahead of whatever the new window prints.
         if self.primary == Some(id) {
+            // SQ-1741: closing the page the player is reading wipes it just as
+            // `glk_window_clear` does — Photopia's splash-to-Mars transition
+            // closes its story buffer and opens a fresh one rather than calling
+            // clear. Raise the same signal so the host pins the new page.
+            if self.buffers.get(&id).is_some_and(|b| !b.log.is_empty()) {
+                self.primary_cleared = true;
+            }
             if let Some(b) = self.buffers.get_mut(&id) {
                 if b.drained < b.log.len() {
                     self.orphaned_primary.extend(b.log.split_off(b.drained));

@@ -39,6 +39,8 @@ mod sq1596_min_story_screen_floor;
 mod sq1654_scrollback_preserves_screens;
 #[path = "suites/sq1710_restore_syncs_current_room.rs"]
 mod sq1710_restore_syncs_current_room;
+#[path = "suites/sq1741_photopia_clear_view.rs"]
+mod sq1741_photopia_clear_view;
 #[path = "suites/sq1656_preserve_clear_top_anchor.rs"]
 mod sq1656_preserve_clear_top_anchor;
 #[path = "suites/sq1661_topanchor_followease.rs"]
