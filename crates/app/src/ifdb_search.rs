@@ -285,6 +285,10 @@ pub struct ResolvedGame {
     /// opens every story file, so it never runs on the UI thread. Empty when no
     /// library root is configured or the record carries nothing to match on.
     pub held: Vec<PathBuf>,
+    /// Parallel to `options`: library files (any folder under the library root)
+    /// whose name is that option's filename (SQ-1757). Names only. Filled by
+    /// [`SearchWorker`] beside `held`; empty when there is no library root.
+    pub option_held: Vec<Vec<PathBuf>>,
 }
 
 /// What a `Range: bytes=0-0` probe learned about a URL (SQ-1680).
@@ -427,7 +431,7 @@ impl SearchSource for IfdbSearchClient {
         // itself is unaffected.
         let record = crate::ifiction::parse(&bytes).ok().map(Box::new);
         let documents = crate::ifdb_documents::parse_document_options(&bytes);
-        Ok(ResolvedGame { options, record, documents, held: Vec::new() })
+        Ok(ResolvedGame { options, record, documents, held: Vec::new(), option_held: Vec::new() })
     }
 
     fn download(&self, url: &str, dest_dir: &Path) -> Result<PathBuf, SearchError> {
@@ -1101,14 +1105,36 @@ impl SearchWorker {
         roots: crate::data_roots::DataRoots,
         library_root: Option<PathBuf>,
     ) -> Self {
+        Self::with_library_index(gate, source, covers, roots, library_root, Default::default())
+    }
+
+    /// [`Self::with_library`] plus the picker's shared index (SQ-1757): once the
+    /// picker stores its finished entries there, a resolve matches IFIDs against
+    /// them and reads no story file; until then it scans the folders itself.
+    pub fn with_library_index(
+        gate: IfdbGate,
+        source: Box<dyn SearchSource>,
+        covers: Box<dyn MetadataSource>,
+        roots: crate::data_roots::DataRoots,
+        library_root: Option<PathBuf>,
+        index: crate::library_match::LibraryIndex,
+    ) -> Self {
         Self::spawn(gate, move |job, out| {
-            out.send_last(run_job(source.as_ref(), covers.as_ref(), &roots, library_root.as_deref(), job))
+            let finished = index.lock().ok().and_then(|g| g.clone());
+            out.send_last(run_job(
+                source.as_ref(),
+                covers.as_ref(),
+                &roots,
+                library_root.as_deref(),
+                finished.as_deref().map(Vec::as_slice),
+                job,
+            ))
         })
     }
 }
 
 /// Run one job to an event, mapping every error to a friendly display string.
-fn run_job(source: &dyn SearchSource, covers: &dyn MetadataSource, roots: &crate::data_roots::DataRoots, library_root: Option<&Path>, job: SearchJob) -> SearchEvent {
+fn run_job(source: &dyn SearchSource, covers: &dyn MetadataSource, roots: &crate::data_roots::DataRoots, library_root: Option<&Path>, index: Option<&[crate::picker::StoryEntry]>, job: SearchJob) -> SearchEvent {
     match job {
         SearchJob::Seed => match source.hot() {
             Ok(hits) => SearchEvent::Results(hits),
@@ -1120,8 +1146,14 @@ fn run_job(source: &dyn SearchSource, covers: &dyn MetadataSource, roots: &crate
         },
         SearchJob::Resolve(tuid) => match source.download_options(&tuid) {
             Ok(mut resolved) => {
-                if let (Some(root), Some(record)) = (library_root, resolved.record.as_deref()) {
-                    resolved.held = crate::library_match::library_holds(root, roots, record);
+                if let Some(root) = library_root {
+                    (resolved.held, resolved.option_held) = crate::library_match::resolve_in_library(
+                        root,
+                        roots,
+                        resolved.record.as_deref(),
+                        &resolved.options,
+                        index,
+                    );
                 }
                 SearchEvent::Options(resolved)
             }
@@ -1811,6 +1843,63 @@ mod tests {
         w.request(SearchJob::Resolve("abc".into()));
         match drain_one(&w) {
             SearchEvent::Options(o) => assert_eq!(o.held, vec![sub.join("etude.z5")]),
+            _ => panic!("expected Options"),
+        }
+        let _ = std::fs::remove_dir_all(&root);
+        let _ = std::fs::remove_dir_all(&data);
+    }
+
+    /// SQ-1757: `option_held` arrives with the event, parallel to the options.
+    #[test]
+    fn resolve_reports_option_files_found_in_subfolders() {
+        let root = crate::scratch_dir("ifdb-opt-held");
+        let sub = root.join("Glulx Stories");
+        std::fs::create_dir_all(&sub).unwrap();
+        std::fs::write(sub.join("Game.ulx"), b"x").unwrap();
+        let mk = |n: &str| DownloadOption { filename: n.into(), url: format!("https://x/{n}"), format: None, title: None, desc: None };
+        let source = Fake { hits: vec![], options: vec![mk("game.ulx"), mk("other.z5")], record: None, fail: false };
+        let data = crate::scratch_dir("ifdb-opt-held-data");
+        let w = SearchWorker::with_library(
+            IfdbGate::default(),
+            Box::new(source),
+            Box::new(FakeCovers::new()),
+            crate::data_roots::DataRoots::single(data.clone()),
+            Some(root.clone()),
+        );
+        w.request(SearchJob::Resolve("abc".into()));
+        match drain_one(&w) {
+            SearchEvent::Options(o) => assert_eq!(o.option_held, vec![vec![sub.join("Game.ulx")], vec![]]),
+            _ => panic!("expected Options"),
+        }
+        let _ = std::fs::remove_dir_all(&root);
+        let _ = std::fs::remove_dir_all(&data);
+    }
+
+    /// SQ-1757: a finished index handed to the worker decides `held`; the file
+    /// it names does not exist, so nothing was walked and hashed to find it.
+    #[test]
+    fn resolve_uses_a_supplied_index_instead_of_hashing() {
+        let root = crate::scratch_dir("ifdb-idx");
+        let ghost = root.join("nowhere").join("g.z5");
+        let mut e = crate::picker::StoryEntry::folder(ghost.clone(), "g");
+        e.kind = crate::picker::RowKind::Story;
+        e.meta.ifid = "ZCODE-IDX-1".into();
+        let index: crate::library_match::LibraryIndex = Default::default();
+        *index.lock().unwrap() = Some(std::sync::Arc::new(vec![e]));
+        let record = IFiction { ifids: vec!["ZCODE-IDX-1".into()], ..Default::default() };
+        let source = Fake { hits: vec![], options: vec![], record: Some(record), fail: false };
+        let data = crate::scratch_dir("ifdb-idx-data");
+        let w = SearchWorker::with_library_index(
+            IfdbGate::default(),
+            Box::new(source),
+            Box::new(FakeCovers::new()),
+            crate::data_roots::DataRoots::single(data.clone()),
+            Some(root.clone()),
+            index,
+        );
+        w.request(SearchJob::Resolve("abc".into()));
+        match drain_one(&w) {
+            SearchEvent::Options(o) => assert_eq!(o.held, vec![ghost]),
             _ => panic!("expected Options"),
         }
         let _ = std::fs::remove_dir_all(&root);

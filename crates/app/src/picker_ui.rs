@@ -1490,13 +1490,17 @@ pub(crate) fn run_story_picker(
     // One gate for this picker's two IFDB workers (search + documents), so a
     // request from a chooser just closed finishes before the next starts.
     let ifdb_gate = app::ifdb_search::IfdbGate::default();
-    let search_worker = app::ifdb_search::SearchWorker::with_library(
+    // The finished index is handed to the search worker through this (SQ-1757),
+    // so a chooser's "already in your library" check never re-hashes the library.
+    let shared_index: app::library_match::LibraryIndex = Default::default();
+    let search_worker = app::ifdb_search::SearchWorker::with_library_index(
         ifdb_gate.clone(),
         Box::new(app::ifdb_search::IfdbSearchClient::new()),
         Box::new(app::ifdb::IfdbClient::new()),
         roots.clone(),
         // A disk set is one release, not a tree: nothing to walk (SQ-1755).
         index_rx.as_ref().map(|_| root.clone()),
+        std::sync::Arc::clone(&shared_index),
     );
     let mut search_modal: Option<app::ifdb_search_modal::SearchModal> = None;
     let mut search_area = Rect::new(0, 0, 0, 0);
@@ -1904,6 +1908,9 @@ pub(crate) fn run_story_picker(
                         Err(std::sync::mpsc::TryRecvError::Empty) => break,
                         Err(std::sync::mpsc::TryRecvError::Disconnected) => {
                             index_done = true;
+                            if let Ok(mut slot) = shared_index.lock() {
+                                *slot = Some(std::sync::Arc::new(index.clone()));
+                            }
                             break;
                         }
                     }

@@ -30,7 +30,8 @@ while any such tag, or this Unreleased section, still exists.*
 - **IFDB search now notices games you already have in a subfolder.** If the game
   you pick is already somewhere in your library, even tucked away in a folder like
   `infocom/` or `glulx/`, the download chooser says so at the top with where it
-  lives, instead of letting you fetch a duplicate.
+  lives, and marks each file you already have in a subfolder (`✓ in glulx/`),
+  instead of letting you fetch a duplicate.
 - **A document on a host that compresses its downloads now shows its real size
   and previews.** The documents chooser used to show the compressed size (a
   295 KB page read as 44 KB), and previewing it failed with a bogus "Too large to
