@@ -1490,11 +1490,13 @@ pub(crate) fn run_story_picker(
     // One gate for this picker's two IFDB workers (search + documents), so a
     // request from a chooser just closed finishes before the next starts.
     let ifdb_gate = app::ifdb_search::IfdbGate::default();
-    let search_worker = app::ifdb_search::SearchWorker::new(
+    let search_worker = app::ifdb_search::SearchWorker::with_library(
         ifdb_gate.clone(),
         Box::new(app::ifdb_search::IfdbSearchClient::new()),
         Box::new(app::ifdb::IfdbClient::new()),
         roots.clone(),
+        // A disk set is one release, not a tree: nothing to walk (SQ-1755).
+        index_rx.as_ref().map(|_| root.clone()),
     );
     let mut search_modal: Option<app::ifdb_search_modal::SearchModal> = None;
     let mut search_area = Rect::new(0, 0, 0, 0);
@@ -3112,6 +3114,7 @@ pub(crate) fn run_story_picker(
                 // already holds (SQ-0597) — the same `dir` every
                 // download lands in, below.
                 sm.set_download_dir(&dir);
+                sm.set_library_root(&root);
                 let seed_action = sm.open();
                 search_modal = Some(sm);
                 dispatch_search_action(seed_action, &search_worker, &dir, &mut search_modal);

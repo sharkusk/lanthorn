@@ -112,6 +112,7 @@ pub mod ifdb_search;
 pub mod ifdb_search_modal;
 pub mod ifiction;
 pub mod ifid;
+pub mod library_match;
 pub mod input;
 pub mod interpreter;
 pub mod keymap;

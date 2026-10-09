@@ -1280,7 +1280,7 @@ for the one in use — the `↳` marking a wrapped continuation row carries
   version" — which is often the only way to tell the candidates apart, since a
   game may well list several files under the *same* filename. A file the
   library directory already holds is marked `✓ … · already downloaded` (you can
-  still download it again; it lands beside the original under a new name). The
+  still download it again; it lands beside the original under a new name). The A game the library holds in *any* subfolder is spotted by IFID (or IFDB id) — read off the story files themselves, so it works before the library's own IFDB details are fetched — and the chooser opens with one `Already in your library: <path>` line (`(+N more)` when there are several); the walk runs on the search worker, never the UI thread (`library_match`). The
   file lands in the current library directory, the list refreshes,
   and the cursor jumps to your new story with a "Downloaded …" note. Only
   files lanthorn can actually open are offered (`.z3`–`.z8`, `.ulx`,

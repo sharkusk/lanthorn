@@ -279,6 +279,12 @@ pub struct ResolvedGame {
     /// documents chooser (SQ-1680) — parsed from the same response, so offering
     /// them costs no request of its own.
     pub documents: Vec<crate::ifdb_documents::DocumentOption>,
+    /// Story files already in the user's library that are this game, matched by
+    /// IFID or IFDB tuid wherever they sit under the library root (SQ-1755).
+    /// Filled by [`SearchWorker`] after the source resolves the game: the walk
+    /// opens every story file, so it never runs on the UI thread. Empty when no
+    /// library root is configured or the record carries nothing to match on.
+    pub held: Vec<PathBuf>,
 }
 
 /// What a `Range: bytes=0-0` probe learned about a URL (SQ-1680).
@@ -420,7 +426,7 @@ impl SearchSource for IfdbSearchClient {
         // itself is unaffected.
         let record = crate::ifiction::parse(&bytes).ok().map(Box::new);
         let documents = crate::ifdb_documents::parse_document_options(&bytes);
-        Ok(ResolvedGame { options, record, documents })
+        Ok(ResolvedGame { options, record, documents, held: Vec::new() })
     }
 
     fn download(&self, url: &str, dest_dir: &Path) -> Result<PathBuf, SearchError> {
@@ -1060,14 +1066,27 @@ impl SearchWorker {
         covers: Box<dyn MetadataSource>,
         roots: crate::data_roots::DataRoots,
     ) -> Self {
+        Self::with_library(gate, source, covers, roots, None)
+    }
+
+    /// [`Self::new`] plus the library root: each resolved game is then checked
+    /// against every story under it by IFID/tuid ([`ResolvedGame::held`],
+    /// SQ-1755), on this worker's thread.
+    pub fn with_library(
+        gate: IfdbGate,
+        source: Box<dyn SearchSource>,
+        covers: Box<dyn MetadataSource>,
+        roots: crate::data_roots::DataRoots,
+        library_root: Option<PathBuf>,
+    ) -> Self {
         Self::spawn(gate, move |job, out| {
-            out.send_last(run_job(source.as_ref(), covers.as_ref(), &roots, job))
+            out.send_last(run_job(source.as_ref(), covers.as_ref(), &roots, library_root.as_deref(), job))
         })
     }
 }
 
 /// Run one job to an event, mapping every error to a friendly display string.
-fn run_job(source: &dyn SearchSource, covers: &dyn MetadataSource, roots: &crate::data_roots::DataRoots, job: SearchJob) -> SearchEvent {
+fn run_job(source: &dyn SearchSource, covers: &dyn MetadataSource, roots: &crate::data_roots::DataRoots, library_root: Option<&Path>, job: SearchJob) -> SearchEvent {
     match job {
         SearchJob::Seed => match source.hot() {
             Ok(hits) => SearchEvent::Results(hits),
@@ -1078,7 +1097,12 @@ fn run_job(source: &dyn SearchSource, covers: &dyn MetadataSource, roots: &crate
             Err(e) => SearchEvent::Failed(e.to_string()),
         },
         SearchJob::Resolve(tuid) => match source.download_options(&tuid) {
-            Ok(resolved) => SearchEvent::Options(resolved),
+            Ok(mut resolved) => {
+                if let (Some(root), Some(record)) = (library_root, resolved.record.as_deref()) {
+                    resolved.held = crate::library_match::library_holds(root, roots, record);
+                }
+                SearchEvent::Options(resolved)
+            }
             Err(e) => SearchEvent::Failed(e.to_string()),
         },
         SearchJob::Download { url, dest, record } => match source.download(&url, &dest) {
@@ -1632,6 +1656,34 @@ mod tests {
             std::thread::sleep(Duration::from_millis(1));
         }
         panic!("no event arrived");
+    }
+
+    /// SQ-1755: the worker, not the UI, walks the library and reports a game
+    /// held in a subfolder by IFID.
+    #[test]
+    fn resolve_reports_the_library_copy_found_by_ifid() {
+        let bytes = std::fs::read(concat!(env!("CARGO_MANIFEST_DIR"), "/../zvm/tests/fixtures/etude.z5")).unwrap();
+        let root = crate::scratch_dir("ifdb-held");
+        let sub = root.join("zcode");
+        std::fs::create_dir_all(&sub).unwrap();
+        std::fs::write(sub.join("etude.z5"), &bytes).unwrap();
+        let record = IFiction { ifids: vec![crate::ifid::compute_ifid(&bytes)], ..Default::default() };
+        let source = Fake { hits: vec![], options: vec![], record: Some(record), fail: false };
+        let data = crate::scratch_dir("ifdb-held-data");
+        let w = SearchWorker::with_library(
+            IfdbGate::default(),
+            Box::new(source),
+            Box::new(FakeCovers::new()),
+            crate::data_roots::DataRoots::single(data.clone()),
+            Some(root.clone()),
+        );
+        w.request(SearchJob::Resolve("abc".into()));
+        match drain_one(&w) {
+            SearchEvent::Options(o) => assert_eq!(o.held, vec![sub.join("etude.z5")]),
+            _ => panic!("expected Options"),
+        }
+        let _ = std::fs::remove_dir_all(&root);
+        let _ = std::fs::remove_dir_all(&data);
     }
 
     #[test]

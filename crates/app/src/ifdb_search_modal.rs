@@ -114,6 +114,11 @@ pub struct SearchModal {
     /// until the picker supplies it (and in the unit tests), which simply means
     /// nothing is reported as already downloaded.
     download_dir: Option<std::path::PathBuf>,
+    /// The library root, only to print `held` relative to it (SQ-1755).
+    library_root: Option<std::path::PathBuf>,
+    /// Library files that are the resolved game, matched by IFID/tuid off the
+    /// UI thread ([`crate::ifdb_search::ResolvedGame::held`]).
+    held: Vec<std::path::PathBuf>,
     /// Items (not rows) the list viewport last fitted, recorded by the renderer
     /// because only it knows the dialog's height and the current row stride.
     /// Key handling needs it to decide when a move scrolls; 1 until the first
@@ -145,6 +150,8 @@ impl SearchModal {
             opt_scroll: ListScroll::new(),
             opt_present: Vec::new(),
             download_dir: None,
+            library_root: None,
+            held: Vec::new(),
             list_rows: 1,
             pending_record: None,
             status: None,
@@ -194,6 +201,27 @@ impl SearchModal {
     /// construction; without it nothing is marked.
     pub fn set_download_dir(&mut self, dir: &std::path::Path) {
         self.download_dir = Some(dir.to_path_buf());
+    }
+
+    /// Tell the modal the library root, so the "already in your library" line
+    /// names the file relative to it (SQ-1755).
+    pub fn set_library_root(&mut self, root: &std::path::Path) {
+        self.library_root = Some(root.to_path_buf());
+    }
+
+    /// The chooser's game-level "Already in your library" line, if the library
+    /// holds this game under any name or folder (SQ-1755).
+    fn held_line(&self) -> Option<String> {
+        let first = self.held.first()?;
+        let shown = match &self.library_root {
+            Some(root) => first.strip_prefix(root).unwrap_or(first),
+            None => first,
+        };
+        let more = match self.held.len() {
+            1 => String::new(),
+            n => format!(" (+{} more)", n - 1),
+        };
+        Some(format!("Already in your library: {}{more}", shown.display()))
     }
 
     /// Which of `options` the download directory already has, by the exact
@@ -486,6 +514,7 @@ impl SearchModal {
                 // one screen you never saw — and a game you already had would
                 // silently fetch a duplicate with nothing on screen to warn you.
                 self.opt_present = self.probe_present(&resolved.options);
+                self.held = resolved.held.clone();
                 self.options = resolved.options.clone();
                 self.opt_scroll = ListScroll::new();
                 self.opt_scroll.len(self.options.len());
@@ -619,6 +648,15 @@ fn render_body(modal: &mut SearchModal, area: Rect, cs: &ColorScheme, buf: &mut 
     if y < list_bottom {
         put_str(buf, area.x, y, area.width, busy_note, meta_style);
         y += 1;
+    }
+
+    if modal.view == View::Choosing {
+        if let Some(line) = modal.held_line() {
+            if y < list_bottom {
+                put_str(buf, area.x, y, area.width, &line, present_style);
+                y += 1;
+            }
+        }
     }
 
     match modal.view {
@@ -1722,6 +1760,35 @@ mod tests {
 
     /// Without a download directory (the modal's default) nothing is claimed to
     /// be present — the probe must not guess.
+    #[test]
+    fn a_game_held_in_a_subfolder_gets_one_game_level_line() {
+        let mut m = SearchModal::new();
+        m.set_library_root(std::path::Path::new("/lib"));
+        m.open();
+        m.on_event(&SearchEvent::Results(vec![hit("aaa", "Alpha")]));
+        m.on_key(KeyCode::Enter, &anim());
+        m.on_event(&SearchEvent::Options(ResolvedGame {
+            options: vec![opt("a.z5"), opt("b.z8")],
+            held: vec!["/lib/infocom/a.z5".into(), "/lib/x/a.z5".into()],
+            ..Default::default()
+        }));
+        let cs = ColorScheme::terminal_default();
+        let area = Rect::new(0, 0, MODAL_W, MODAL_H);
+        let mut buf = Buffer::empty(area);
+        draw_search_modal(&mut m, area, &cs, &mut buf);
+        let text = rows_of(&buf, area).join("\n");
+        assert_eq!(text.matches("Already in your library").count(), 1, "{text}");
+        assert!(text.contains("Already in your library: infocom/a.z5 (+1 more)"), "{text}");
+        assert!(!text.contains("already downloaded"), "options are not marked: {text}");
+    }
+
+    #[test]
+    fn no_held_files_means_no_library_line() {
+        let mut m = SearchModal::new();
+        let rows = draw_chooser(&mut m, vec![opt("a.z5"), opt("b.z8")]);
+        assert!(!rows.join("\n").contains("Already in your library"), "{rows:#?}");
+    }
+
     #[test]
     fn nothing_is_marked_present_without_a_download_directory() {
         let mut m = SearchModal::new();

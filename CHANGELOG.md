@@ -27,6 +27,11 @@ goes into the README in place, at its normal destination, marked with the
 visible tag `*Next release:*`. `release.yml` refuses to cut a release
 while any such tag, or this Unreleased section, still exists.*
 
+- **IFDB search now notices games you already have in a subfolder.** If the game
+  you pick is already somewhere in your library, even tucked away in a folder like
+  `infocom/` or `glulx/`, the download chooser says so at the top with where it
+  lives, instead of letting you fetch a duplicate.
+
 ## v0.9.3 — 2026-10-07
 
 ### Highlights
