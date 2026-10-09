@@ -204,10 +204,17 @@ fn beyond_zork_character_sheet_is_not_the_first_room() {
             InputKind::Line => s.submit(cmd),
             _ => break,
         };
-        let sheet = r.location.as_deref_name() == Some("Frank Booth");
+        // SQ-1752: the player's name is not a location at all, so it is recognised by the
+        // status line, and nothing — turn result or session — may call it one.
+        assert_ne!(r.location.as_deref_name(), Some("Frank Booth"), "the sheet's name is not a room");
+        let on_sheet = zvm::location::status_line_room_name(&s.machine.screen.upper, s.machine.screen.upper_window_rows)
+            .as_deref()
+            == Some("Frank Booth");
         apply_turn(&mut map, cmd, &r, &mut death);
-        if sheet {
+        if on_sheet {
             saw_character_sheet = true;
+            assert!(r.location.is_none(), "no location while the character sheet is up: {:?}", r.location);
+            assert!(s.current_location().is_none(), "no current location at the character sheet");
             assert_eq!(
                 map.graph.rooms().count(),
                 0,

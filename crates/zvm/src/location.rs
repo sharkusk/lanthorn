@@ -1212,6 +1212,39 @@ fn resolve_room_object(machine: &Machine, name: &str) -> Option<ObjectSnapshot> 
         .map(|(_, obj)| object_snapshot(mem, obj))
 }
 
+/// May the status line's `name` stand as the room when no avatar's ancestor chain validated
+/// it exactly (SQ-1752)?
+///
+/// A pre-game screen paints a status-line-shaped row that is not a room — Beyond Zork's
+/// character sheet shows the player's name, "Frank Booth", in the room slot. The object tree
+/// is the game's own state and is what tells the two apart: when the story HAS player
+/// candidates, a real room is one their ancestor chain reaches, by name — exactly, or with
+/// the spaces elided (a compiler identifier: `partsRoom` for "Parts Room"). When no player
+/// candidate exists at all there is no tree evidence either way, so the text stands, which
+/// is what keeps the games with no identifiable avatar (Dialog's nameless objects,
+/// Facility) mapped; `apply_turn`'s heading corroboration (SQ-1743) is the check for those.
+fn status_name_corroborated(machine: &Machine, candidates: &PlayerCandidates, name: &str) -> bool {
+    if candidates.widened.is_empty() {
+        return true;
+    }
+    let mem = &machine.mem;
+    let wanted = normalize_name(name).replace(' ', "");
+    candidates.widened.iter().any(|&player| {
+        let mut cur = get_parent(mem, player);
+        for _ in 0..32 {
+            if cur == 0 {
+                return false;
+            }
+            let sn = printed_name(mem, cur);
+            if status_name_matches(name, &sn) || (!wanted.is_empty() && normalize_name(&sn).replace(' ', "") == wanted) {
+                return true;
+            }
+            cur = get_parent(mem, cur);
+        }
+        false
+    })
+}
+
 /// True when some object's short name is `name` with the spaces taken out.
 ///
 /// A compiler's object identifier is not the name the player reads. Dialog calls
@@ -1376,6 +1409,9 @@ pub fn detect_location_with(machine: &Machine, candidates: &PlayerCandidates) ->
             if names_an_object_ignoring_spaces(machine, &field) {
                 return Some(Location::NameOnly(field));
             }
+        }
+        if !status_name_corroborated(machine, candidates, &name) {
+            return None;
         }
         return Some(Location::NameOnly(name));
     }

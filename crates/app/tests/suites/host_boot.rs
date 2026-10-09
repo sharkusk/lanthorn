@@ -886,7 +886,14 @@ fn resuming_at_the_beyond_zork_character_sheet_maps_no_non_room() {
     let mut first = boot(story.clone(), headless_config(&home), &data_base);
     let mut at_sheet = false;
     for cmd in ["yes", "begin", "", "", "", "", "", ""] {
-        let on_sheet = |b: &BootedStory| b.session.current_location().is_some_and(|l| l.name == "Frank Booth");
+        // SQ-1752: the sheet is no longer a LOCATION, so recognise it by the status line itself.
+        let on_sheet = |b: &BootedStory| {
+            app::engine_helpers::zvm_session_opt(&*b.session).is_some_and(|z| {
+                zvm::location::status_line_room_name(&z.machine.screen.upper, z.machine.screen.upper_window_rows)
+                    .as_deref()
+                    == Some("Frank Booth")
+            })
+        };
         if on_sheet(&first) {
             at_sheet = true;
             break;
@@ -902,6 +909,8 @@ fn resuming_at_the_beyond_zork_character_sheet_maps_no_non_room() {
         }
     }
     assert!(at_sheet, "premise: the probe reached the character sheet");
+    assert!(first.session.current_location().is_none(), "SQ-1752: the sheet is not a location");
+    assert_eq!(first.state.current_room_name, None, "SQ-1752: the host names no room at the sheet");
     assert_eq!(first.mapper.graph.rooms().count(), 0, "premise: the live game rejected the name");
     write_resume_archive(&mut first);
 
@@ -924,8 +933,8 @@ fn resuming_at_the_beyond_zork_character_sheet_maps_no_non_room() {
         &first.arc_file,
     );
     assert!(
-        second.session.current_location().is_some_and(|l| l.name == "Frank Booth"),
-        "premise: the resumed game stands at the character sheet"
+        second.session.current_location().is_none(),
+        "the resumed game stands at the character sheet, which names no location (SQ-1752)"
     );
     let rooms: Vec<String> = second.mapper.graph.rooms().map(|r| r.name.clone()).collect();
     assert!(rooms.is_empty(), "the resumed map holds no non-room: {rooms:?}");
