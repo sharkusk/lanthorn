@@ -539,7 +539,8 @@ fn effective_text_margin(area: Rect, state: &AppState) -> (u16, u16) {
 ///   full-width form sit wider than the prose beside it, the exact mismatch this
 ///   replaces;
 /// - the transcript's one-column scrollbar gutter is subtracted for the same
-///   reason (`render_transcript` always reserves it);
+///   reason (`render_transcript` always reserves it) — unless a host with no
+///   scrollbar column set `Config::story_scrollbar_gutter` to `false` (SQ-1750);
 /// - the upper window's frame is subtracted, because `draw_grid` draws the grid
 ///   INSIDE that frame. Without this the declared width would not fit and the
 ///   game's rightmost columns would be clipped.
@@ -563,7 +564,7 @@ pub fn story_screen_dims(area: Rect, state: &AppState) -> Option<(u16, u16)> {
     let border_cols = on(sides.left) + on(sides.right);
     let border_rows = on(sides.top) + on(sides.bottom);
     let (mx, _) = effective_text_margin(area, state);
-    let gutter = u16::from(area.width >= 2);
+    let gutter = u16::from(state.config.story_scrollbar_gutter && area.width >= 2);
     let cols = state
         .config
         .virtual_screen_cols

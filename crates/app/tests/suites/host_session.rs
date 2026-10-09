@@ -184,6 +184,33 @@ fn the_host_sets_a_zmachine_storys_screen_size() {
     let _ = std::fs::remove_dir_all(&home);
 }
 
+/// SQ-1750: the pane's last column goes to the TUI's scrollbar by default, so a
+/// v4+ story is told one column less than the pane; a host with no scrollbar
+/// column turns that off and the story gets the whole pane, as Glulx does.
+#[test]
+fn a_host_without_a_scrollbar_column_gives_the_story_the_whole_pane() {
+    let story = fixture_path("LostPig.z8");
+    if !story.is_file() {
+        eprintln!("SKIP: {} absent", story.display());
+        return;
+    }
+    let width_told = |gutter: Option<bool>| {
+        let home = app::scratch_dir("host-gutter");
+        let mut b = boot(story.clone(), &home);
+        if let Some(g) = gutter {
+            b.state.config.story_scrollbar_gutter = g;
+        }
+        assert!(app::host::screen::set_story_pane(&mut *b.session, &b.state, (90, 28)));
+        let z = app::engine_helpers::zvm_session_opt(&*b.session).unwrap();
+        let w = z.machine.mem.read_byte(0x21);
+        let _ = std::fs::remove_dir_all(&home);
+        w
+    };
+    assert_eq!(width_told(None), 89, "default: the scrollbar column is reserved");
+    assert_eq!(width_told(Some(true)), 89);
+    assert_eq!(width_told(Some(false)), 90, "no gutter: the story gets the whole pane");
+}
+
 // ── Exit save, reset, and the game's own SAVE/RESTORE ─────────────────────────
 
 /// The exit save leaves a resume point the next boot picks up, and the game

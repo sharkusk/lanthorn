@@ -988,6 +988,7 @@ fn default_honor_game_colours() -> bool { true }
 fn default_period_look() -> bool { true }
 fn default_system_colours() -> bool { false }
 fn default_acceleration() -> bool { true }
+fn default_story_scrollbar_gutter() -> bool { true }
 fn default_honor_timed_input() -> bool { true }
 fn default_enable_sound() -> bool { true }
 fn default_volume() -> u8 { 100 }
@@ -2134,6 +2135,13 @@ pub struct Config {
     /// --accel off CLI flag); intentionally not persisted or user-facing.
     #[serde(skip, default = "default_acceleration")]
     pub acceleration: bool,
+    /// Whether the story pane reserves one column for the transcript scrollbar
+    /// when [`crate::render::screen::story_screen_dims`] tells a v4+ Z-machine
+    /// story how wide its screen is (SQ-1750). Runtime-only, host-set: the TUI
+    /// keeps its scrollbar column (default `true`); a host that draws no
+    /// scrollbar column sets `false` and the story gets the full pane width.
+    #[serde(skip, default = "default_story_scrollbar_gutter")]
+    pub story_scrollbar_gutter: bool,
     /// Cover-art image protocol. Runtime-only (set from --image-protocol);
     /// not persisted or user-facing.
     #[serde(skip, default = "default_image_protocol")]
@@ -2516,6 +2524,7 @@ impl Default for Config {
             enable_sound: default_enable_sound(),
             volume: default_volume(),
             acceleration: default_acceleration(),
+            story_scrollbar_gutter: default_story_scrollbar_gutter(),
             image_protocol: default_image_protocol(),
             images: default_images(),
             trace: crate::trace::TraceSections::default(),
@@ -4528,6 +4537,7 @@ use_defaults = false
             text_margin_y: 0,
             animation: AnimationConfig::default(),
             acceleration: true,
+            story_scrollbar_gutter: true,
             image_protocol: ImageProtocol::Auto,
             images: true,
             trace: crate::trace::TraceSections::default(),
