@@ -817,9 +817,11 @@ fn format_hit(hit: &SearchHit) -> String {
 
 /// A compact rating/year tail like "★2.5 (1990)", or just the year, or None.
 fn hit_rating(hit: &SearchHit) -> Option<String> {
-    match (hit.star_rating, hit.published.as_deref()) {
-        (Some(r), Some(y)) => Some(format!("★{r} {y}")),
-        (Some(r), None) => Some(format!("★{r}")),
+    // The number is IFDB's true average, to one decimal like the story list
+    // (SQ-1746); the half-star value is only the fallback when a reply lacks it.
+    match (hit.average_rating.or(hit.star_rating), hit.published.as_deref()) {
+        (Some(r), Some(y)) => Some(format!("★{r:.1} {y}")),
+        (Some(r), None) => Some(format!("★{r:.1}")),
         (None, Some(y)) => Some(format!("({y})")),
         (None, None) => None,
     }
@@ -877,9 +879,20 @@ mod tests {
             link: Some(format!("https://ifdb.org/viewgame?id={tuid}")),
             published: Some("1990".into()),
             star_rating: Some(3.0),
+            average_rating: None,
             num_ratings: Some(2),
             has_cover: false,
         }
+    }
+
+    #[test]
+    fn the_rating_tail_shows_the_true_average_not_the_half_star() {
+        let mut h = hit("a", "Photopia");
+        h.star_rating = Some(4.5);
+        h.average_rating = Some(4.33);
+        assert_eq!(hit_rating(&h).as_deref(), Some("★4.3 1990"));
+        h.average_rating = None;
+        assert_eq!(hit_rating(&h).as_deref(), Some("★4.5 1990"), "falls back to the star value");
     }
 
     fn opt(name: &str) -> DownloadOption {

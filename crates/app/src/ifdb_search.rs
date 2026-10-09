@@ -210,6 +210,9 @@ pub struct SearchHit {
     pub published: Option<String>,
     /// Rounded ½-star rating, if the game has ratings.
     pub star_rating: Option<f32>,
+    /// IFDB's true average rating (`averageRating`), unrounded; the number the
+    /// story list shows after a fetch. `None` when the reply left it empty.
+    pub average_rating: Option<f32>,
     pub num_ratings: Option<u32>,
     pub has_cover: bool,
 }
@@ -640,6 +643,7 @@ fn parse_game(game: roxmltree::Node) -> Option<SearchHit> {
         link: child_text(game, "link"),
         published,
         star_rating: child_text(game, "starRating").and_then(|s| s.parse().ok()),
+        average_rating: child_text(game, "averageRating").and_then(|s| s.parse().ok()),
         num_ratings: child_text(game, "numRatings").and_then(|s| s.parse().ok()),
         has_cover,
     })
@@ -1147,6 +1151,7 @@ mod tests {
         assert_eq!(dsd.author.as_deref(), Some("Michael J. Roberts and Steve McAdams"));
         assert_eq!(dsd.published.as_deref(), Some("1990"));
         assert_eq!(dsd.star_rating, Some(2.5));
+        assert!((dsd.average_rating.unwrap() - 2.428_571_4).abs() < 1e-6, "SQ-1746: the true average rides beside the half-star");
         assert_eq!(dsd.num_ratings, Some(7));
         assert!(dsd.has_cover, "hasCoverArt + coverArtLink → has_cover");
     }
@@ -1160,6 +1165,7 @@ mod tests {
         // "Eclipse" — empty <starRating></starRating>/<numRatings>0 → None/0.
         let eclipse = hits.iter().find(|h| h.title == "Eclipse").unwrap();
         assert_eq!(eclipse.star_rating, None, "an empty rating element is None, not 0.0");
+        assert_eq!(eclipse.average_rating, None, "an empty averageRating is None, not 0.0");
         assert!(!eclipse.has_cover);
     }
 
@@ -1637,6 +1643,7 @@ mod tests {
             link: None,
             published: None,
             star_rating: None,
+            average_rating: None,
             num_ratings: None,
             has_cover: false,
         };
