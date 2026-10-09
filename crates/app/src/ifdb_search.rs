@@ -304,8 +304,9 @@ pub enum SearchError {
     Transport(String),
     /// IFDB returned a well-formed `<error>` reply.
     Remote(String),
-    /// The download exceeded [`MAX_DOWNLOAD`].
-    TooLarge,
+    /// A download or read exceeded `limit` bytes — [`MAX_DOWNLOAD`] for a
+    /// whole file, a smaller cap for a slice or an entry.
+    TooLarge { limit: u64 },
     /// The URL yielded no usable, accepted-extension filename.
     NoFilename,
     /// The downloaded bytes don't look like a story of the type the filename
@@ -324,7 +325,7 @@ impl std::fmt::Display for SearchError {
         match self {
             SearchError::Transport(_) => write!(f, "IFDB unreachable"),
             SearchError::Remote(m) => write!(f, "IFDB: {m}"),
-            SearchError::TooLarge => f.write_str(&too_large_message(MAX_DOWNLOAD)),
+            SearchError::TooLarge { limit } => f.write_str(&too_large_message(*limit)),
             SearchError::NoFilename => write!(f, "no downloadable story file"),
             SearchError::NotAStory => write!(f, "downloaded file is not a valid story file"),
             SearchError::Io(m) => write!(f, "could not save file: {m}"),
@@ -435,15 +436,25 @@ impl SearchSource for IfdbSearchClient {
 
     fn probe_range(&self, url: &str) -> Result<RangeProbe, SearchError> {
         let resp = self
-            .file_request(url)
+            .ranged_request(url)
             .header("Range", "bytes=0-0")
             .call()
             .map_err(|e| SearchError::Transport(e.to_string()))?;
         let header = |name: &str| resp.headers().get(name).and_then(|v| v.to_str().ok()).map(str::to_string);
+        // SQ-1756: with `Accept-Encoding: identity` a 206 carries the file's real
+        // size in `Content-Range`. A server that compresses anyway makes ureq
+        // inflate the body AND strip `Content-Encoding`/`Content-Length` (it does
+        // so only when it decodes), while `Content-Range` still counts the
+        // ENCODED bytes. So a 206 whose `Content-Length` is not the one byte
+        // asked for cannot be trusted for a size: report none.
         if resp.status().as_u16() == 206 {
-            if let Some(total) = header("content-range").as_deref().and_then(content_range_total) {
-                return Ok(RangeProbe::Supported { total });
+            let one_byte = header("content-length").as_deref().map(str::trim) == Some("1");
+            if one_byte {
+                if let Some(total) = header("content-range").as_deref().and_then(content_range_total) {
+                    return Ok(RangeProbe::Supported { total });
+                }
             }
+            return Ok(RangeProbe::Unsupported { length: None });
         }
         let length = header("content-length").and_then(|s| s.parse::<u64>().ok());
         Ok(RangeProbe::Unsupported { length })
@@ -454,23 +465,23 @@ impl SearchSource for IfdbSearchClient {
             return Ok(Vec::new());
         }
         let mut resp = self
-            .file_request(url)
+            .ranged_request(url)
             .header("Range", format!("bytes={start}-{}", start + len - 1))
             .call()
             .map_err(|e| SearchError::Transport(e.to_string()))?;
-        match resp.status().as_u16() {
-            // Never more than was asked for: a host that sends extra is stopped.
-            206 => read_capped(resp.body_mut().as_reader(), len),
-            200 if start == 0 => {
-                let mut buf = Vec::new();
-                resp.body_mut()
-                    .as_reader()
-                    .take(len)
-                    .read_to_end(&mut buf)
-                    .map_err(|e| SearchError::Transport(e.to_string()))?;
-                Ok(buf)
-            }
-            _ => Err(SearchError::Transport("server ignored the Range request".into())),
+        let status = resp.status().as_u16();
+        // SQ-1756: a host that sends more than was asked for (a gzip reply ureq
+        // inflated past the slice) keeps its first `len` bytes, not an error.
+        if status == 206 || (status == 200 && start == 0) {
+            let mut buf = Vec::new();
+            resp.body_mut()
+                .as_reader()
+                .take(len)
+                .read_to_end(&mut buf)
+                .map_err(|e| SearchError::Transport(e.to_string()))?;
+            Ok(buf)
+        } else {
+            Err(SearchError::Transport("server ignored the Range request".into()))
         }
     }
 
@@ -483,7 +494,7 @@ impl SearchSource for IfdbSearchClient {
             .and_then(|s| s.parse::<u64>().ok())
         {
             if len > cap {
-                return Err(SearchError::TooLarge);
+                return Err(SearchError::TooLarge { limit: cap });
             }
         }
         read_capped(resp.body_mut().as_reader(), cap)
@@ -520,7 +531,7 @@ impl IfdbSearchClient {
             .and_then(|s| s.parse::<u64>().ok())
         {
             if len > cap {
-                return Err(SearchError::TooLarge);
+                return Err(SearchError::TooLarge { limit: cap });
             }
         }
 
@@ -549,6 +560,17 @@ impl IfdbSearchClient {
 
     /// A GET on a file host with the download phase budgets (see the timeouts
     /// above) rather than the XML endpoints' whole-call 15 seconds.
+    /// [`Self::file_request`] for a `Range` request: `Accept-Encoding: identity`
+    /// (SQ-1756), so the `Content-Range` total is the file's real size and the
+    /// slice is raw bytes. ureq 3.3 (`run.rs`) adds its automatic `gzip` only
+    /// when the request has no `Accept-Encoding` of its own, so setting one
+    /// overrides it. Decoding is triggered by the RESPONSE's `Content-Encoding`
+    /// alone, so a host that ignores `identity` is still inflated (and has
+    /// `Content-Encoding`/`Content-Length` stripped) — see [`Self::probe_range`].
+    fn ranged_request(&self, url: &str) -> ureq::RequestBuilder<ureq::typestate::WithoutBody> {
+        self.file_request(url).header("Accept-Encoding", "identity")
+    }
+
     fn file_request(&self, url: &str) -> ureq::RequestBuilder<ureq::typestate::WithoutBody> {
         self.agent
             .get(url)
@@ -761,7 +783,7 @@ pub fn read_capped<R: Read>(r: R, cap: u64) -> Result<Vec<u8>, SearchError> {
     let mut buf = Vec::new();
     r.take(cap + 1).read_to_end(&mut buf).map_err(|e| SearchError::Transport(e.to_string()))?;
     if buf.len() as u64 > cap {
-        return Err(SearchError::TooLarge);
+        return Err(SearchError::TooLarge { limit: cap });
     }
     Ok(buf)
 }
@@ -1405,7 +1427,7 @@ mod tests {
         assert_eq!(ok.len(), 8);
         // cap + 1: rejected as TooLarge.
         match read_capped(&[7u8; 9][..], 8) {
-            Err(SearchError::TooLarge) => {}
+            Err(SearchError::TooLarge { limit: 8 }) => {}
             other => panic!("expected TooLarge, got {other:?}"),
         }
     }
@@ -1440,10 +1462,10 @@ mod tests {
         let dest = crate::scratch_dir("ifdb-story-cap-declared");
         let url = serve_once("HTTP/1.1 200 OK\r\nContent-Length: 5000\r\nConnection: close\r\n\r\n", zcode(5000));
         let err = IfdbSearchClient::new().download_capped(&url, &dest, 1000).unwrap_err();
-        assert!(matches!(err, SearchError::TooLarge), "{err:?}");
+        assert!(matches!(err, SearchError::TooLarge { limit: 1000 }), "{err:?}");
         assert_eq!(std::fs::read_dir(&dest).unwrap().count(), 0, "no partial file");
         assert_eq!(too_large_message(100 * 1024 * 1024), "Too large to download (over 100 MB)");
-        assert_eq!(SearchError::TooLarge.to_string(), "Too large to download (over 100 MB)");
+        assert_eq!(SearchError::TooLarge { limit: MAX_DOWNLOAD }.to_string(), "Too large to download (over 100 MB)");
         let _ = std::fs::remove_dir_all(dest);
     }
 
@@ -1460,9 +1482,118 @@ mod tests {
         body.extend_from_slice(b"0\r\n\r\n");
         let url = serve_once("HTTP/1.1 200 OK\r\nTransfer-Encoding: chunked\r\nConnection: close\r\n\r\n", body);
         let err = IfdbSearchClient::new().download_capped(&url, &dest, 2000).unwrap_err();
-        assert!(matches!(err, SearchError::TooLarge), "{err:?}");
+        assert!(matches!(err, SearchError::TooLarge { limit: 2000 }), "{err:?}");
         assert_eq!(std::fs::read_dir(&dest).unwrap().count(), 0, "no partial file");
         let _ = std::fs::remove_dir_all(dest);
+    }
+
+    /// Like [`serve_once`], but also hands back the request the client sent, so a
+    /// case can assert on its headers (SQ-1756).
+    fn serve_capturing(head: String, body: Vec<u8>) -> (String, std::sync::mpsc::Receiver<String>) {
+        use std::io::Write;
+        let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        let port = listener.local_addr().unwrap().port();
+        let (tx, rx) = std::sync::mpsc::channel();
+        std::thread::spawn(move || {
+            let Ok((mut sock, _)) = listener.accept() else { return };
+            let mut req = [0u8; 4096];
+            let n = sock.read(&mut req).unwrap_or(0);
+            let _ = tx.send(String::from_utf8_lossy(&req[..n]).to_string());
+            let _ = sock.write_all(head.as_bytes());
+            let _ = sock.write_all(&body);
+        });
+        (format!("http://127.0.0.1:{port}/notes.txt"), rx)
+    }
+
+    fn gzip(bytes: &[u8]) -> Vec<u8> {
+        use std::io::Write;
+        let mut e = flate2::write::GzEncoder::new(Vec::new(), flate2::Compression::default());
+        e.write_all(bytes).unwrap();
+        e.finish().unwrap()
+    }
+
+    /// SQ-1756: ranged requests ask for `identity`, so a compressing host sends
+    /// the real bytes and the real total.
+    #[test]
+    fn ranged_requests_ask_for_identity_encoding() {
+        let (url, rx) = serve_capturing(
+            "HTTP/1.1 206 Partial Content\r\nContent-Range: bytes 0-0/302511\r\nContent-Length: 1\r\nConnection: close\r\n\r\n"
+                .into(),
+            b"x".to_vec(),
+        );
+        let probe = IfdbSearchClient::new().probe_range(&url).unwrap();
+        assert_eq!(probe, RangeProbe::Supported { total: 302511 });
+        let req = rx.recv().unwrap().to_ascii_lowercase();
+        assert!(req.contains("accept-encoding: identity\r\n"), "{req}");
+        assert!(!req.contains("gzip"), "{req}");
+
+        let (url, rx) = serve_capturing(
+            "HTTP/1.1 206 Partial Content\r\nContent-Range: bytes 0-3/10\r\nContent-Length: 4\r\nConnection: close\r\n\r\n"
+                .into(),
+            b"abcd".to_vec(),
+        );
+        assert_eq!(IfdbSearchClient::new().fetch_range(&url, 0, 4).unwrap(), b"abcd");
+        let req = rx.recv().unwrap().to_ascii_lowercase();
+        assert!(req.contains("accept-encoding: identity\r\n"), "{req}");
+        assert!(!req.contains("gzip"), "{req}");
+    }
+
+    /// SQ-1756: a host that gzips a ranged reply anyway describes the ENCODED
+    /// body in `Content-Range` (allthingsjacq.com: 45112 for a 302511-byte file).
+    /// That number is never shown as the file's size.
+    #[test]
+    fn a_gzip_encoded_range_reply_gives_no_size() {
+        let body = gzip(b"x");
+        let head = format!(
+            "HTTP/1.1 206 Partial Content\r\nContent-Encoding: gzip\r\nContent-Range: bytes 0-0/45112\r\nContent-Length: {}\r\nConnection: close\r\n\r\n",
+            body.len()
+        );
+        let (url, _rx) = serve_capturing(head, body);
+        let probe = IfdbSearchClient::new().probe_range(&url).unwrap();
+        assert_eq!(probe, RangeProbe::Unsupported { length: None });
+    }
+
+    /// SQ-1756: more bytes than asked for are trimmed to what was asked, whether
+    /// the host just over-sent or a gzip slice inflated past the window.
+    #[test]
+    fn a_preview_that_over_delivers_keeps_the_first_n_bytes() {
+        let text: Vec<u8> = (0..40_000u32).map(|i| b'a' + (i % 26) as u8).collect();
+        let (url, _rx) = serve_capturing(
+            "HTTP/1.1 206 Partial Content\r\nContent-Range: bytes 0-9/50\r\nContent-Length: 50\r\nConnection: close\r\n\r\n".into(),
+            text[..50].to_vec(),
+        );
+        assert_eq!(IfdbSearchClient::new().fetch_range(&url, 0, 10).unwrap(), text[..10]);
+
+        let body = gzip(&text);
+        let head = format!(
+            "HTTP/1.1 206 Partial Content\r\nContent-Encoding: gzip\r\nContent-Range: bytes 0-16383/45112\r\nContent-Length: {}\r\nConnection: close\r\n\r\n",
+            body.len()
+        );
+        let (url, _rx) = serve_capturing(head, body);
+        let got = IfdbSearchClient::new().fetch_range(&url, 0, 16 * 1024).unwrap();
+        assert_eq!(got, text[..16 * 1024]);
+    }
+
+    /// SQ-1756: the refusal names the cap that was actually hit, not 100 MB.
+    #[test]
+    fn too_large_names_the_cap_that_was_hit() {
+        let err = read_capped(&[0u8; 20_000][..], 16 * 1024).unwrap_err();
+        assert!(matches!(err, SearchError::TooLarge { limit: 16384 }), "{err:?}");
+        assert_eq!(err.to_string(), "Too large to download (over 16 KB)");
+        assert_eq!(SearchError::TooLarge { limit: 5 * 1024 * 1024 }.to_string(), "Too large to download (over 5 MB)");
+    }
+
+    /// Manual check against the live host from SQ-1756; run with
+    /// `cargo nextest run -p lanthorn --lib --features t-picker --run-ignored only live_gzip_range_host`.
+    #[test]
+    #[ignore = "network"]
+    fn live_gzip_range_host() {
+        let url = "https://allthingsjacq.com/intfic_clubfloyd_20071101.html";
+        let c = IfdbSearchClient::new();
+        let probe = c.probe_range(url);
+        let preview = c.fetch_range(url, 0, 16 * 1024).map(|b| b.len());
+        eprintln!("probe={probe:?} preview={preview:?}");
+        assert!(preview.is_ok());
     }
 
     /// A story under the cap downloads as before.

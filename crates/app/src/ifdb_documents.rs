@@ -432,7 +432,7 @@ impl<'a> RemoteZip<'a> {
         let r = self.entry(index)?;
         let name = safe_entry_basename(&r.path).ok_or(SearchError::NoFilename)?;
         if r.size > cap || r.compressed > cap {
-            return Err(SearchError::TooLarge);
+            return Err(SearchError::TooLarge { limit: cap });
         }
         let out = inflate(r.method, &self.data(r, r.compressed)?, cap)?;
         let mut crc = flate2::Crc::new();
@@ -507,7 +507,7 @@ fn inflate(method: usize, data: &[u8], cap: u64) -> Result<Vec<u8>, SearchError>
     };
     read.map_err(|_| archive_err("damaged zip entry"))?;
     if out.len() as u64 > cap {
-        return Err(SearchError::TooLarge);
+        return Err(SearchError::TooLarge { limit: cap });
     }
     Ok(out)
 }
@@ -819,7 +819,7 @@ fn run_job_capped(
                 }) {
                     Ok(Imported::Added(d)) => saved.push(d.id),
                     Ok(Imported::AlreadyPresent(d)) => already.push(d.id),
-                    Err(SearchError::TooLarge) => failed.push((label, too_large_message(cap))),
+                    Err(SearchError::TooLarge { .. }) => failed.push((label, too_large_message(cap))),
                     Err(e) => failed.push((label, e.to_string())),
                 }
                 if !send(DocEvent::Progress { done: n + 1, total, name: saved.last().or(already.last()).cloned().unwrap_or_default() }) {
@@ -1033,7 +1033,7 @@ pub(crate) mod tests {
             let bytes = self.get(url)?;
             *self.whole.lock().unwrap() += 1;
             if bytes.len() as u64 > cap {
-                return Err(SearchError::TooLarge);
+                return Err(SearchError::TooLarge { limit: cap });
             }
             Ok(bytes.clone())
         }
@@ -1163,7 +1163,7 @@ pub(crate) mod tests {
         assert!(zip.len() < 5_000, "the specimen must be small: {}", zip.len());
         let host = Host::new(true).with(URL, zip);
         let z = RemoteZip::open(&host, URL).unwrap().unwrap();
-        assert!(matches!(z.read_entry(0, 100_000), Err(SearchError::TooLarge)));
+        assert!(matches!(z.read_entry(0, 100_000), Err(SearchError::TooLarge { .. })));
         assert_eq!(z.read_entry(0, 200_000).unwrap().1.len(), 200_000, "exactly at the cap is fine");
     }
 
@@ -1391,12 +1391,12 @@ pub(crate) mod tests {
         let mut zip = w.finish().unwrap().into_inner();
         let host = Host::new(true).with(URL, zip.clone());
         let z = RemoteZip::open(&host, URL).unwrap().unwrap();
-        assert!(matches!(z.read_entry(0, MAX_DOWNLOAD), Err(SearchError::TooLarge)), "declared size");
+        assert!(matches!(z.read_entry(0, MAX_DOWNLOAD), Err(SearchError::TooLarge { .. })), "declared size");
         let at = zip.windows(4).position(|w| w == CENTRAL_SIG).unwrap();
         zip[at + 24..at + 28].copy_from_slice(&10u32.to_le_bytes());
         let host = Host::new(true).with(URL, zip);
         let z = RemoteZip::open(&host, URL).unwrap().unwrap();
-        assert!(matches!(z.read_entry(0, MAX_DOWNLOAD), Err(SearchError::TooLarge)), "while inflating");
+        assert!(matches!(z.read_entry(0, MAX_DOWNLOAD), Err(SearchError::TooLarge { .. })), "while inflating");
     }
 
     #[test]
@@ -1451,7 +1451,7 @@ pub(crate) mod tests {
         let host = Host::new(true).with(URL, zip);
         let z = RemoteZip::open(&host, URL).unwrap().unwrap();
         assert_eq!(z.entries()[0].size, 10);
-        assert!(matches!(z.read_entry(0, 100_000), Err(SearchError::TooLarge)), "stopped while inflating");
+        assert!(matches!(z.read_entry(0, 100_000), Err(SearchError::TooLarge { .. })), "stopped while inflating");
     }
 
     #[test]

@@ -209,7 +209,7 @@ impl UrlSource for HttpSource {
             resp.headers().get("content-disposition").and_then(|v| v.to_str().ok()).map(str::to_string);
         let bytes = read_capped(resp.body_mut().as_reader(), MAX_DOWNLOAD)
             .map_err(|e| match e {
-                crate::ifdb_search::SearchError::TooLarge => FetchError::TooLarge,
+                crate::ifdb_search::SearchError::TooLarge { .. } => FetchError::TooLarge,
                 other => FetchError::Transport(other.to_string()),
             })?;
         Ok(Payload { disposition, bytes })

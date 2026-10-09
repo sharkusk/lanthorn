@@ -31,6 +31,12 @@ while any such tag, or this Unreleased section, still exists.*
   you pick is already somewhere in your library, even tucked away in a folder like
   `infocom/` or `glulx/`, the download chooser says so at the top with where it
   lives, instead of letting you fetch a duplicate.
+- **A document on a host that compresses its downloads now shows its real size
+  and previews.** The documents chooser used to show the compressed size (a
+  295 KB page read as 44 KB), and previewing it failed with a bogus "Too large to
+  download (over 100 MB)". Sizes are now the file's true size, shown blank when a
+  host will not say, and a too-large message names the limit that was actually
+  hit.
 
 ## v0.9.3 — 2026-10-07
 
