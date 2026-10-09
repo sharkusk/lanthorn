@@ -109,6 +109,32 @@ struct PendingShow {
     next_picture: Option<u16>,
 }
 
+/// The short MAP label for a `*`-literal room's full description (SQ-1744).
+///
+/// A literal room carries its own lead-in ("I'm on the shore of a lake"), which is right
+/// in the room text and wrong as a map name. Strips a leading "I'm"/"I am"/"You are"/
+/// "You're" + on/in/at/by (+ optional the/a/an) and a trailing period.
+/// Anything that would strip to nothing keeps the original. Room text elsewhere stays full.
+pub fn map_label(desc: &str) -> String {
+    fn strip_word<'a>(s: &'a str, word: &str) -> Option<&'a str> {
+        let head = s.get(..word.len())?;
+        let rest = &s[word.len()..];
+        (head.eq_ignore_ascii_case(word) && rest.starts_with(' ')).then(|| rest.trim_start())
+    }
+    let mut s = desc.trim();
+    let lead = ["I'm", "I am", "You are", "You're"].iter().find_map(|w| strip_word(s, w));
+    if let Some(rest) = lead {
+        // Only a real lead-in ("... on/in/at/by ...") is stripped, never a bare "I'm".
+        if let Some(rest) = ["on", "in", "at", "by"].iter().find_map(|p| strip_word(rest, p)) {
+            s = ["the", "a", "an"].iter().find_map(|a| strip_word(rest, a)).unwrap_or(rest);
+        }
+    }
+    match s.trim_end_matches('.').trim_end() {
+        "" => desc.to_string(),
+        s => s.to_string(),
+    }
+}
+
 /// A running Scott Adams (ScottFree `.dat`) game session.
 pub struct ScottSession {
     vm: scott::Vm,
@@ -675,7 +701,9 @@ impl ScottSession {
 
     fn snapshot_location(&self) -> Option<LocationInfo> {
         let r = self.vm.current_room();
-        Some(LocationInfo { number: r as mapper::graph::RoomId, parent: 0, name: self.vm.room_name(r).to_string() })
+        let desc = self.vm.room_name(r);
+        let name = if self.vm.room_is_literal() { map_label(desc) } else { desc.to_string() };
+        Some(LocationInfo { number: r as mapper::graph::RoomId, parent: 0, name })
     }
 
     /// An item's current location (`-1`/`255` = carried, `0` = nowhere, else
