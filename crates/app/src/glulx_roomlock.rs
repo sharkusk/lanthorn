@@ -393,7 +393,9 @@ impl RoomLock {
         // against the turn we are about to fold in rather than after it, because
         // it needs the PREVIOUS snapshot to say which words moved.
         let witness = match (movement, heading.as_deref()) {
-            (Movement::Changed, Some(h)) => self.name_witness(&ram, h),
+            (Movement::Changed, Some(h)) => {
+                self.name_witness(&ram, h).or_else(|| self.first_heading_witness(&ram, h))
+            }
             _ => None,
         };
         if let (Some(prev), Movement::Changed | Movement::Unchanged) = (&self.prev, movement) {
@@ -478,6 +480,54 @@ impl RoomLock {
             }
         }
         best
+    }
+
+    /// SQ-1747: a lock for the FIRST heading the learner ever sees, where no earlier
+    /// snapshot exists to say a word "moved" (the player has not yet changed room, so
+    /// nothing has) and [`name_witness`](Self::name_witness) therefore cannot run.
+    ///
+    /// Without it the lock only forms on a turn where the room changed, and until the
+    /// first move the room dock and item sightings have no current room.
+    ///
+    /// The evidence is that the story's own ROOM SET (never the correlation) has been
+    /// read and **every RAM word that holds a room holds the same one**. Inform keeps
+    /// several aliases of the current room (`location`, `real_location`, ...), so
+    /// several words agreeing is the normal shape, and the lowest address wins for
+    /// the same deterministic reason [`name_witness`](Self::name_witness) gives. Any
+    /// disagreement (a word holding some OTHER room, a remembered previous room, a
+    /// maze) is declined, not resolved: the lock then forms the usual way, on a move,
+    /// and [`verify`](Self::verify) still guards it afterwards.
+    ///
+    /// The heading is only a veto, because a room's static `printed name` need not be
+    /// what the story prints (Toby's Nose's rooms are `DR` and `EP`; the heading is
+    /// "Drawing-Room"): if some room's static name DOES match the heading it must be
+    /// the held room, and it must be the only one that does.
+    fn first_heading_witness(&self, ram: &[u32], heading: &str) -> Option<u32> {
+        if self.history.iter().any(|o| o.heading.is_some()) {
+            return None;
+        }
+        let rooms = self.rooms.as_ref()?;
+        let (mut room, mut best): (Option<u32>, Option<u32>) = (None, None);
+        for (i, &v) in ram.iter().enumerate() {
+            let addr = self.base + (i as u32) * 4;
+            if self.is_rejected(addr) || rooms.binary_search_by_key(&v, |&(a, _)| a).is_err() {
+                continue;
+            }
+            if room.is_some_and(|r| r != v) {
+                return None;
+            }
+            room = Some(v);
+            best.get_or_insert(addr);
+        }
+        let room = room?;
+        let mut named = rooms.iter().filter(|(_, n)| {
+            n.as_deref().is_some_and(|n| zvm::location::status_name_matches(heading, n))
+        });
+        match (named.next(), named.next()) {
+            (None, _) => best,
+            (Some(&(a, _)), None) if a == room => best,
+            _ => None,
+        }
     }
 
     /// Commit to a candidate once the evidence is one-sided.
@@ -1013,6 +1063,64 @@ mod tests {
             Some(base),
             "the word that moved to a room whose static name is the printed heading IS the global"
         );
+    }
+
+    #[test]
+    fn the_first_heading_locks_when_every_room_holding_word_agrees() {
+        // SQ-1747: no move has happened, so nothing "moved"; the room set decides.
+        let (base, _) = base_region();
+        let (far, rooms) = three_rooms(base);
+        let mut l = RoomLock::new(base, 3);
+        l.set_objects(Some(vec![far, far + 0x10, far + 0x20]));
+        l.set_rooms(Some(rooms));
+        l.observe(vec![far, 1, 7], Some("Back Alley".into()), Movement::Changed, Movement::Changed);
+        assert_eq!(l.locked(), Some(base));
+    }
+
+    #[test]
+    fn the_first_heading_takes_the_lower_of_two_agreeing_aliases() {
+        let (base, _) = base_region();
+        let (far, rooms) = three_rooms(base);
+        let mut l = RoomLock::new(base, 3);
+        l.set_objects(Some(vec![far, far + 0x10, far + 0x20]));
+        l.set_rooms(Some(rooms));
+        l.observe(vec![1, far, far], Some("Back Alley".into()), Movement::Changed, Movement::Changed);
+        assert_eq!(l.locked(), Some(base + 4));
+    }
+
+    #[test]
+    fn the_first_heading_does_not_lock_when_words_hold_different_rooms() {
+        let (base, _) = base_region();
+        let (far, rooms) = three_rooms(base);
+        let mut l = RoomLock::new(base, 3);
+        l.set_objects(Some(vec![far, far + 0x10, far + 0x20]));
+        l.set_rooms(Some(rooms));
+        l.observe(vec![far, far + 0x10, 7], Some("Back Alley".into()), Movement::Changed, Movement::Changed);
+        assert_eq!(l.locked(), None, "a word holding another room is ambiguity, not a tie");
+    }
+
+    #[test]
+    fn the_first_heading_does_not_lock_when_a_matching_name_belongs_to_another_room() {
+        let (base, _) = base_region();
+        let (far, rooms) = three_rooms(base);
+        let mut l = RoomLock::new(base, 3);
+        l.set_objects(Some(vec![far, far + 0x10, far + 0x20]));
+        l.set_rooms(Some(rooms));
+        // Every word says Sigil Street; the heading says Back Alley.
+        l.observe(vec![far + 0x10, 1, 7], Some("Back Alley".into()), Movement::Changed, Movement::Changed);
+        assert_eq!(l.locked(), None, "the printed name vetoes");
+    }
+
+    #[test]
+    fn the_first_heading_locks_when_no_static_name_matches_it() {
+        // Toby's Nose: rooms are `DR` and `EP`, the heading is "Drawing-Room".
+        let (base, _) = base_region();
+        let far = base + 0x4000;
+        let mut l = RoomLock::new(base, 3);
+        l.set_objects(Some(vec![far, far + 0x10]));
+        l.set_rooms(Some(vec![(far, Some("DR".to_string())), (far + 0x10, Some("EP".to_string()))]));
+        l.observe(vec![far, far, 7], Some("Drawing-Room".into()), Movement::Changed, Movement::Changed);
+        assert_eq!(l.locked(), Some(base));
     }
 
     #[test]

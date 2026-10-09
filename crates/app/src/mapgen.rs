@@ -1598,7 +1598,8 @@ fn glulx_map(bytes: &[u8], file: String) -> Result<GeneratedMap, GenError> {
 
     // Inform 7's own map table first — it is the higher authority for any story
     // that has one, since it is what the I7 runtime itself reads.
-    if let Some(w) = gvm::i7map::I7World::detect(&mem, &names) {
+    // SQ-1747: only a world with its `Map_Storage` — a rooms-only one knows no exits.
+    if let Some(w) = gvm::i7map::I7World::detect(&mem, &names).filter(|w| w.has_map()) {
         return Ok(i7_map(&mem, &names, &w, story));
     }
     i6_glulx_map(&mem, &names, story)

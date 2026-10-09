@@ -754,6 +754,28 @@ impl ObjectWords {
         }
     }
 
+    /// True for an Inform 7 pronoun-group object (SQ-1747): a thing with no
+    /// printed name whose parse words carry at least two distinct personal
+    /// pronouns (`he`+`him`, `she`+`her`). I7 compiles "Understand "he" as
+    /// the men" into a placeholder like this so the parser has something to
+    /// resolve `he` to; it is not a thing in the room, and listing it as room
+    /// contents or an item sighting invents one. Two pronouns, not one, so a
+    /// real thing that merely answers to `her` ("her ring") is kept.
+    pub fn is_pronoun_group(&self) -> bool {
+        if !self.printed_name.is_empty() {
+            return false;
+        }
+        let mut seen: Vec<&str> = Vec::new();
+        for w in &self.words {
+            if let Some(p) = PRONOUNS.iter().find(|p| p.eq_ignore_ascii_case(w)) {
+                if !seen.contains(p) {
+                    seen.push(p);
+                }
+            }
+        }
+        seen.len() >= 2
+    }
+
     /// What to SHOW a player for this object, or `None` when the story holds
     /// no text for it at all.
     ///
@@ -1233,6 +1255,18 @@ mod tests {
         }
         assert!(set.contains("man") && set.contains("door") && set.contains("direction"));
         assert!(objects[2].refers_to("he"), "the object itself still answers to its words");
+    }
+
+    #[test]
+    fn a_pronoun_group_is_recognised_and_a_her_ring_is_not() {
+        let group = |words: &[&str]| {
+            ObjectWords::new(1, String::new(), words.iter().map(|w| w.to_string()).collect(), Some(1), Some(9))
+        };
+        assert!(group(&["womangrou", "things", "woman", "women", "her", "she", "ladies"]).is_pronoun_group());
+        assert!(group(&["mangroup", "things", "man", "men", "he", "him"]).is_pronoun_group());
+        assert!(!group(&["ring", "her"]).is_pronoun_group(), "one pronoun is a name word");
+        let named = ObjectWords::new(2, "the men".into(), vec!["he".into(), "him".into()], Some(1), Some(9));
+        assert!(!named.is_pronoun_group(), "an object with a printed name is not a placeholder");
     }
 
     #[test]

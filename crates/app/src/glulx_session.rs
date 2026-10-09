@@ -1266,7 +1266,9 @@ impl GlulxSession {
         compass: gvm::world::Compass,
     ) -> crate::engine::DeclaredExit {
         use crate::engine::DeclaredExit as AppExit;
-        let Some(world) = self.i7_world() else { return AppExit::Unknown };
+        // SQ-1747: a world recovered without a `Map_Storage` knows its rooms and
+        // nothing about their exits; "no entry" there is not "no exit".
+        let Some(world) = self.i7_world().filter(|w| w.has_map()) else { return AppExit::Unknown };
         if !world.is_room(addr) {
             return AppExit::Unknown;
         }
@@ -2041,7 +2043,15 @@ impl GlulxSession {
                 // `room_addrs`'s field docs for why `declared_exit` needs a
                 // cache rather than being able to invert the hash itself.
                 self.room_addrs.borrow_mut().insert(id, addr);
-                let name = self.static_room_name(addr).unwrap_or_else(|| name.to_string());
+                // SQ-1747: the static name only stands in for a heading it AGREES
+                // with. Toby's Nose's rooms read `DR`/`EP` from the property the
+                // reader takes for `printed name` while the story prints
+                // "Drawing-Room"; labelling the room `DR` would be worse than the
+                // heading it replaced.
+                let name = self
+                    .static_room_name(addr)
+                    .filter(|s| zvm::location::status_name_matches(name, s))
+                    .unwrap_or_else(|| name.to_string());
                 LocationInfo { number: id, parent: 0, name }
             }
             None => heading_to_room(name),
@@ -3838,6 +3848,9 @@ impl Introspect for GlulxSession {
             .into_iter()
             .filter(|&c| Some(c) != skip)
             .filter_map(|c| names.of(self.machine.mem(), c))
+            // SQ-1747: I7's pronoun-group placeholders ("he"/"him", "she"/"her")
+            // sit in the room's child list but are not things in it.
+            .filter(|ow| !ow.is_pronoun_group())
             .collect()
     }
 
