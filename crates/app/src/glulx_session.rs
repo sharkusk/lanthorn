@@ -1712,7 +1712,7 @@ impl GlulxSession {
         let colour = self.machine.window_input_colour(win);
         let attrs = self.machine.style_attrs(WinType::TextBuffer, GlkStyle::Input);
         let (bits, fg, _bg) = crate::glk_backend::resolve_glk_colour(GlkStyle::Input, colour, attrs);
-        crate::engine::InputStyle { bits, ink: fg }
+        crate::engine::InputStyle { bits, ink: fg, bits_vs_prompt: false }
     }
 
     fn appglk(&mut self) -> &mut AppGlk {

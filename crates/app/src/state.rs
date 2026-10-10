@@ -5868,6 +5868,30 @@ impl AppState {
         self.stream_transcript(&format!("> {text}"), TranscriptKind::Input);
     }
 
+    /// Decide what of the story's RAW input style `raw` is actually a style for
+    /// INPUT, by comparing it with what the prompt on screen was printed in
+    /// (SQ-1758). A story that colours all its text -- Photopia's black page ink --
+    /// is not styling its input, so a colour equal to the prompt's is "no opinion"
+    /// and the theme's input colour applies. Z-machine bits are compared the same
+    /// way (`bits_vs_prompt`); Glulx `style_Input` hints always stand.
+    ///
+    /// The prompt's style is read from the transcript's last line -- its trailing
+    /// run, else the colour prevailing before it -- never from engine memory, which
+    /// a Save State restore would reset.
+    pub fn input_style_against_prompt(&self, raw: crate::engine::InputStyle) -> crate::engine::InputStyle {
+        let trailing = self.transcript_runs.last().and_then(|runs| runs.last());
+        let bits = trailing.map(|r| r.bits & 0x07).unwrap_or(0);
+        let fg = match trailing {
+            Some(r) if r.fg != 0 => r.fg,
+            _ => self.prevailing_run_colour_before(self.transcript.len()).map(|(fg, _)| fg).unwrap_or(0),
+        };
+        crate::engine::InputStyle {
+            bits: if raw.bits_vs_prompt && raw.bits == bits { 0 } else { raw.bits },
+            ink: if raw.ink == fg { 0 } else { raw.ink },
+            bits_vs_prompt: raw.bits_vs_prompt,
+        }
+    }
+
     /// Merge transcript line `idx` into line `idx - 1`, concatenating the text and
     /// appending `idx`'s style runs shifted by the previous line's length, then
     /// removing line `idx`. Used to fold a game's own command echo (the first line
@@ -6931,11 +6955,79 @@ mod tests {
         assert_eq!((r.fg, r.bg, r.ink, r.bits), (0, 0, 0, 0), "no prompt colours, no story opinion");
     }
 
+    // ── SQ-1758: raw engine style vs the prompt on screen ───────────────────
+
+    fn prompt_in(bits: u8, fg: ZColourForTest) -> AppState {
+        let mut s = AppState::default();
+        s.push_transcript_runs(
+            ">",
+            TranscriptKind::Story,
+            &[(1, bits, fg, zvm::screen::ZColour::Default, 0, ParaFmt::default(), 0, false)],
+        );
+        s
+    }
+    type ZColourForTest = zvm::screen::ZColour;
+
+    fn raw(bits: u8, ink: u32, vs: bool) -> crate::engine::InputStyle {
+        crate::engine::InputStyle { bits, ink, bits_vs_prompt: vs }
+    }
+
+    #[test]
+    fn a_colour_equal_to_the_prompts_is_no_opinion() {
+        use zvm::screen::ZColour;
+        let red = pack_zcolour(ZColour::Standard(3));
+        let s = prompt_in(0, ZColour::Standard(3));
+        assert_eq!(s.input_style_against_prompt(raw(0, red, true)).ink, 0);
+    }
+
+    #[test]
+    fn a_colour_changed_just_for_the_read_is_kept() {
+        use zvm::screen::ZColour;
+        let green = pack_zcolour(ZColour::Standard(4));
+        let s = prompt_in(0, ZColour::Standard(3));
+        assert_eq!(s.input_style_against_prompt(raw(0, green, true)).ink, green);
+    }
+
+    #[test]
+    fn bold_only_for_input_is_bold_with_the_theme_colour() {
+        use zvm::screen::ZColour;
+        let red = pack_zcolour(ZColour::Standard(3));
+        let s = prompt_in(0, ZColour::Standard(3));
+        let st = s.input_style_against_prompt(raw(0x02, red, true));
+        assert_eq!((st.bits, st.ink), (0x02, 0));
+        // …and bold throughout the page is not an input style.
+        let bold_page = prompt_in(0x02, ZColour::Default);
+        assert_eq!(bold_page.input_style_against_prompt(raw(0x02, 0, true)).bits, 0);
+    }
+
+    #[test]
+    fn glulx_input_bits_always_stand_but_an_ink_equal_to_the_prompt_does_not() {
+        use zvm::screen::ZColour;
+        let black = pack_zcolour(ZColour::True24(0));
+        let s = prompt_in(0x02, ZColour::True24(0));
+        let st = s.input_style_against_prompt(raw(0x02, black, false));
+        assert_eq!((st.bits, st.ink), (0x02, 0));
+    }
+
+    #[test]
+    fn an_uncoloured_prompt_line_compares_against_the_prevailing_page_colour() {
+        use zvm::screen::ZColour;
+        let red = pack_zcolour(ZColour::Standard(3));
+        let mut s = AppState::default();
+        s.push_transcript_runs(
+            "You are in a room.",
+            TranscriptKind::Story,
+            &[(18, 0, ZColour::Standard(3), ZColour::Default, 0, ParaFmt::default(), 0, false)],
+        );
+        s.push_transcript_kind(">", TranscriptKind::Story); // the prompt line carries no run
+        assert_eq!(s.input_style_against_prompt(raw(0, red, true)).ink, 0);
+    }
+
     #[test]
     fn append_to_last_transcript_line_carries_the_stories_own_input_style() {
         let mut s = AppState::default();
         s.push_transcript_kind(">", TranscriptKind::Story);
-        s.append_to_last_transcript_line("look", crate::engine::InputStyle { bits: 0x02, ink: 0x0300_FF00 });
+        s.append_to_last_transcript_line("look", crate::engine::InputStyle { bits: 0x02, ink: 0x0300_FF00, ..Default::default() });
         let r = s.transcript_runs.last().unwrap()[0];
         assert_eq!((r.bits, r.ink), (0x02, 0x0300_FF00));
     }

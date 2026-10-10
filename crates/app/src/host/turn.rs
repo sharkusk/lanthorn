@@ -301,7 +301,8 @@ pub fn finish_command_turn(
         // append the typed command so `>look` persists in scrollback. It is marked
         // as typed input (drawn in `transcript_input`, not as story text) and
         // carries the story's own input style for the renderer to prefer (SQ-1758).
-        state.append_to_last_transcript_line(cmd, session.last_input_style());
+        let style = state.input_style_against_prompt(session.last_input_style());
+        state.append_to_last_transcript_line(cmd, style);
     }
     let before_push = state.transcript.len();
     if silent {

@@ -86,12 +86,16 @@ fn an_inline_command_is_a_typed_span_of_the_prompt_line_and_takes_the_theme_colo
         let spans = typed_spans(&b);
         assert!(spans.len() >= 3, "all three commands are marked (honor={honor}): {spans:?}");
         assert!(spans.iter().all(|(_, t)| t == "no"), "each span covers exactly the typed text: {spans:?}");
-        let (line, _) = spans[0];
+        // The opening banner is pushed as flat text (no colour runs), so judge the LAST
+        // prompt, whose line carries the game's colours like every later one.
+        let (line, _) = *spans.last().unwrap();
         assert_eq!(b.state.transcript_kinds[line], app::state::TranscriptKind::Story, "the line stays a Story line");
         // Photopia colours ALL its text and prints the prompt in that same colour, so
         // it states no input style: the span carries no story ink and the theme's
         // `transcript_input` colour applies (contrast is the renderer's fallback).
-        let run = b.state.transcript_runs[line].iter().find(|r| r.glk_style == GLK_STYLE_TYPED_INPUT).unwrap();
+        let runs = &b.state.transcript_runs[line];
+        assert!(runs.iter().any(|r| r.glk_style != GLK_STYLE_TYPED_INPUT && r.fg != 0), "non-vacuity: the prompt is game-coloured: {runs:?}");
+        let run = runs.iter().find(|r| r.glk_style == GLK_STYLE_TYPED_INPUT).unwrap();
         assert_eq!((run.ink, run.bits), (0, 0), "a page colour equal to the prompt's is no opinion: {run:?}");
         let _ = std::fs::remove_dir_all(&home);
     }
@@ -138,6 +142,109 @@ fn a_rewind_keeps_the_commands_before_the_target_and_drops_the_undone_ones() {
         assert!(out.ok);
         let kept = typed_spans(&b).len();
         assert!(kept >= 1 && kept < full, "the earlier command(s) stay marked, the undone one's mark is gone: {kept} of {full}");
+        let _ = std::fs::remove_dir_all(&home);
+    }
+}
+
+/// The comparison with the prompt reads the transcript, not engine memory, so a
+/// restore cannot reset it: the VERY FIRST command after a Save State restore --
+/// nothing printed in between -- on a story whose page colour is non-default still
+/// takes the theme colour. Restore, then move, then assert (CLAUDE.md).
+#[test]
+fn the_first_command_after_a_restore_still_takes_the_theme_colour() {
+    for honor in [true, false] {
+        let home = app::scratch_dir("sq1758-first-after-restore");
+        let mut b = boot(&home, honor);
+        play(&mut b, "no");
+        key(&mut b);
+        play(&mut b, "no"); // parked at a line prompt, the page colour already set
+        let slot = home.join("slot.lanthorn");
+        assert!(matches!(save_state_now(&mut *b.session, &b.mapper, &b.state, &b.ifid, &slot), ExitSave::Saved));
+
+        let home2 = app::scratch_dir("sq1758-first-after-restore-dst");
+        let mut c = boot(&home2, honor);
+        restore_file(&mut *c.session, &mut c.mapper, &mut c.state, &slot, None).expect("restore");
+        assert!(matches!(c.session.pending_input(), InputKind::Line), "premise: restored at a line prompt");
+        let before = typed_spans(&c).len();
+        play(&mut c, "no"); // the first command after the restore
+        let spans = typed_spans(&c);
+        assert!(spans.len() > before, "premise: the new command is marked (honor={honor})");
+        let (line, _) = *spans.last().unwrap();
+        let runs = &c.state.transcript_runs[line];
+        assert!(runs.iter().any(|r| r.glk_style != GLK_STYLE_TYPED_INPUT && r.fg != 0), "non-vacuity: the restored prompt is game-coloured: {runs:?}");
+        let run = runs.iter().find(|r| r.glk_style == GLK_STYLE_TYPED_INPUT).unwrap();
+        assert_eq!(run.ink, 0, "a page colour equal to the prompt's is no opinion, even straight after a restore (honor={honor}): {run:?}");
+        let _ = std::fs::remove_dir_all(&home);
+        let _ = std::fs::remove_dir_all(&home2);
+    }
+}
+
+/// The Glulx Photopia (`stories/photo201.blb`, not a manifest fixture, so this
+/// skips without `stories/`): its `style_Input` hint repeats Normal's black on
+/// white, so with the prompt in that same black the command takes the theme's
+/// colour -- bold, by the Glk default -- on the game's white page.
+#[test]
+fn glulx_photopia_commands_take_the_theme_colour_on_the_games_page() {
+    use ratatui::{buffer::Buffer, layout::Rect};
+    let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../stories/photo201.blb");
+    if !path.exists() {
+        eprintln!("SKIP: stories/photo201.blb absent");
+        return;
+    }
+    for honor in [true, false] {
+        let home = app::scratch_dir("sq1758-photo201");
+        let overrides = LaunchOverrides::default();
+        let req = BootRequest {
+            story_path: path.clone(),
+            disk_entry: None,
+            overrides: &overrides,
+            cfg: app::config::Config {
+                user_dir: home.clone(),
+                config_file: home.join("config.toml"),
+                random_seed: Some(1),
+                enable_sound: false,
+                auto_save: false,
+                honor_game_colours: honor,
+                ..app::config::Config::default()
+            },
+            roots: app::data_roots::DataRoots::single(home.join("saves")),
+            flags: LaunchFlags::default(),
+            terminal: TerminalFacts::default(),
+            fresh_start: true,
+        };
+        let mut b = boot_story(req, &mut QuietBoot).expect("photo201 boots headlessly");
+        play(&mut b, "look");
+        play(&mut b, "wait");
+        let (line, text) = typed_spans(&b).pop().expect("a typed span");
+        assert_eq!(text, "wait");
+        let run = b.state.transcript_runs[line].iter().find(|r| r.glk_style == GLK_STYLE_TYPED_INPUT).unwrap();
+        assert_eq!((run.ink, run.bits), (0, 0x02), "Input hint ink equals the prompt's: no opinion; bold by the Glk default");
+
+        let area = Rect::new(0, 0, 100, 40);
+        let mut buf = Buffer::empty(area);
+        let model = b.session.screen();
+        let _ = app::render::screen::render_story_pane(&model, false, None, &b.state, area, &mut buf);
+        let theme_fg = b.state.colors.theme.get("transcript_input").style.fg;
+        let (mut x0, mut y0) = (0, 0);
+        for y in 0..area.height {
+            let row: String = (0..area.width).map(|x| buf.cell((x, y)).unwrap().symbol().chars().next().unwrap_or(' ')).collect();
+            if let Some(at) = row.find("> wait") {
+                (x0, y0) = (row[..at].chars().count() as u16 + 2, y);
+                break;
+            }
+        }
+        assert!(x0 > 0, "the command row is on screen");
+        for x in x0..x0 + 4 {
+            let c = buf.cell((x, y0)).unwrap();
+            eprintln!("photo201 honor={honor}: {:?} fg={:?} bg={:?} {:?}", c.symbol(), c.fg, c.bg, c.modifier);
+            assert!(c.modifier.contains(ratatui::style::Modifier::BOLD));
+            if honor {
+                assert_eq!(c.bg, ratatui::style::Color::Rgb(255, 255, 255), "the game's white page is kept");
+            } else {
+                assert_ne!(c.bg, ratatui::style::Color::Rgb(255, 255, 255));
+            }
+            assert_eq!(Some(c.fg), theme_fg, "the theme's transcript_input colour");
+        }
         let _ = std::fs::remove_dir_all(&home);
     }
 }

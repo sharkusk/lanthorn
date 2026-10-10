@@ -886,8 +886,8 @@ impl std::error::Error for EngineError {}
 // ── The Engine trait ────────────────────────────────────────────────────────
 
 /// How the STORY had its input text styled when it asked for the line the player
-/// then typed (SQ-1758) — the engine-neutral answer the host draws the echoed
-/// command with.
+/// then typed (SQ-1758) -- the engine's RAW answer, before the host compares it
+/// with the prompt it is drawn after (`AppState::input_style_against_prompt`).
 ///
 /// `Default` (no bits, no ink) is "no opinion": the theme's `transcript_input`
 /// style applies unchanged. Colour is a packed ZColour ([`crate::state::pack_zcolour`],
@@ -897,6 +897,10 @@ impl std::error::Error for EngineError {}
 pub struct InputStyle {
     pub bits: u8,
     pub ink: u32,
+    /// Whether `bits` are only a style for input where they differ from the
+    /// prompt's own (the Z-machine, whose text style is the page's). Glulx's are
+    /// `style_Input` hints, input-specific by definition, so they always stand.
+    pub bits_vs_prompt: bool,
 }
 
 /// The app-facing handle to a running game, independent of the underlying VM.
@@ -950,7 +954,7 @@ pub trait Engine {
     fn output_continued_line(&self) -> bool {
         false
     }
-    /// The story's own input style for the line most recently handed to
+    /// The story's RAW input style for the line most recently handed to
     /// `submit` — captured as the submit began, because the style the story had
     /// switched on at its read is gone by the time the turn has run (SQ-1758).
     /// Glulx answers from its Input stylehints (bold unless a weight hint says
