@@ -379,29 +379,11 @@ pub(crate) fn visible_lines(
     &transcript[start..end]
 }
 
-/// Truncate a status-bar segment to `width` columns the way ZMSD §8.2.2.2 asks:
-/// "If the object's short name exceeds the available room on the status line,
-/// the author suggests that an interpreter should break it at the last space and
-/// append an ellipsis". We use the single-character ellipsis '…' rather than the
-/// spec's three dots so the marker itself costs one column, not three.
-///
-/// Only applied when the text actually overflows — a segment that fits is
-/// returned unchanged, so nothing gains a spurious '…'. A single word longer
-/// than `width` (no space to break at) falls back to a hard character break,
-/// still marked with the ellipsis.
+/// Truncate a status-bar segment to `width` columns. The rule (ZMSD §8.2.2.2:
+/// break at the last space, append an ellipsis) lives in
+/// [`crate::status_text::shorten_status_text`]; this counts one char per column.
 pub(crate) fn truncate_status_text(text: &str, width: usize) -> String {
-    if text.chars().count() <= width {
-        return text.to_string();
-    }
-    if width == 0 {
-        return String::new();
-    }
-    let head: String = text.chars().take(width - 1).collect(); // one column for '…'
-    let kept = match head.rfind(' ') {
-        Some(i) => head[..i].trim_end(),
-        None => head.as_str(),
-    };
-    format!("{kept}…")
+    crate::status_text::shorten_status_text(text, |s| s.chars().count() <= width)
 }
 
 /// Truncate `line` to at most `width` characters (not bytes).
