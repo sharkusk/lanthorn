@@ -29,8 +29,7 @@ while any such tag, or this Unreleased section, still exists.*
 
 ### Fixed
 
-- **Opening a game from a disk image reads the image once.** Launching a story off a disk image used to read the whole file four or five times over, once per step of the launch. It is read once now and shared, which matters most for a big image on a network drive.
-- **Games on CD images open much faster, especially from a network drive.** A disc like the *Classic Text Adventure Masterpieces of Infocom* CD (354 MB) used to be read in full, several times over, just to start one game. Now only the parts of the disc a game needs are read: opening a game off that disc reads about 27 MB instead of the whole 354 MB over and over, and finding and loading one game reads about 4.5 MB of the 354. Floppy and other small disk images are unchanged.
+- **Games on disk images open faster, and CD images much faster — especially from a network drive.** Starting a game used to read the whole image file several times over, once per step of the launch; now it is read once and shared. A CD image goes further and is read only where the game needs it: starting a game off the 354 MB *Classic Text Adventure Masterpieces of Infocom* disc used to read the full 354 MB several times over, and now reads about 27 MB in all.
 
 ## v0.9.4 — 2026-10-10
 
