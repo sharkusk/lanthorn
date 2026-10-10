@@ -419,10 +419,7 @@ fn mounted_build(story_path: &Path, disk_entry: Option<&str>) -> Option<DiskBuil
     // loose file and every single-disk press.
     let disk = crate::disk_set::mount_file_at(story_path, &file).ok()?;
     let chosen = match disk_entry {
-        Some(want) => disk
-            .stories()
-            .into_iter()
-            .find(|s| s.name == want || s.name.eq_ignore_ascii_case(want))?,
+        Some(want) => disk.story_named(want)?,
         None => disk.story()?,
     };
     // The medium is asked of THIS story, not of the container (SQ-1517): on a

@@ -78,9 +78,52 @@ fn iso(files: &[(&str, &[u8])]) -> Vec<u8> {
     image
 }
 
+/// A small, structurally valid Version 6 story. Small on purpose: a disc under
+/// 64 KB is a floppy to `blorb::image`, and this suite's first claims are about
+/// floppies.
 fn story() -> Vec<u8> {
-    let path = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../unit_tests/zork1-mit.z3");
-    std::fs::read(path).expect("unit_tests/zork1-mit.z3 is committed")
+    let mut b = vec![0u8; 4096];
+    b[0] = 6;
+    let mut word = |o: usize, v: u16| b[o..o + 2].copy_from_slice(&v.to_be_bytes());
+    word(0x04, 0x0400);
+    word(0x08, 0x0300);
+    word(0x0a, 0x0100);
+    word(0x0c, 0x0200);
+    word(0x0e, 0x0280);
+    word(0x1a, (4096 / 8) as u16);
+    b[0x12..0x18].copy_from_slice(b"890323");
+    for (i, byte) in b.iter_mut().enumerate().skip(64) {
+        *byte = (i % 251) as u8;
+    }
+    b
+}
+
+/// The steps a launch takes against `path`, in the order the app takes them.
+/// `entry` names the story on a compilation, as the picker's row does.
+fn launch(path: &Path, entry: Option<&str>) -> Option<blorb::medium::DiskImage> {
+    // The key its saves live under, and the picker's row for it.
+    let key = cli_host::storage::story_key_at_from(path, entry);
+    assert!(!key.is_empty());
+    // The story itself.
+    let mounted = app::hints::load_mounted_story_full(path, entry).expect("the story loads");
+    // The artwork and sound step, and the font step.
+    let files = app::assets::files(path);
+    assert!(files.iter().any(|f| f.is_on_medium()), "the disc's own files are listed");
+    assert!(!app::assets::volumes(path).is_empty());
+    let _ = app::native_sound::from_medium(path);
+    let request = app::native_font::FaceRequest {
+        story_path: path,
+        entry,
+        profile: app::interpreter::InterpreterProfile::IbmPc,
+        source: app::interpreter::ProfileSource::Medium,
+        art_scale: None,
+        disks: None,
+    };
+    let _ = app::native_font::resolve(&request);
+    let _ = app::native_font::detected(&request);
+    // Machine detection WITHOUT the mount's answer handed to it: the fallback.
+    let _ = app::interpreter::InterpreterProfile::resolve_with_source(path, None, None, None);
+    mounted.disk_image
 }
 
 #[test]
@@ -88,7 +131,7 @@ fn the_synthetic_disc_is_one_the_launch_recognises() {
     let dir = app::scratch_dir("image-read-once-sanity");
     let path = dir.join("game.iso");
     std::fs::write(&path, iso(&[("STORY.DAT", &story())])).unwrap();
-    blorb::image::clear_cache();
+    let _isolated = blorb::image::isolate();
     let file = blorb::image::open_disk(&path).expect("a disk image");
     assert_eq!(file.format(), blorb::medium::DiskImage::Iso9660);
     let disk = blorb::medium::MountedDisk::mount_file(&file, Vec::new).expect("mounts");
@@ -101,44 +144,16 @@ fn a_launch_off_a_disk_image_reads_the_file_once() {
     let dir = app::scratch_dir("image-read-once");
     let path = dir.join("game.iso");
     std::fs::write(&path, iso(&[("STORY.DAT", &story())])).unwrap();
-    blorb::image::clear_cache();
+    let _isolated = blorb::image::isolate();
     let reads = blorb::image::whole_reads_on_this_thread;
     let start = reads();
 
-    // The picker's row for it, and the key its saves live under.
-    let key = cli_host::storage::story_key_at(&path);
-    assert!(!key.is_empty());
+    // The picker's row for it comes first, as it does in the app.
     match app::hints::scan_mounted_stories(&path) {
         app::hints::DiskScan::Stories(found) => assert_eq!(found.stories.len(), 1),
         _ => panic!("the picker sees one story on the disc"),
     }
-
-    // The story itself.
-    let mounted = app::hints::load_mounted_story_full(&path, None).expect("the story loads");
-    assert_eq!(mounted.disk_image, Some(blorb::medium::DiskImage::Iso9660));
-
-    // The artwork and sound step, and the font step.
-    let files = app::assets::files(&path);
-    assert!(
-        files.iter().any(|f| f.is_on_medium() && f.name == "STORY.DAT"),
-        "the disc's own files are listed"
-    );
-    assert_eq!(app::assets::volumes(&path).len(), 1);
-    let request = app::native_font::FaceRequest {
-        story_path: &path,
-        entry: None,
-        profile: app::interpreter::InterpreterProfile::IbmPc,
-        source: app::interpreter::ProfileSource::Medium,
-        art_scale: None,
-        disks: None,
-    };
-    let _ = app::native_font::resolve(&request);
-    let _ = app::native_font::detected(&request);
-
-    // Machine detection WITHOUT the mount's answer handed to it: the fallback.
-    let (profile, _) =
-        app::interpreter::InterpreterProfile::resolve_with_source(&path, None, None, None);
-    let _ = profile;
+    assert_eq!(launch(&path, None), Some(blorb::medium::DiskImage::Iso9660));
 
     assert_eq!(
         reads() - start,
@@ -146,6 +161,49 @@ fn a_launch_off_a_disk_image_reads_the_file_once() {
         "every step of a launch must share the one read of the image file"
     );
     let _ = std::fs::remove_dir_all(&dir);
+}
+
+/// **A CD is not read at all** (SQ-1761): the same launch off a disc image that is
+/// mostly empty space reads sectors, never the file, and a few percent of it.
+#[test]
+fn a_launch_off_a_cd_image_reads_sectors_not_the_file() {
+    let dir = app::scratch_dir("image-read-sectors");
+    let path = dir.join("game.iso");
+    let mut disc = iso(&[("STORY.DAT", &story())]);
+    disc.resize(disc.len() + 8 * 1024 * 1024, 0);
+    std::fs::write(&path, &disc).unwrap();
+    let _isolated = blorb::image::isolate();
+    let (reads0, bytes0) =
+        (blorb::image::whole_reads_on_this_thread(), blorb::image::bytes_read_on_this_thread());
+
+    assert_eq!(launch(&path, Some("STORY.DAT")), Some(blorb::medium::DiskImage::Iso9660));
+
+    assert_eq!(blorb::image::whole_reads_on_this_thread(), reads0, "the disc is never read whole");
+    let read = blorb::image::bytes_read_on_this_thread() - bytes0;
+    assert!(read < disc.len() as u64 / 4, "a whole launch read {read} of {} bytes", disc.len());
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+/// **Real media**: a launch off the *Masterpieces* CD reads megabytes of its 354
+/// MB, never the file whole. Skips without the disc.
+#[test]
+fn a_launch_off_the_masterpieces_cd_reads_megabytes_not_the_disc() {
+    let path = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+        .join("../../masterpieces/Classic Text Adventure Masterpieces of Infocom (USA).bin");
+    if !path.is_file() {
+        eprintln!("SKIP: the Masterpieces CD is absent at {}", path.display());
+        return;
+    }
+    let _isolated = blorb::image::isolate();
+    let (reads0, bytes0) =
+        (blorb::image::whole_reads_on_this_thread(), blorb::image::bytes_read_on_this_thread());
+
+    assert_eq!(launch(&path, Some("MAC/ZORK I")), Some(blorb::medium::DiskImage::Hfs));
+
+    assert_eq!(blorb::image::whole_reads_on_this_thread(), reads0, "the disc is never read whole");
+    let read = blorb::image::bytes_read_on_this_thread() - bytes0;
+    assert!(read < 64 * 1024 * 1024, "a whole launch read {read} of 354,011,280 bytes");
+    eprintln!("a launch off the Masterpieces CD read {read} bytes");
 }
 
 /// Production Rust files under `dir`, skipping test trees.

@@ -15,6 +15,7 @@ pub mod bpal;
 /// Partition Map. Private because it is a wrapper rather than a reader: what it
 /// finds is handed to [`hfs`], and nothing outside this crate asks for it.
 mod cd;
+mod source;
 pub mod atr;
 pub mod d64;
 pub mod depack;

@@ -103,7 +103,16 @@ Point lanthorn at whatever the game arrived in and it digs the story out itself.
   Adventure Masterpieces of Infocom* pressed one disc for two machines, and its
   Macintosh half is an Apple partition three layers down: hand lanthorn the
   354 MB dump and it measures the sector framing, walks the partition map and
-  mounts the volume, offering all 83 games on it.
+  mounts the volume, offering all 83 games on it. **The disc is never read
+  whole** (SQ-1761): `blorb::image` keeps a CD image open and the volume readers
+  fetch the sectors they are asked for, so mounting it, listing its games and
+  extracting one reads about 4.5 MB of the 354 — the catalog, a 64-byte header
+  per file, and the game — where it used to read the whole file, copy 308 MB of
+  it out of its sector frames, and do that again for every step of a launch.
+  A launch off the disc reads about 27 MB end to end. Only a CD is treated this
+  way, and content decides what a CD is: an Apple-partitioned medium with a
+  Macintosh volume in it, or a cooked ISO 9660 disc. Floppies and bare Macintosh
+  volumes are still read whole, once.
 - **DOS floppy images** — `.ima`, `.img`, or any name at all: the PC release disk,
   from a single-game 360 KB floppy to a *Lost Treasures* collection.
 - **Atari ST floppy images** — `.st`, the GEMDOS press, which turns out to be the

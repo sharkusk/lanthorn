@@ -383,12 +383,22 @@ fn release_face(story_path: &Path, entry: Option<&str>) -> Option<BitmapFont> {
     }
 }
 
+/// Is `story_path` a CD image read by sector? An AmigaDOS disk font is not on
+/// one — and finding that out by content means reading every file on it, which
+/// is the disc (SQ-1761).
+fn on_a_cd(story_path: &Path) -> bool {
+    blorb::image::open_disk(story_path).is_some_and(|f| f.is_file_backed())
+}
+
 /// The disk font an AmigaDOS volume carries, if it carries one.
 ///
 /// Split out because it is the same lookup [`detected`] performs and the two must
 /// not drift: SQ-1011 shipped inert twice over a fitness rule that existed in two
 /// places, and a second copy of the LOOKUP would be the same defect one layer down.
 fn amiga_face(story_path: &Path) -> Option<BitmapFont> {
+    if on_a_cd(story_path) {
+        return None;
+    }
     let files: Vec<(String, Vec<u8>)> = crate::assets::files(story_path)
         .into_iter()
         .filter(|f| f.is_on_medium())
@@ -936,6 +946,9 @@ pub fn detected(request: &FaceRequest<'_>) -> Vec<DiskFace> {
     }
 
     // Every other medium: an AmigaDOS disk font is a file, so it is named by one.
+    if on_a_cd(story_path) {
+        return Vec::new();
+    }
     let files: Vec<(String, Vec<u8>)> = crate::assets::files(story_path)
         .into_iter()
         .filter(|f| f.is_on_medium())

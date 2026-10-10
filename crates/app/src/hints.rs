@@ -1077,7 +1077,15 @@ struct ScottScan {
 /// the candidates, so the 6502 emulation runs once per candidate: it used to run
 /// here and again in a separate diagnosis walk (SQ-1691).
 fn scott_disk_scan(disk: &blorb::medium::MountedDisk) -> ScottScan {
-    let already: Vec<String> = disk.stories().into_iter().map(|s| s.name).collect();
+    // A CD read by sector holds no Scott Adams program: those ship on floppies
+    // and cassettes, and the scan below reads EVERY file on the disk to find
+    // one — 300 MB of the Masterpieces CD for an answer that is always empty
+    // (SQ-1761). The Commodore, Atari and Apple II media it exists for all
+    // mount in memory.
+    if disk.is_file_backed() {
+        return ScottScan { stories: Vec::new(), crunched: None };
+    }
+    let already: Vec<String> = disk.story_names();
     let mut candidates: Vec<(String, Vec<u8>)> = disk.contents();
     if disk.format() == blorb::medium::DiskImage::AtariDos2 {
         if let Some(image) = disk.read_named(blorb::atr::IMAGE_ENTRY) {
@@ -1306,10 +1314,11 @@ fn read_story_off_disk(
         // A named story is either one `disk.stories()` already answers for
         // (Z-code/Glulx/Blorb), or a Scott Adams program file `stories()`
         // never lists — a Commodore *Mysterious Adventures* row (SQ-1414).
+        //
+        // `story_named` rather than a scan of `stories()`: on a CD it reads the
+        // one story and not the shelf (SQ-1761).
         let found = disk
-            .stories()
-            .into_iter()
-            .find(|s| s.name == want || s.name.eq_ignore_ascii_case(want))
+            .story_named(want)
             .or_else(|| {
                 scott_disk_stories(&disk)
                     .into_iter()

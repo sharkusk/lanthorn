@@ -137,6 +137,24 @@ pub struct AssetFile {
     /// Already in hand for a volume's file; `None` for a loose one, which is
     /// what keeps the directory arm name-first.
     bytes: Option<Vec<u8>>,
+    /// A file on a CD read by sector: listed, and read only if someone asks
+    /// (SQ-1761). `None` for everything else.
+    on_demand: Option<OnDemand>,
+}
+
+/// One file of a CD that stays on disk, read the first time it is wanted.
+#[derive(Debug, Clone)]
+struct OnDemand {
+    disk: std::rc::Rc<blorb::medium::MountedDisk>,
+    /// The file's place in `disk.files()`.
+    index: usize,
+    read: std::cell::OnceCell<Option<Vec<u8>>>,
+}
+
+impl OnDemand {
+    fn get(&self) -> Option<&[u8]> {
+        self.read.get_or_init(|| self.disk.read_file(self.index)).as_deref()
+    }
 }
 
 impl AssetFile {
@@ -153,15 +171,16 @@ impl AssetFile {
     /// another: the continuation parts of a multi-part archive are on the same
     /// volume, and resolving them must not mean mounting it twice.
     pub fn peek_bytes(&self) -> Option<&[u8]> {
-        self.bytes.as_deref()
+        self.bytes.as_deref().or_else(|| self.on_demand.as_ref().and_then(OnDemand::get))
     }
 
     /// The file's bytes, read now if they were not read already. `None` when a
     /// loose file will not read — a caller that cannot use it simply skips it.
     pub fn into_bytes(self) -> Option<Vec<u8>> {
-        match self.bytes {
-            Some(bytes) => Some(bytes),
-            None => std::fs::read(&self.path).ok(),
+        match (self.bytes, self.on_demand) {
+            (Some(bytes), _) => Some(bytes),
+            (None, Some(file)) => file.get().map(<[u8]>::to_vec),
+            (None, None) => std::fs::read(&self.path).ok(),
         }
     }
 }
@@ -197,6 +216,7 @@ fn beside_the_story(story_path: &Path) -> Vec<AssetFile> {
                 origin: AssetOrigin::BesideTheStory,
                 disk_number: None,
                 bytes: None,
+                on_demand: None,
             })
         })
         .collect()
@@ -212,14 +232,43 @@ fn beside_the_story(story_path: &Path) -> Vec<AssetFile> {
 fn on_the_medium(story_path: &Path) -> Vec<AssetFile> {
     volumes(story_path)
         .into_iter()
-        .flat_map(|v| {
-            v.disk.contents().into_iter().map(move |(name, bytes)| AssetFile {
-                name,
-                path: v.path.clone(),
-                origin: AssetOrigin::OnTheMedium,
-                disk_number: v.disk_number,
-                bytes: Some(bytes),
-            })
+        .flat_map(|v| -> Vec<AssetFile> {
+            let (path, disk_number) = (v.path.clone(), v.disk_number);
+            // A CD is listed and not read: every file on it in memory would be
+            // the whole disc (SQ-1761). Its files arrive on demand.
+            if v.disk.is_file_backed() {
+                if let Some(listing) = v.disk.files() {
+                    let disk = std::rc::Rc::new(v.disk);
+                    return listing
+                        .into_iter()
+                        .enumerate()
+                        .map(|(index, file)| AssetFile {
+                            name: file.path,
+                            path: path.clone(),
+                            origin: AssetOrigin::OnTheMedium,
+                            disk_number,
+                            bytes: None,
+                            on_demand: Some(OnDemand {
+                                disk: std::rc::Rc::clone(&disk),
+                                index,
+                                read: std::cell::OnceCell::new(),
+                            }),
+                        })
+                        .collect();
+                }
+            }
+            v.disk
+                .contents()
+                .into_iter()
+                .map(|(name, bytes)| AssetFile {
+                    name,
+                    path: path.clone(),
+                    origin: AssetOrigin::OnTheMedium,
+                    disk_number,
+                    bytes: Some(bytes),
+                    on_demand: None,
+                })
+                .collect()
         })
         .collect()
 }
@@ -307,7 +356,7 @@ pub fn volumes(story_path: &Path) -> Vec<MountedVolume> {
     };
     own.disk_number =
         members.as_ref().and_then(|m| m.iter().find(|(_, p)| p == story_path).map(|(n, _)| *n));
-    let mut stories = own.disk.stories().len();
+    let mut stories = own.disk.story_count_up_to(2);
     let mut out = vec![own];
     if stories > 1 {
         return out; // one volume of a compilation: its siblings are other games'
@@ -322,7 +371,7 @@ pub fn volumes(story_path: &Path) -> Vec<MountedVolume> {
         }
         let Some(mut v) = mount(&m) else { continue };
         v.disk_number = Some(number);
-        stories += v.disk.stories().len();
+        stories += v.disk.story_count_up_to(2);
         if stories > 1 {
             return out; // a shelf, not a release: the siblings contribute nothing
         }
@@ -365,7 +414,7 @@ fn mount_across(path: &Path, members: Option<&[(u64, PathBuf)]>) -> Option<Mount
             .iter()
             .map(|(_, m)| m)
             .filter(|m| m.as_path() != path)
-            .filter_map(|m| blorb::image::open_disk(m).map(|f| f.bytes().to_vec()))
+            .filter_map(|m| blorb::image::open_disk(m).and_then(|f| f.bytes().map(<[u8]>::to_vec)))
             .collect()
     })
     .ok()?;

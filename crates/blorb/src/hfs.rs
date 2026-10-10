@@ -100,6 +100,7 @@
 //! than by parse: monochrome is a thing to ask for, not a thing to be given.
 
 use crate::adf::looks_like_story;
+use crate::source::Source;
 use crate::infocom_pics::InfocomPics;
 
 /// A logical block: the unit the MDB and the B*-tree nodes are measured in.
@@ -263,7 +264,7 @@ impl HfsEntry {
 /// A mounted Macintosh volume.
 #[derive(Debug)]
 pub struct Hfs {
-    image: Vec<u8>,
+    image: Source,
     /// Where the volume starts in `image`: 0 bare, 84 inside a DiskCopy wrapper.
     volume: usize,
     /// Bytes per allocation block.
@@ -277,6 +278,8 @@ pub struct Hfs {
     /// Extents overflow records, as `(cnid, fork type, first block, extents)`.
     /// Both fork types are kept; the reader picks by [`FORK_DATA`]/[`FORK_RSRC`].
     overflow: Vec<(u32, u8, u16, ExtentRecord)>,
+    /// [`crate::medium::Volume::has_packed_index`]'s answer, once asked.
+    packed_index: std::sync::OnceLock<bool>,
 }
 
 impl Hfs {
@@ -305,8 +308,26 @@ impl Hfs {
             Some(_) => image,
             None => crate::cd::hfs_partition(&image).ok_or(HfsError::NotHfs)?.extract(),
         };
-        let volume = volume_offset(&image).ok_or(HfsError::NotHfs)?;
-        let mdb = &image[volume + MDB_OFFSET..volume + MDB_OFFSET + MDB_LEN];
+        Hfs::mount_source(Source::Mem(std::sync::Arc::new(image)))
+    }
+
+    /// Mount a volume from wherever its bytes are — held, or a window onto a CD
+    /// that stays on disk (SQ-1761).
+    ///
+    /// A [`Source::Disc`] window is the volume itself, starting at its own byte
+    /// 0: the caller placed it on the partition, so there is no DiskCopy header
+    /// or partition map left to look through.
+    pub(crate) fn mount_source(image: Source) -> Result<Hfs, HfsError> {
+        let volume = match &image {
+            Source::Mem(bytes) => volume_offset(bytes),
+            Source::Disc { .. } => window_is_a_volume(&image).then_some(0),
+        }
+        .ok_or(HfsError::NotHfs)?;
+        let mdb = image
+            .get(volume + MDB_OFFSET..volume + MDB_OFFSET + MDB_LEN)
+            .ok_or(HfsError::NotHfs)?
+            .into_owned();
+        let mdb = &mdb[..];
         let mut hfs = Hfs {
             alloc_size: be32(mdb, MDB_AL_BLK_SIZ) as usize,
             alloc_start: usize::from(be16(mdb, MDB_AL_BL_ST)),
@@ -316,12 +337,13 @@ impl Hfs {
             image,
             files: Vec::new(),
             overflow: Vec::new(),
+            packed_index: std::sync::OnceLock::new(),
         };
 
         // The extents overflow file can only be described by the MDB — it is
         // where every OTHER file's extra extents live, so it cannot have any of
         // its own. Read it first; the catalog may need it.
-        let mdb = hfs.mdb().to_vec();
+        let mdb = mdb.to_vec();
         let xt_size = be32(&mdb, MDB_XT_FL_SIZE) as usize;
         let xt = hfs.read_extents(&extent_record(&mdb, MDB_XT_EXT_REC), xt_size);
         hfs.overflow = overflow_records(&xt);
@@ -344,33 +366,36 @@ impl Hfs {
         &self.files
     }
 
-    fn mdb(&self) -> &[u8] {
-        &self.image[self.volume + MDB_OFFSET..self.volume + MDB_OFFSET + MDB_LEN]
-    }
-
-    /// One allocation block, or `None` if it is off the end of the volume.
-    fn alloc_block(&self, n: usize) -> Option<&[u8]> {
-        if n >= self.alloc_count {
-            return None;
-        }
-        let at = self.volume + self.alloc_start * BLOCK + n * self.alloc_size;
-        self.image.get(at..at + self.alloc_size)
-    }
-
     /// Concatenate `extents`, stopping once `limit` bytes are in hand. A run
     /// that leaves the volume ends the read where it is; the caller checks the
     /// length it got.
+    ///
+    /// **A run is read in one piece**, not a block at a time, because over a
+    /// file-backed volume each read is a seek (SQ-1761). The stopping rule is
+    /// the block-at-a-time one exactly: a block past the volume's allocation
+    /// count, or not wholly inside the image, ends the read there, and `limit`
+    /// is honoured to the block.
     fn read_extents(&self, extents: &ExtentRecord, limit: usize) -> Vec<u8> {
         let mut out = Vec::new();
         for (start, count) in extents {
-            for i in 0..usize::from(*count) {
-                if out.len() >= limit {
-                    return out;
-                }
-                let Some(b) = self.alloc_block(usize::from(*start) + i) else {
+            if out.len() >= limit {
+                return out;
+            }
+            let (start, count) = (usize::from(*start), usize::from(*count));
+            let wanted = count.min(limit.saturating_sub(out.len()).div_ceil(self.alloc_size));
+            // Blocks that exist on the volume, then blocks wholly inside the image.
+            let on_volume = wanted.min(self.alloc_count.saturating_sub(start));
+            let at = self.volume + self.alloc_start * BLOCK + start * self.alloc_size;
+            let held = self.image.len().saturating_sub(at) / self.alloc_size;
+            let take = on_volume.min(held);
+            if take > 0 {
+                let Some(bytes) = self.image.get(at..at + take * self.alloc_size) else {
                     return out;
                 };
-                out.extend_from_slice(b);
+                out.extend_from_slice(&bytes);
+            }
+            if take < wanted {
+                return out;
             }
         }
         out
@@ -453,17 +478,75 @@ impl Hfs {
     ///
     /// The convention is matched on the file's own name, not on its path — a
     /// story is no less conventionally named for sitting in a folder.
+    ///
+    /// **Only the winner is read whole** (SQ-1761). The tiebreak needs each
+    /// candidate's name and length, both in the catalog, and "is it a story" is a
+    /// question about the first 64 bytes — so every other file is touched for
+    /// its header and no more, which is what keeps this from being 300 MB of
+    /// reads on the Masterpieces CD. A candidate whose later extents turn out
+    /// broken is skipped for the next, which is what reading them all up front
+    /// did by dropping it.
     pub fn story(&self) -> Option<(String, Vec<u8>)> {
-        let mut cands: Vec<(String, Vec<u8>)> = self
-            .files
-            .iter()
-            .filter_map(|e| self.read(e).map(|b| (e.path(), b)))
-            .filter(|(_, b)| looks_like_story(b))
-            .collect();
-        cands.sort_by_key(|(path, bytes)| {
-            (!base_name(path).eq_ignore_ascii_case(CONVENTIONAL_STORY), std::cmp::Reverse(bytes.len()))
+        let mut cands: Vec<&HfsEntry> = self.story_entries();
+        cands.sort_by_key(|e| {
+            (!base_name(&e.path()).eq_ignore_ascii_case(CONVENTIONAL_STORY), std::cmp::Reverse(e.size))
         });
-        cands.into_iter().next()
+        cands.into_iter().find_map(|e| {
+            self.read(e).filter(|b| looks_like_story(b)).map(|b| (e.path(), b))
+        })
+    }
+
+    /// The files whose first bytes are a story's, in catalog order, read by
+    /// header alone.
+    fn story_entries(&self) -> Vec<&HfsEntry> {
+        self.files
+            .iter()
+            .filter(|e| {
+                self.read_prefix(e, crate::adf::STORY_HEAD)
+                    .is_some_and(|head| crate::adf::looks_like_story_head(&head, e.size))
+            })
+            .collect()
+    }
+
+    /// The first `n` bytes of a file's data fork — fewer if it is shorter.
+    ///
+    /// Exactly `n` bytes are read, not the allocation blocks that hold them — a
+    /// header check of a thousand files on a CD must not cost a thousand 10 KB
+    /// blocks. A prefix that outruns the fork's first three extents goes the
+    /// long way, through the overflow records.
+    pub(crate) fn read_prefix(&self, entry: &HfsEntry, n: usize) -> Option<Vec<u8>> {
+        let want = n.min(entry.size);
+        let mut out = Vec::with_capacity(want);
+        for (start, count) in &entry.extents {
+            if out.len() >= want {
+                break;
+            }
+            let (start, count) = (usize::from(*start), usize::from(*count));
+            let at = self.volume + self.alloc_start * BLOCK + start * self.alloc_size;
+            let on_volume = count.min(self.alloc_count.saturating_sub(start));
+            let held = self.image.len().saturating_sub(at) / self.alloc_size;
+            let blocks = on_volume.min(held);
+            let take = (blocks * self.alloc_size).min(want - out.len());
+            if take > 0 {
+                out.extend_from_slice(&self.image.get(at..at + take)?);
+            }
+            if blocks < count {
+                break;
+            }
+        }
+        if out.len() >= want {
+            return Some(out);
+        }
+        self.read_fork(entry.id, FORK_DATA, entry.extents, want)
+    }
+
+    pub(crate) fn packed_index(&self) -> &std::sync::OnceLock<bool> {
+        &self.packed_index
+    }
+
+    /// Whether the volume is read from a file rather than held (SQ-1761).
+    pub(crate) fn is_file_backed(&self) -> bool {
+        matches!(self.image, Source::Disc { .. })
     }
 
     /// The native Infocom picture archive on this volume, with its stored name.
@@ -568,6 +651,45 @@ impl Hfs {
     }
 }
 
+/// Does the window `src` open with a volume whose catalog is inside it? The
+/// file-backed counterpart of the last arm of [`volume_offset`]: a window the
+/// caller placed on a partition has no wrapper left to look through.
+fn window_is_a_volume(src: &Source) -> bool {
+    src.get(0..MDB_OFFSET + MDB_LEN).is_some_and(|head| volume_is_sane(&head, src.len()))
+}
+
+/// The Macintosh volume a CD image on disk carries, as a window onto it, or
+/// `None` (SQ-1761).
+///
+/// The in-memory sniff's two Apple-partition arms, answered by sector reads: an
+/// Apple Partition Map with an `Apple_HFS` entry whose volume header is sane.
+/// **The length is the in-memory path's, arm for arm** — a cooked image's volume
+/// runs to the end of the file (that is "read in place") and a raw dump's is the
+/// partition as present (that is what `extract()` copied) — so the two paths
+/// mount the same bytes.
+pub(crate) fn disc_volume(disc: &std::sync::Arc<crate::source::Disc>) -> Option<Source> {
+    use crate::cd::Sectors;
+    let total = disc.logical_len();
+    let (at, len) = crate::cd::locate_hfs(total, |at, len| disc.copy(at, len))?;
+    let len = match disc.sectors() {
+        Sectors::Cooked => total - at,
+        Sectors::Raw { .. } => len,
+    };
+    let window = Source::window(disc, at, len);
+    window_is_a_volume(&window).then_some(window)
+}
+
+/// Would the in-memory path claim this disc as a Macintosh volume by an arm the
+/// partition walk does not cover — a DiskCopy header, or a bare volume at byte 0?
+/// Then it is not a CD image for [`crate::image`]'s purposes and keeps today's path.
+pub(crate) fn disc_is_a_bare_volume(disc: &std::sync::Arc<crate::source::Disc>) -> bool {
+    let head = disc.copy(0, DISKCOPY_MAGIC_OFF + 2);
+    if head.len() >= DISKCOPY_MAGIC_OFF + 2 && be16(&head, DISKCOPY_MAGIC_OFF) == DISKCOPY_MAGIC {
+        return true;
+    }
+    window_is_a_volume(&Source::window(disc, 0, disc.logical_len()))
+}
+
 /// Where the HFS volume starts inside `bytes` — 0 for a bare volume, 84 inside a
 /// DiskCopy 4.2 wrapper, or a partition's own offset on an Apple-partitioned
 /// medium — or `None` when no placement holds one.
@@ -658,7 +780,7 @@ pub(crate) fn diskcopy_volume_len(bytes: &[u8]) -> Option<usize> {
 /// `Z-machine version 0 is not supported` for a perfectly good disc.
 ///
 /// **A genuinely truncated volume is still refused, one layer down and more
-/// precisely than here.** [`Hfs::alloc_block`] answers `None` for a block past
+/// precisely than here.** [`Hfs::read_extents`] stops at a block past
 /// the end of the image and [`Hfs::read_fork`] refuses a fork whose chain runs
 /// short of the length its catalog declares, so a cut-off volume yields *no*
 /// story rather than half of one, and a cut-off catalog fails the mount

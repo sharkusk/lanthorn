@@ -1134,13 +1134,38 @@ impl Volume for Iso9660 {
     }
 
     fn file_count(&self) -> usize {
-        self.files().len()
+        Iso9660::files(self).len()
     }
 
     fn contents(&self) -> Vec<(String, Vec<u8>)> {
         // By PATH, like HFS and FAT12 — three files on disc 2 are called
         // `STORY.DATA` and the folder is the only thing between them.
-        self.files().iter().filter_map(|e| self.read(e).map(|b| (e.path(), b))).collect()
+        Iso9660::files(self).iter().filter_map(|e| self.read(e).map(|b| (e.path(), b))).collect()
+    }
+
+    fn files(&self) -> Option<Vec<VolumeFile>> {
+        Some(
+            Iso9660::files(self)
+                .iter()
+                .map(|e| VolumeFile { path: e.path(), size: e.size })
+                .collect(),
+        )
+    }
+
+    fn read_prefix(&self, index: usize, n: usize) -> Option<Vec<u8>> {
+        Iso9660::read_prefix(self, Iso9660::files(self).get(index)?, n)
+    }
+
+    fn read_file(&self, index: usize) -> Option<Vec<u8>> {
+        self.read(Iso9660::files(self).get(index)?)
+    }
+
+    fn is_file_backed(&self) -> bool {
+        Iso9660::is_file_backed(self)
+    }
+
+    fn packed_index_memo(&self) -> Option<&std::sync::OnceLock<bool>> {
+        Some(self.packed_index())
     }
 
     fn read_named(&self, name: &str) -> Option<Vec<u8>> {
@@ -1445,6 +1470,22 @@ pub trait Volume: std::fmt::Debug {
     /// is not a property of any filesystem — the same index addresses the raw
     /// 5.25-inch pressings, which have no filesystem at all (SQ-0852).
     fn stories(&self) -> Vec<DiskStory> {
+        // A volume that can answer per file lists its stories by header and reads
+        // only those (SQ-1761) — the answer is the same, and the price on a CD is
+        // the stories rather than the disc.
+        if let Some(files) = self.files() {
+            if !self.has_packed_index(&files) {
+                return files
+                    .iter()
+                    .enumerate()
+                    .filter(|(i, f)| self.is_story_by_header(*i, f))
+                    .filter_map(|(i, f)| {
+                        let bytes = self.read_file(i).filter(|b| looks_like_story(b))?;
+                        Some(DiskStory { name: f.path.clone(), bytes })
+                    })
+                    .collect();
+            }
+        }
         let contents = self.contents();
         let mut found: Vec<DiskStory> = contents
             .iter()
@@ -1455,6 +1496,144 @@ pub trait Volume: std::fmt::Debug {
         found.extend(crate::infocom_packed::story(&contents).map(DiskStory::from));
         found
     }
+
+    /// The volume's files, in the order [`Volume::contents`] lists them, WITHOUT
+    /// reading them — or `None` for a volume that has no cheaper way than
+    /// reading everything (every format but the two that sit on a CD).
+    ///
+    /// A listing may include a file whose bytes later fail to read; where
+    /// [`Volume::contents`] would have dropped it, [`Volume::read_file`] answers
+    /// `None`.
+    fn files(&self) -> Option<Vec<VolumeFile>> {
+        None
+    }
+
+    /// The first `n` bytes of the file at `index` in [`Volume::files`].
+    fn read_prefix(&self, _index: usize, _n: usize) -> Option<Vec<u8>> {
+        None
+    }
+
+    /// The whole file at `index` in [`Volume::files`].
+    fn read_file(&self, _index: usize) -> Option<Vec<u8>> {
+        None
+    }
+
+    /// Whether the volume reads from a file on demand instead of holding its
+    /// image — a CD (SQ-1761). A caller that would otherwise ask for
+    /// [`Volume::contents`] asks for this first.
+    fn is_file_backed(&self) -> bool {
+        false
+    }
+
+    /// How many stories [`Volume::stories`] would list, counted no further than
+    /// `limit` and read by header alone where the volume allows (SQ-1761). For a
+    /// caller that asks "is this a compilation?", which is "are there two".
+    fn story_count_up_to(&self, limit: usize) -> usize {
+        if let Some(files) = self.files() {
+            if !self.has_packed_index(&files) {
+                return files
+                    .iter()
+                    .enumerate()
+                    .filter(|(i, f)| self.is_story_by_header(*i, f))
+                    .take(limit)
+                    .count();
+            }
+        }
+        self.stories().len().min(limit)
+    }
+
+    /// Whether [`Volume::stories`] would list anything — answered by reading one
+    /// story at most, where listing them all reads every one (SQ-1761). The
+    /// mount asks this of every disk to decide whether to look for companions,
+    /// which is far too often to read a CD's whole shelf.
+    fn has_story(&self) -> bool {
+        if let Some(files) = self.files() {
+            // A file that is a story settles it; the packed container can only
+            // ADD stories, so it is asked about only when no file is one.
+            let plain = files.iter().enumerate().any(|(i, f)| {
+                self.is_story_by_header(i, f)
+                    && self.read_file(i).is_some_and(|b| looks_like_story(&b))
+            });
+            return plain || (self.has_packed_index(&files) && !self.stories().is_empty());
+        }
+        !self.stories().is_empty()
+    }
+
+    /// [`looks_like_story`] for the file at `index`, asked of its header alone.
+    fn is_story_by_header(&self, index: usize, file: &VolumeFile) -> bool {
+        self.read_prefix(index, crate::adf::STORY_HEAD)
+            .is_some_and(|head| crate::adf::looks_like_story_head(&head, file.size))
+    }
+
+    /// Does any file open the way a packed Apple volume's first segment does?
+    /// Then a story may exist that no single file is, and [`Volume::stories`]
+    /// has to ask [`crate::infocom_packed`] with every file in hand.
+    ///
+    /// Exact, not a heuristic: a cheap look at the first block says "might", and
+    /// only then is as much of the file read as the index can occupy and parsed
+    /// by the real parser.
+    ///
+    /// The answer is a fact about the volume and does not change, so a volume
+    /// that supplies [`Volume::packed_index_memo`] is asked once.
+    ///
+    /// **A volume read by sector is never asked** (SQ-1761): the packed Apple
+    /// container is a 5.25-inch floppy's, its segments are `.D1`…`.D5` files of a
+    /// ProDOS volume, and finding out for certain would mean reading the first
+    /// block of every file on a 300 MB disc.
+    fn has_packed_index(&self, files: &[VolumeFile]) -> bool {
+        if self.is_file_backed() {
+            return false;
+        }
+        let compute = || {
+            files.iter().enumerate().any(|(i, f)| {
+                f.size >= crate::infocom_packed::BLOCK
+                    && self
+                        .read_prefix(i, crate::infocom_packed::BLOCK)
+                        .is_some_and(|head| crate::infocom_packed::might_start_an_index(&head))
+                    && self
+                        .read_prefix(i, crate::infocom_packed::MAX_INDEX_BYTES)
+                        .is_some_and(|prefix| crate::infocom_packed::is_index(&prefix))
+            })
+        };
+        match self.packed_index_memo() {
+            Some(memo) => *memo.get_or_init(compute),
+            None => compute(),
+        }
+    }
+
+    /// Where [`Volume::has_packed_index`] keeps its answer, for a volume whose
+    /// files cost a read each to ask about.
+    fn packed_index_memo(&self) -> Option<&std::sync::OnceLock<bool>> {
+        None
+    }
+
+    /// The story called `want` (exactly, or ignoring ASCII case), or `None`:
+    /// [`Volume::stories`]'s first match, found without reading the other
+    /// stories (SQ-1761).
+    fn story_named(&self, want: &str) -> Option<DiskStory> {
+        let matches = |name: &str| name == want || name.eq_ignore_ascii_case(want);
+        if let Some(files) = self.files() {
+            if !self.has_packed_index(&files) {
+                return files.iter().enumerate().find_map(|(i, f)| {
+                    if !matches(&f.path) || !self.is_story_by_header(i, f) {
+                        return None;
+                    }
+                    let bytes = self.read_file(i).filter(|b| looks_like_story(b))?;
+                    Some(DiskStory { name: f.path.clone(), bytes })
+                });
+            }
+        }
+        self.stories().into_iter().find(|s| matches(&s.name))
+    }
+}
+
+/// One file in a volume's listing, before it is read.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct VolumeFile {
+    /// How the volume spells it — [`DiskStory::name`] for a story.
+    pub path: String,
+    /// Its size in bytes, as the volume's catalog states it.
+    pub size: usize,
 }
 
 impl Volume for Adf {
@@ -1515,14 +1694,34 @@ impl Volume for Hfs {
     }
 
     fn file_count(&self) -> usize {
-        self.files().len()
+        Hfs::files(self).len()
     }
 
     fn contents(&self) -> Vec<(String, Vec<u8>)> {
         // The PATH, not the bare name: three files on the Masterpieces CD are
         // called `STORY.DATA` and the folder is the only thing between them
         // (SQ-0877). Same reason `Fat12` reports `HITCHHIK/STORY.DAT`.
-        self.files().iter().filter_map(|e| self.read(e).map(|b| (e.path(), b))).collect()
+        Hfs::files(self).iter().filter_map(|e| self.read(e).map(|b| (e.path(), b))).collect()
+    }
+
+    fn files(&self) -> Option<Vec<VolumeFile>> {
+        Some(Hfs::files(self).iter().map(|e| VolumeFile { path: e.path(), size: e.size }).collect())
+    }
+
+    fn read_prefix(&self, index: usize, n: usize) -> Option<Vec<u8>> {
+        Hfs::read_prefix(self, Hfs::files(self).get(index)?, n)
+    }
+
+    fn read_file(&self, index: usize) -> Option<Vec<u8>> {
+        self.read(Hfs::files(self).get(index)?)
+    }
+
+    fn is_file_backed(&self) -> bool {
+        Hfs::is_file_backed(self)
+    }
+
+    fn packed_index_memo(&self) -> Option<&std::sync::OnceLock<bool>> {
+        Some(self.packed_index())
     }
 
     fn read_named(&self, name: &str) -> Option<Vec<u8>> {
@@ -2032,7 +2231,42 @@ impl MountedDisk {
         // (SQ-0875). The row says which formats care.
         let mine = format.pages_across_images.then(|| raw.clone());
         let volume = (format.mount)(raw).ok_or(MountError::Unreadable(format.image))?;
-        let (across, sides, volumes) = if volume.stories().is_empty() {
+        MountedDisk::with_companions(format, mine, volume, companions)
+    }
+
+    /// Mount a CD image that stays on disk, as a window the caller has already
+    /// placed on the volume (SQ-1761). [`crate::image`] is the only caller.
+    ///
+    /// The two formats that sit on a CD are the only ones with a file-backed
+    /// reader, and this is where that is said, beside the table that names every
+    /// other format.
+    pub(crate) fn mount_window(
+        image: DiskImage,
+        window: crate::source::Source,
+        companions: impl FnOnce() -> Vec<Vec<u8>>,
+    ) -> Result<MountedDisk, MountError> {
+        let format =
+            FORMATS.iter().find(|f| f.image == image).ok_or(MountError::NotADiskImage)?;
+        let volume: Option<Box<dyn Volume>> = match image {
+            DiskImage::Hfs => Hfs::mount_source(window).ok().map(|v| Box::new(v) as Box<dyn Volume>),
+            DiskImage::Iso9660 => {
+                Iso9660::mount_source(window).ok().map(|v| Box::new(v) as Box<dyn Volume>)
+            }
+            _ => None,
+        };
+        let volume = volume.ok_or(MountError::Unreadable(image))?;
+        MountedDisk::with_companions(format, None, volume, companions)
+    }
+
+    /// The rest of a mount: a volume with no story of its own asks for the
+    /// companions its release was offered.
+    fn with_companions(
+        format: &'static Format,
+        mine: Option<Vec<u8>>,
+        volume: Box<dyn Volume>,
+        companions: impl FnOnce() -> Vec<Vec<u8>>,
+    ) -> Result<MountedDisk, MountError> {
+        let (across, sides, volumes) = if !volume.has_story() {
             let others: Vec<Vec<u8>> =
                 companions().into_iter().filter(|raw| (format.looks_like)(raw)).collect();
             let across = others
@@ -2093,6 +2327,73 @@ impl MountedDisk {
     /// Which format this turned out to be.
     pub fn format(&self) -> DiskImage {
         self.image
+    }
+
+    /// Whether the disc is read from its file on demand rather than held in
+    /// memory (SQ-1761) — a CD. For such a disk [`MountedDisk::contents`] reads
+    /// every file on it, which is exactly what a caller should not ask: it
+    /// wants [`MountedDisk::files`] and [`MountedDisk::read_file`] instead.
+    pub fn is_file_backed(&self) -> bool {
+        self.volume.is_file_backed()
+    }
+
+    /// The volume's files without their bytes, in an order [`MountedDisk::read_file`]
+    /// indexes — `None` for a format that has no cheaper way than
+    /// [`MountedDisk::contents`].
+    pub fn files(&self) -> Option<Vec<VolumeFile>> {
+        self.volume.files()
+    }
+
+    /// The bytes of the file at `index` in [`MountedDisk::files`].
+    pub fn read_file(&self, index: usize) -> Option<Vec<u8>> {
+        self.volume.read_file(index)
+    }
+
+    /// How many stories [`MountedDisk::stories`] would list, counted no further
+    /// than `limit` and by header alone where the volume allows (SQ-1761).
+    pub fn story_count_up_to(&self, limit: usize) -> usize {
+        let own = self.volume.story_count_up_to(limit);
+        if own >= limit {
+            return own;
+        }
+        self.story_names().len().min(limit)
+    }
+
+    /// Whether [`MountedDisk::stories`] would list anything, reading at most one
+    /// story to find out (SQ-1761).
+    pub fn has_stories(&self) -> bool {
+        self.volume.has_story() || self.story_across_the_set().is_some()
+    }
+
+    /// The names [`MountedDisk::stories`] would list, and nothing else read
+    /// (SQ-1761): a story is named by its file's header, and only the header is
+    /// looked at. Including the story a release pages across its volumes.
+    pub fn story_names(&self) -> Vec<String> {
+        let mut names: Vec<String> = match self.volume.files() {
+            Some(files) if !self.volume.has_packed_index(&files) => files
+                .iter()
+                .enumerate()
+                .filter(|(i, f)| self.volume.is_story_by_header(*i, f))
+                .map(|(_, f)| f.path.clone())
+                .collect(),
+            _ => self.volume.stories().into_iter().map(|s| s.name).collect(),
+        };
+        if let Some(story) = self.story_across_the_set() {
+            if !names.contains(&story.name) {
+                names.push(story.name);
+            }
+        }
+        names
+    }
+
+    /// The story called `want`, exactly or ignoring ASCII case — the first of
+    /// [`MountedDisk::stories`] that is, found without reading the others
+    /// (SQ-1761).
+    pub fn story_named(&self, want: &str) -> Option<DiskStory> {
+        let matches = |name: &str| name == want || name.eq_ignore_ascii_case(want);
+        self.volume
+            .story_named(want)
+            .or_else(|| self.story_across_the_set().filter(|s| matches(&s.name)))
     }
 
     /// See [`DiskImage::label`].

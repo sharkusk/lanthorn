@@ -126,7 +126,7 @@ use crate::infocom_pics::InfocomPics;
 
 /// The block size the container pages in. ProDOS's, and the unit every physical
 /// and logical number in the index counts.
-const BLOCK: usize = 512;
+pub(crate) const BLOCK: usize = 512;
 
 /// How many segments an index may claim. Five is the most any release used
 /// (*Arthur*, *Shogun*); the ceiling is a sanity bound on arbitrary bytes.
@@ -136,6 +136,27 @@ const MAX_SEGMENTS: usize = 8;
 /// 35 and *Zork Zero*'s second uses 31; the bound keeps a nonsense count from
 /// making this reader walk a whole disk image.
 const MAX_RUNS: usize = 512;
+
+/// The most bytes an index can occupy: 20 of header, then per segment 8 of entry
+/// and [`MAX_RUNS`] runs of 6.
+pub(crate) const MAX_INDEX_BYTES: usize = 20 + MAX_SEGMENTS * (8 + MAX_RUNS * 6);
+
+/// Could a file opening with `head` (its first [`BLOCK`] bytes) be a packed
+/// volume's first segment? The cheap first two tests of [`parse_index`], so a
+/// volume that holds hundreds of files need not read more of them than this.
+pub(crate) fn might_start_an_index(head: &[u8]) -> bool {
+    head.len() >= BLOCK
+        && head[4..20].iter().all(|&b| b == 0)
+        && matches!(usize::from(u16::from_be_bytes([head[2], head[3]])), 1..=MAX_SEGMENTS)
+}
+
+/// Does `prefix` — a file's first [`MAX_INDEX_BYTES`], or all of it — open with a
+/// packed volume's index? [`parse_index`] itself, which never looks past the
+/// bytes the index occupies, so a prefix decides it exactly as the whole file
+/// would.
+pub(crate) fn is_index(prefix: &[u8]) -> bool {
+    parse_index(prefix).is_some()
+}
 
 /// One run: a contiguous range of story pages living at a contiguous range of
 /// blocks on one segment.

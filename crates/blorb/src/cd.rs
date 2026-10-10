@@ -86,7 +86,7 @@
 
 /// Bytes of user data in one CD sector: the logical block a filesystem on the
 /// disc is written in, and the whole of what a cooked image contains.
-const USER_DATA: usize = 2048;
+pub(crate) const USER_DATA: usize = 2048;
 
 /// The 12-byte sync pattern a raw sector opens with.
 const SYNC: [u8; 12] = [0x00, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0x00];
@@ -125,7 +125,7 @@ const BLOCK_UNIT: usize = 512;
 
 /// How an image's bytes relate to the logical blocks a filesystem is written in.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-enum Sectors {
+pub(crate) enum Sectors {
     /// The file is user data already: logical byte *n* is byte *n*.
     Cooked,
     /// The file is raw frames: `stride` bytes each, user data `data` bytes in.
@@ -135,7 +135,7 @@ enum Sectors {
 impl Sectors {
     /// Measure `image`'s framing — see this module's header for why the stride
     /// is measured and the mode byte read.
-    fn of(image: &[u8]) -> Sectors {
+    pub(crate) fn of(image: &[u8]) -> Sectors {
         let Some(head) = image.get(..MAX_STRIDE + SYNC.len()) else { return Sectors::Cooked };
         if head[..SYNC.len()] != SYNC {
             return Sectors::Cooked;
@@ -157,9 +157,15 @@ impl Sectors {
     /// How many logical bytes the image holds. A trailing partial frame is not
     /// one and is dropped.
     fn logical_len(self, image: &[u8]) -> usize {
+        self.logical_len_of(image.len())
+    }
+
+    /// [`Self::logical_len`] for a file of `file_len` bytes that is not in hand —
+    /// the file-backed reader's question (SQ-1761).
+    pub(crate) fn logical_len_of(self, file_len: usize) -> usize {
         match self {
-            Sectors::Cooked => image.len(),
-            Sectors::Raw { stride, .. } => image.len() / stride * USER_DATA,
+            Sectors::Cooked => file_len,
+            Sectors::Raw { stride, .. } => file_len / stride * USER_DATA,
         }
     }
 
@@ -214,7 +220,23 @@ pub(crate) struct HfsPartition<'a> {
 pub(crate) fn hfs_partition(image: &[u8]) -> Option<HfsPartition<'_>> {
     let sectors = Sectors::of(image);
     let total = sectors.logical_len(image);
-    let driver = sectors.copy(image, 0, BLOCK_UNIT);
+    let (at, len) = locate_hfs(total, |at, len| sectors.copy(image, at, len))?;
+    Some(HfsPartition { image, sectors, at, len })
+}
+
+/// Where the Apple_HFS partition starts and how much of it is present, on a
+/// medium of `total` logical bytes whose bytes `read` fetches — `(start, len)`
+/// in logical bytes.
+///
+/// **The one copy of the walk**, shared by the in-memory [`hfs_partition`] and
+/// the file-backed reader (SQ-1761), which supply `read` differently and must
+/// not be able to disagree about where a partition is. `read` returns what it
+/// can, short at the end of the medium, exactly as [`Sectors::copy`] does.
+pub(crate) fn locate_hfs(
+    total: usize,
+    read: impl Fn(usize, usize) -> Vec<u8>,
+) -> Option<(usize, usize)> {
+    let driver = read(0, BLOCK_UNIT);
     if driver.len() < 8 || driver[..2] != DDR_SIGNATURE {
         return None;
     }
@@ -228,7 +250,7 @@ pub(crate) fn hfs_partition(image: &[u8]) -> Option<HfsPartition<'_>> {
     let mut entries = MAX_PARTITIONS;
     let mut n = 1;
     while n <= entries {
-        let e = sectors.copy(image, n * block, block);
+        let e = read(n * block, block);
         if e.len() < PM_PART_TYPE + 32 || e[..2] != PM_SIGNATURE {
             return None;
         }
@@ -244,7 +266,7 @@ pub(crate) fn hfs_partition(image: &[u8]) -> Option<HfsPartition<'_>> {
         // Present, not claimed: the map sizes a hybrid disc's Macintosh
         // partition for the whole medium.
         let len = claimed.min(total.checked_sub(at)?);
-        return Some(HfsPartition { image, sectors, at, len });
+        return Some((at, len));
     }
     None
 }

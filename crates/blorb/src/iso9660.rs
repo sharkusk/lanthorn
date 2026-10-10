@@ -75,6 +75,7 @@
 
 use crate::adf::looks_like_story;
 use crate::infocom_pics::InfocomPics;
+use crate::source::Source;
 
 /// Where the volume descriptors begin — ECMA-119 §6.2.1, logical sector 16.
 const DESCRIPTOR_START: usize = 16 * 2048;
@@ -178,10 +179,12 @@ impl IsoEntry {
 /// A mounted ISO 9660 disc.
 #[derive(Debug)]
 pub struct Iso9660 {
-    image: Vec<u8>,
+    image: Source,
     block: usize,
     name: String,
     files: Vec<IsoEntry>,
+    /// [`crate::medium::Volume::has_packed_index`]'s answer, once asked.
+    packed_index: std::sync::OnceLock<bool>,
 }
 
 impl Iso9660 {
@@ -197,9 +200,22 @@ impl Iso9660 {
 
     /// Open the disc and enumerate every file on it.
     pub fn mount(image: Vec<u8>) -> Result<Iso9660, IsoError> {
-        let pvd_at = primary_descriptor(&image).ok_or(IsoError::NotIso9660)?;
-        let pvd = &image[pvd_at..pvd_at + SECTOR];
-        let block = usize::from(le16(pvd, PVD_BLOCK_SIZE));
+        Iso9660::mount_source(Source::Mem(std::sync::Arc::new(image)))
+    }
+
+    /// [`Iso9660::mount`] over bytes that may stay on disk (SQ-1761).
+    pub(crate) fn mount_source(image: Source) -> Result<Iso9660, IsoError> {
+        let pvd_at = match &image {
+            Source::Mem(bytes) => primary_descriptor(bytes),
+            Source::Disc { .. } => {
+                // The set of descriptors is a handful of sectors at the front;
+                // scanning them is a head read, not a walk of the disc.
+                primary_descriptor(&image.get_clamped(0, crate::source::HEAD))
+            }
+        }
+        .ok_or(IsoError::NotIso9660)?;
+        let pvd = image.get(pvd_at..pvd_at + SECTOR).ok_or(IsoError::NotIso9660)?.into_owned();
+        let block = usize::from(le16(&pvd, PVD_BLOCK_SIZE));
         if block == 0 || !block.is_multiple_of(512) {
             return Err(IsoError::NotIso9660);
         }
@@ -207,7 +223,13 @@ impl Iso9660 {
         let root = &pvd[PVD_ROOT_RECORD..PVD_ROOT_RECORD + 34];
         let (extent, len) = (le32(root, DR_EXTENT) as usize, le32(root, DR_LENGTH) as usize);
 
-        let mut iso = Iso9660 { image, block, name, files: Vec::new() };
+        let mut iso = Iso9660 {
+            image,
+            block,
+            name,
+            files: Vec::new(),
+            packed_index: std::sync::OnceLock::new(),
+        };
         let mut files = Vec::new();
         let mut seen = std::collections::HashSet::new();
         iso.walk(extent, len, &[], &mut files, 0, &mut seen);
@@ -229,7 +251,26 @@ impl Iso9660 {
     /// Read a file's contents, or `None` when its extent runs off the image.
     pub fn read(&self, entry: &IsoEntry) -> Option<Vec<u8>> {
         let at = entry.extent.checked_mul(self.block)?;
-        self.image.get(at..at.checked_add(entry.size)?).map(<[u8]>::to_vec)
+        self.image.get(at..at.checked_add(entry.size)?).map(std::borrow::Cow::into_owned)
+    }
+
+    /// The first `n` bytes of a file — fewer if it is shorter, `None` when its
+    /// extent runs off the image (SQ-1761).
+    pub(crate) fn read_prefix(&self, entry: &IsoEntry, n: usize) -> Option<Vec<u8>> {
+        let at = entry.extent.checked_mul(self.block)?;
+        // The whole extent has to be there for `read` to answer, so the prefix
+        // of one that is not is not an answer either.
+        at.checked_add(entry.size).filter(|end| *end <= self.image.len())?;
+        self.image.get(at..at.checked_add(n.min(entry.size))?).map(std::borrow::Cow::into_owned)
+    }
+
+    pub(crate) fn packed_index(&self) -> &std::sync::OnceLock<bool> {
+        &self.packed_index
+    }
+
+    /// Whether the disc is read from a file rather than held (SQ-1761).
+    pub(crate) fn is_file_backed(&self) -> bool {
+        matches!(self.image, Source::Disc { .. })
     }
 
     /// Read a file by path or by bare name, case-insensitively — the path is
@@ -248,15 +289,22 @@ impl Iso9660 {
     /// format answers the same question every other one does. Largest wins,
     /// deterministically — these discs have no naming convention in common
     /// (`ZORK I` on one side, `ZORK1.DAT` on the other).
+    ///
+    /// Only the winner is read whole (SQ-1761): the tiebreak is the catalogued
+    /// size and the path, and "is it a story" is a question about 64 bytes.
     pub fn story(&self) -> Option<(String, Vec<u8>)> {
-        let mut cands: Vec<(String, Vec<u8>)> = self
+        let mut cands: Vec<&IsoEntry> = self
             .files
             .iter()
-            .filter_map(|e| self.read(e).map(|b| (e.path(), b)))
-            .filter(|(_, b)| looks_like_story(b))
+            .filter(|e| {
+                self.read_prefix(e, crate::adf::STORY_HEAD)
+                    .is_some_and(|head| crate::adf::looks_like_story_head(&head, e.size))
+            })
             .collect();
-        cands.sort_by_key(|(path, bytes)| (std::cmp::Reverse(bytes.len()), path.clone()));
-        cands.into_iter().next()
+        cands.sort_by_key(|e| (std::cmp::Reverse(e.size), e.path()));
+        cands.into_iter().find_map(|e| {
+            self.read(e).filter(|b| looks_like_story(b)).map(|b| (e.path(), b))
+        })
     }
 
     /// The picture archive the disc offers when asked as a whole.
@@ -336,6 +384,7 @@ impl Iso9660 {
         }
         let Some(at) = extent.checked_mul(self.block) else { return };
         let Some(data) = self.image.get(at..at.saturating_add(len)) else { return };
+        let data = &data[..];
         let mut o = 0usize;
         while o < data.len() {
             let rec_len = usize::from(data[o]);
@@ -425,6 +474,26 @@ fn apple_type_creator(mut area: &[u8]) -> Option<([u8; 4], [u8; 4])> {
         area = &area[len..];
     }
     None
+}
+
+/// A cooked ISO 9660 disc image on disk, as a window onto it, or `None`
+/// (SQ-1761).
+///
+/// Only a **cooked** image is claimed, which is all the in-memory sniff claims
+/// too: its descriptor scan starts at file byte 32,768, and a raw dump has
+/// frame headers there. And a disc that an earlier format in the table would
+/// claim anyway — a Macintosh volume at byte 0 — is left to the in-memory path
+/// that claims it today, so the two paths cannot pick different readers.
+pub(crate) fn disc_volume(disc: &std::sync::Arc<crate::source::Disc>) -> Option<Source> {
+    if disc.sectors() != crate::cd::Sectors::Cooked {
+        return None;
+    }
+    let head = disc.copy(0, crate::source::HEAD);
+    primary_descriptor(&head)?;
+    if crate::hfs::disc_is_a_bare_volume(disc) {
+        return None;
+    }
+    Some(Source::window(disc, 0, disc.logical_len()))
 }
 
 /// Where the Primary Volume Descriptor sits, or `None` when the image has none.

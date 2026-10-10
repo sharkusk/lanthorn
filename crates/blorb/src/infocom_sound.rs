@@ -545,6 +545,17 @@ enum Entry {
 /// The extension is what separates the two layouts, and it has to: `sound/s3.dat` is
 /// an Amiga sample, which its own index already names, while `SOUND/S3` is a
 /// Macintosh one, which nothing else does.
+/// Could the file at `path` matter to [`from_volume`]? Only a file under a
+/// `sound/` directory can: every index and every bare sample is one, and a
+/// sample an index names lives in the index's own directory.
+///
+/// A caller that would have to READ each file to hand it over asks this first,
+/// so a 300 MB CD is not read whole to find a few kilobytes of sound (SQ-1761).
+pub fn on_a_sound_path(path: &str) -> bool {
+    let lower = path.to_ascii_lowercase();
+    lower.starts_with("sound/") || lower.contains("/sound/")
+}
+
 fn sound_entry(lower_path: &str) -> Option<Entry> {
     if !lower_path.starts_with("sound/") && !lower_path.contains("/sound/") {
         return None;

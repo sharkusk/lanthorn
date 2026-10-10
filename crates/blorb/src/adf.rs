@@ -328,13 +328,28 @@ impl Adf {
 /// with a small byte through — the original *Zork Zero* disk carries two saved
 /// games starting `03 aa`, and only the header checks below reject them.
 pub fn looks_like_story(bytes: &[u8]) -> bool {
-    if bytes.starts_with(b"FORM") && bytes.len() > 12 && &bytes[8..12] == b"IFRS" {
+    looks_like_story_head(bytes, bytes.len())
+}
+
+/// How many leading bytes [`looks_like_story_head`] needs: the Z-machine header
+/// and the serial inside it.
+pub(crate) const STORY_HEAD: usize = 64;
+
+/// [`looks_like_story`] for a file of `len` bytes of which only the first
+/// `head` are in hand — the question a file-backed volume asks of every file on
+/// a 300 MB disc without reading them (SQ-1761).
+///
+/// Exactly [`looks_like_story`]'s answer whenever `head` is at least
+/// [`STORY_HEAD`] bytes or the whole file: every clause reads the header, and
+/// the only thing it asks of the rest of the file is how long it is.
+pub(crate) fn looks_like_story_head(head: &[u8], len: usize) -> bool {
+    if head.starts_with(b"FORM") && len > 12 && head.len() >= 12 && &head[8..12] == b"IFRS" {
         return true;
     }
-    if bytes.starts_with(b"Glul") {
+    if head.starts_with(b"Glul") {
         return true;
     }
-    looks_like_zcode(bytes)
+    zcode_head(head, len)
 }
 
 /// The Z-machine half of [`looks_like_story`], and the workspace's **only**
@@ -353,7 +368,12 @@ pub fn looks_like_story(bytes: &[u8]) -> bool {
 /// *Trinity*), and a second sniff elsewhere in the workspace would be a second
 /// place for that knowledge to go stale.
 pub fn looks_like_zcode(bytes: &[u8]) -> bool {
-    if bytes.len() < 64 {
+    zcode_head(bytes, bytes.len())
+}
+
+/// [`looks_like_zcode`] over a file's `head`, the file being `len` bytes long.
+fn zcode_head(bytes: &[u8], len: usize) -> bool {
+    if len < 64 || bytes.len() < 64 {
         return false;
     }
     let word = |o: usize| usize::from(u16::from_be_bytes([bytes[o], bytes[o + 1]]));
@@ -381,7 +401,7 @@ pub fn looks_like_zcode(bytes: &[u8]) -> bool {
     let (high, dict, objects, globals, static_base) =
         (word(0x04), word(0x08), word(0x0a), word(0x0c), word(0x0e));
     // Static memory starts after the header and inside the file.
-    if !(64..=bytes.len()).contains(&static_base) {
+    if !(64..=len).contains(&static_base) {
         return false;
     }
     // Object and global tables are writable, so they live in dynamic memory.
@@ -408,7 +428,7 @@ pub fn looks_like_zcode(bytes: &[u8]) -> bool {
     // invisible — the same shape of defect as the high-ASCII serial two clauses
     // below (SQ-0856), and fixed the same way: widen the clause that was
     // assuming, keep every clause that was checking.
-    if !(64..=bytes.len()).contains(&high) || dict < static_base || dict >= bytes.len() {
+    if !(64..=len).contains(&high) || dict < static_base || dict >= len {
         return false;
     }
     // Serial is six printable characters ("890323", or "------" on some builds)
@@ -432,7 +452,7 @@ pub fn looks_like_zcode(bytes: &[u8]) -> bool {
     // The declared length may under-run the file (release padding) but never
     // over-run it. Zero means "not recorded", which early releases leave alone.
     let declared = word(0x1a) * scale;
-    declared == 0 || declared <= bytes.len()
+    declared == 0 || declared <= len
 }
 
 /// The length-prefixed filename at `BSIZE-80`, or `None` when it is empty,

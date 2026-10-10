@@ -458,7 +458,7 @@ fn widen_to_the_release(
     path: &Path,
     disk: blorb::medium::MountedDisk,
 ) -> Result<blorb::medium::MountedDisk, blorb::medium::MountError> {
-    if !disk.stories().is_empty() {
+    if disk.has_stories() {
         return Ok(disk);
     }
     // Nothing here and nothing paged across the set: the release's other volumes
@@ -484,7 +484,7 @@ fn sibling_images(path: &Path) -> Vec<Vec<u8>> {
         .unwrap_or_default()
         .into_iter()
         .filter(|m| m != path)
-        .filter_map(|m| blorb::image::open_disk(&m).map(|f| f.bytes().to_vec()))
+        .filter_map(|m| blorb::image::open_disk(&m).and_then(|f| f.bytes().map(<[u8]>::to_vec)))
         .collect()
 }
 
@@ -503,7 +503,7 @@ fn story_elsewhere_in_the_release(path: &Path) -> Option<blorb::medium::MountedD
         }
         let Some(file) = blorb::image::open_disk(&m) else { continue };
         let Ok(disk) = blorb::medium::MountedDisk::mount_file(&file, Vec::new) else { continue };
-        match disk.stories().len() {
+        match disk.story_count_up_to(2) {
             0 => {}
             1 if found.is_none() => found = Some(disk),
             // A second game: this is a compilation, and no volume of it speaks

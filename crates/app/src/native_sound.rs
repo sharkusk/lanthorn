@@ -53,6 +53,8 @@ pub fn from_medium(story_path: &Path) -> HashMap<u16, DiskSound> {
     let files: Vec<(String, Vec<u8>)> = crate::assets::files(story_path)
         .into_iter()
         .filter(|f| f.is_on_medium())
+        // Only the sound drawers are read: on a CD the rest is the disc.
+        .filter(|f| blorb::infocom_sound::on_a_sound_path(&f.name))
         .filter_map(|f| {
             let name = f.name.clone();
             f.into_bytes().map(|b| (name, b))
