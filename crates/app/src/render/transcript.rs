@@ -1544,30 +1544,30 @@ fn draw_str_cells(
 fn typed_input_style(base_style: Style, run: &StyleRun, ink: crate::render::TextInk) -> Style {
     use crate::render::{apply_text_style, resolve_zcolour};
     use crate::state::unpack_zcolour;
-    use zvm::screen::ZColour;
-    let (scheme, honor) = (ink.colors(), ink.honor());
-    let game = |packed: u32| -> Option<ratatui::style::Color> {
-        let z = unpack_zcolour(packed);
-        (!matches!(z, ZColour::Default)).then(|| resolve_zcolour(z, scheme))
-    };
+    use crate::typed_input::{typed_input_colours, BgSource, InkSource, Probe};
+    let scheme = ink.colors();
+    let game = |packed: u32| resolve_zcolour(unpack_zcolour(packed), scheme);
     let mut s = apply_text_style(base_style.patch(ink.typed_input()), run.bits);
-    let theme_fg = s.fg;
-    let wanted = if honor { game(run.ink).or(theme_fg) } else { theme_fg };
-    if honor {
-        if let Some(pbg) = game(run.bg) {
-            s = s.bg(pbg);
-        }
-    }
-    s.fg = wanted;
-    if honor {
-        let prompt_fg = game(run.fg).or(base_style.fg);
-        if let (Some(fg), Some(bg), Some(fallback)) = (wanted, s.bg, prompt_fg) {
-            let hard = crate::colors::contrast_ratio(fg, bg).is_some_and(|c| c < crate::colors::MIN_INPUT_CONTRAST);
-            if hard {
-                s.fg = Some(fallback);
-            }
-        }
-    }
+    let (theme_fg, theme_bg) = (s.fg, s.bg);
+    let fg_of = |src: InkSource| match src {
+        InkSource::Theme => theme_fg,
+        InkSource::Game(p) | InkSource::Prompt(p) => Some(game(p)),
+        InkSource::LineBase => base_style.fg,
+    };
+    let bg_of = |src: BgSource| match src {
+        BgSource::Theme => theme_bg,
+        BgSource::Game(p) => Some(game(p)),
+    };
+    let rgb_of = |probe: Probe| {
+        let c = match probe {
+            Probe::Fg(src) => fg_of(src),
+            Probe::Bg(src) => bg_of(src),
+        };
+        c.and_then(crate::colors::known_rgb)
+    };
+    let d = typed_input_colours(run, ink.honor(), base_style.fg.is_some(), rgb_of);
+    s.fg = fg_of(d.fg);
+    s.bg = bg_of(d.bg);
     s
 }
 

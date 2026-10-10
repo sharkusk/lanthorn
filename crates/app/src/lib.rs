@@ -60,6 +60,7 @@ pub mod hints;
 pub mod hint_download;
 pub mod slash;
 pub mod colors;
+pub mod typed_input;
 pub mod complete;
 pub mod config;
 pub mod config_template;

@@ -513,7 +513,7 @@ pub struct ColorScheme {
 /// The sRGB triple behind a colour we can know without asking the terminal: a
 /// literal RGB, or the two named colours whose value no theme moves. Anything the
 /// terminal's palette decides (the other named colours, indexed, `Reset`) is `None`.
-fn known_rgb(c: Color) -> Option<(u8, u8, u8)> {
+pub(crate) fn known_rgb(c: Color) -> Option<(u8, u8, u8)> {
     match c {
         Color::Rgb(r, g, b) => Some((r, g, b)),
         Color::Black => Some((0, 0, 0)),
@@ -528,6 +528,11 @@ fn known_rgb(c: Color) -> Option<(u8, u8, u8)> {
 /// over a game-coloured prompt line falls back to the game's own ink only when the
 /// theme's input colour is provably hard to read there).
 pub fn contrast_ratio(a: Color, b: Color) -> Option<f64> {
+    Some(contrast_ratio_rgb(known_rgb(a)?, known_rgb(b)?))
+}
+
+/// [`contrast_ratio`] on two known sRGB triples (the renderer-neutral form).
+pub fn contrast_ratio_rgb(a: (u8, u8, u8), b: (u8, u8, u8)) -> f64 {
     fn luminance((r, g, b): (u8, u8, u8)) -> f64 {
         let lin = |v: u8| {
             let v = f64::from(v) / 255.0;
@@ -535,9 +540,9 @@ pub fn contrast_ratio(a: Color, b: Color) -> Option<f64> {
         };
         0.2126 * lin(r) + 0.7152 * lin(g) + 0.0722 * lin(b)
     }
-    let (la, lb) = (luminance(known_rgb(a)?), luminance(known_rgb(b)?));
+    let (la, lb) = (luminance(a), luminance(b));
     let (hi, lo) = if la >= lb { (la, lb) } else { (lb, la) };
-    Some((hi + 0.05) / (lo + 0.05))
+    (hi + 0.05) / (lo + 0.05)
 }
 
 /// The smallest [`contrast_ratio`] at which a typed command is left in its chosen

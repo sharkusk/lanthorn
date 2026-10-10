@@ -594,6 +594,8 @@ than inferred, with the last consumed line's fingerprint in the key as the guard
 that catches a mutator which picked wrong. `cargo run --release -p app --example
 scroll_bench` measures all of it.
 
+**A non-terminal host draws the player's typed command with `app::typed_input::typed_input_colours`** (SQ-1759). The command's `StyleRun` has `glk_style == GLK_STYLE_TYPED_INPUT` and carries `bits`, `fg`, `bg` and `ink` (SQ-1758); the call returns which SOURCE the foreground (`InkSource`: theme, the story's ink, the prompt's, the line's base) and background (`BgSource`) come from, with the honor gating, the kept prompt background and the contrast fallback ([`MIN_INPUT_CONTRAST`]) decided once. The host supplies an `rgb_of` to resolve a source for the contrast check. The TUI's `typed_input_style` is a thin adapter over it, so the two cannot disagree.
+
 ### Composing a v6 frame without the TUI
 
 The raster composite reads no `AppState` of its own. `render::screen::compose_v6_frame`
