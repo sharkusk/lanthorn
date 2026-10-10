@@ -1164,12 +1164,9 @@ impl Engine for ScottSession {
             std::collections::BTreeMap::new();
         let mut verbs: Vec<Verb> = Vec::new();
         for (i, entry) in db.verbs.iter().enumerate() {
-            let word = entry.trim_start_matches('*').trim().to_lowercase();
-            // A database pads its vocabulary lists with `.` for a slot no word
-            // reaches; it is a placeholder, not a word somebody could type.
-            if !word.chars().any(char::is_alphanumeric) {
+            let Some(word) = vocabulary_word(entry) else {
                 continue;
-            }
+            };
             words.entry(word.clone()).or_default().verb = true;
             if entry.starts_with('*') {
                 // A synonym of the nearest preceding canonical verb.
@@ -1185,8 +1182,7 @@ impl Engine for ScottSession {
             }
         }
         for entry in &db.nouns {
-            let word = entry.trim_start_matches('*').trim().to_lowercase();
-            if word.chars().any(char::is_alphanumeric) {
+            if let Some(word) = vocabulary_word(entry) {
                 words.entry(word).or_default().noun = true;
             }
         }
@@ -1201,6 +1197,20 @@ impl Engine for ScottSession {
         ))
     }
 
+    /// Verbs then nouns as typed, de-duplicated, in database order: a Scott
+    /// Adams session has no `Introspect`, so this is its word list (SQ-1763).
+    /// Full stored spellings — `word_length` is the parser's business, not ours.
+    fn vocabulary_words(&self) -> Vec<String> {
+        let db = self.vm.database();
+        let mut seen = std::collections::HashSet::new();
+        db.verbs
+            .iter()
+            .chain(&db.nouns)
+            .filter_map(|entry| vocabulary_word(entry))
+            .filter(|w| seen.insert(w.clone()))
+            .collect()
+    }
+
     fn as_any(&self) -> &dyn Any {
         self
     }
@@ -1208,6 +1218,16 @@ impl Engine for ScottSession {
     fn as_any_mut(&mut self) -> &mut dyn Any {
         self
     }
+}
+
+/// One vocabulary-table entry as a typable word: the leading `*` synonym
+/// marker stripped, trimmed, lowercased. `None` for a `.`-style padding entry
+/// (a database pads its lists for a slot no word reaches; it is a placeholder,
+/// not a word somebody could type). The one rule `story_vocabulary` and
+/// `vocabulary_words` share.
+fn vocabulary_word(entry: &str) -> Option<String> {
+    let word = entry.trim_start_matches('*').trim().to_lowercase();
+    word.chars().any(char::is_alphanumeric).then_some(word)
 }
 
 // ── Tests ────────────────────────────────────────────────────────────────────
@@ -1303,6 +1323,84 @@ mod tests {
             showing: VecDeque::new(),
             showing_title_card: false,
             deferred_save: false,
+        }
+    }
+
+    /// SQ-1763: a session over a hand-built database whose vocabulary tables
+    /// carry every shape the word list must handle.
+    fn vocabulary_session() -> ScottSession {
+        use scott::{Database, Vm};
+        let s = |v: &[&str]| v.iter().map(|w| w.to_string()).collect::<Vec<_>>();
+        let db = Database {
+            max_carry: 6,
+            start_room: 1,
+            num_treasures: 0,
+            word_length: 3,
+            light_time: -1,
+            treasure_room: 0,
+            actions: vec![],
+            // verb 0 is the AUTO slot; `*` marks a synonym; `.` is padding.
+            verbs: s(&["AUTO", "GO", "GET", "*TAKE", ".", "LOOK"]),
+            nouns: s(&["ANY", "NORTH", "N", "*NORTH", "LAMP", ".", "get", "Keyboard"]),
+            rooms: vec![scott::database::Room { exits: [0; 6], desc: "limbo".into(), literal: true }; 2],
+            messages: vec![],
+            items: vec![],
+            adventure_number: 0,
+            ti99: None,
+            mysterious: false,
+            saga_us: None,
+        };
+        ScottSession {
+            vm: Vm::new(db),
+            intro: String::new(),
+            aux: BTreeMap::new(),
+            aux_dirty: false,
+            picts: crate::graphics::PictSource::new(None),
+            current_canvas: None,
+            current_pic_num: None,
+            current_overlays: Vec::new(),
+            pic_version: 0,
+            showing: VecDeque::new(),
+            showing_title_card: false,
+            deferred_save: false,
+        }
+    }
+
+    /// SQ-1763: `vocabulary_words` is verbs then nouns, `*` stripped, padding
+    /// dropped, lowercased, full spellings (no truncation to `word_length`
+    /// 3), and a word in both lists appears once.
+    #[test]
+    fn vocabulary_words_lists_verbs_then_nouns_deduplicated() {
+        let sess = vocabulary_session();
+        assert_eq!(
+            sess.vocabulary_words(),
+            ["auto", "go", "get", "take", "look", "any", "north", "n", "lamp", "keyboard"]
+        );
+    }
+
+    /// SQ-1763: sharing the walk with `vocabulary_words` left `story_vocabulary`'s
+    /// answer alone — the same words, `take` still a synonym of `get`.
+    #[test]
+    fn story_vocabulary_is_unchanged_by_the_shared_word_rule() {
+        let sess = vocabulary_session();
+        let v = sess.story_vocabulary().expect("scott gives a vocabulary");
+        for w in ["go", "get", "take", "look", "north", "n", "lamp", "keyboard"] {
+            assert!(v.knows(w), "{w} is a known word");
+        }
+        assert!(!v.knows("."), "padding is not a word");
+        assert_eq!(v.verb_named("take").map(|x| x.words.clone()), Some(vec!["get".into(), "take".into()]));
+        assert_eq!(v.nouns().collect::<Vec<_>>(), ["any", "keyboard", "lamp", "n", "north"]);
+    }
+
+    /// SQ-1763: a real Scott game, off the gitignored Apple II press, offers
+    /// its lamp and directions, spelled as stored (three letters).
+    /// Skips vacuously without the fixture.
+    #[test]
+    fn adventureland_vocabulary_words_include_lamp_and_north() {
+        let Some(s) = adventureland_apple_session() else { return };
+        let words = s.vocabulary_words();
+        for w in ["lam", "nor"] {
+            assert!(words.iter().any(|x| x == w), "{w} missing from {words:?}");
         }
     }
 

@@ -1372,6 +1372,14 @@ pub trait Engine {
         None
     }
 
+    /// Every word this story's parser knows, as typed: THE engine-neutral door
+    /// for a host that wants the word list (speech-recognition word boosting,
+    /// autocomplete). The default is the engine's [`Introspect::vocabulary`];
+    /// an engine without introspection (Scott Adams) overrides it (SQ-1763).
+    fn vocabulary_words(&self) -> Vec<String> {
+        self.introspect().map(|i| i.vocabulary()).unwrap_or_default()
+    }
+
     /// Does the story's own dictionary hold this word — asked of the ENGINE, so
     /// the story's key truncation is applied the way the story applies it?
     ///

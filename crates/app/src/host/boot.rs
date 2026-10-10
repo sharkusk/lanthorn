@@ -1702,7 +1702,7 @@ pub fn boot_story(req: BootRequest<'_>, hooks: &mut dyn BootHooks) -> Result<Boo
     // Each entry spelled out where the dictionary cut it short (SQ-1553):
     // completion offers `lantern`, not `lanter`, and applying it still reaches
     // the same entry. This is also where the one-time story-text read is paid.
-    let words = session.introspect().map(|i| i.vocabulary()).unwrap_or_default();
+    let words = session.vocabulary_words();
     state.dict_words = match state.vocab.get(session.as_ref()) {
         Some(v) => words.iter().map(|w| v.spell(w).to_string()).collect(),
         None => words,

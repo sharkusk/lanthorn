@@ -27,6 +27,10 @@ goes into the README in place, at its normal destination, marked with the
 visible tag `*Next release:*`. `release.yml` refuses to cut a release
 while any such tag, or this Unreleased section, still exists.*
 
+### Added
+
+- **Scott Adams games now complete your words as you type.** The game's own verbs and nouns are offered by autocomplete, as they already were for Z-machine and Glulx stories. (Adventure databases store only the first few letters of each word, so completions are spelled as the game stored them.)
+
 ### Fixed
 
 - **Games on disk images open faster, and CD images much faster — especially from a network drive.** Starting a game used to read the whole image file several times over, once per step of the launch; now it is read once and shared. A CD image goes further and is read only where the game needs it: starting a game off the 354 MB *Classic Text Adventure Masterpieces of Infocom* disc used to read the full 354 MB several times over, and now reads about 27 MB in all.

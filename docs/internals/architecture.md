@@ -598,6 +598,8 @@ scroll_bench` measures all of it.
 
 **A non-terminal host shortens an overlong status-line room name with `app::status_text::shorten_status_text(text, fits)`** (SQ-1760). It applies ZMSD §8.2.2.2 (break at the last space, append an ellipsis) against a host-supplied `fits` predicate, so a proportional-font host measures in its own units and the ellipsis is counted as part of the fit; if not even `…` fits the result is empty. The TUI's `truncate_status_text` is a column-counting wrapper over it.
 
+**A host asks `Engine::vocabulary_words()` for every word the story's parser knows** (SQ-1763) — speech-recognition word boosting, autocomplete. It is engine-neutral: Z-code (the whole dictionary) and Glulx answer through `Introspect::vocabulary` by default; a Scott Adams session, which has no `Introspect`, overrides it with its verb and noun tables (synonym `*` markers and `.` padding dropped, lowercased, de-duplicated, full stored spellings). The TUI seeds its autocomplete from the same call.
+
 ### Composing a v6 frame without the TUI
 
 The raster composite reads no `AppState` of its own. `render::screen::compose_v6_frame`

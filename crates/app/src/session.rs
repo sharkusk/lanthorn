@@ -9000,6 +9000,16 @@ mod tests {
         }
     }
 
+    /// SQ-1763: the engine-neutral word list is the Z-code dictionary, unchanged.
+    #[test]
+    fn vocabulary_words_is_the_introspected_dictionary() {
+        let story = zvm::fixtures::load("minizork.z3").expect("committed fixture");
+        let sess = GameSession::new(story, true, false, None).expect("minizork boots");
+        let words = sess.vocabulary_words();
+        assert!(!words.is_empty());
+        assert_eq!(words, sess.introspect().unwrap().vocabulary());
+    }
+
     #[test]
     fn engine_introspect_wraps_existing_logic() {
         let sess = GameSession::new(read_char_story_v5(), true, false, None).expect("new");
