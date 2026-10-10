@@ -1157,8 +1157,16 @@ pub struct StyleRun {
     #[serde(default)]
     pub link: u32, // Glk hyperlink value for this span (0 = no link)
     #[serde(default)]
-    pub glk_style: u8, // Glk style class (0=Normal .. 10=User2); indexes the theme's per-style colour slot (SQ-0331)
+    pub glk_style: u8, // Glk style class (0=Normal .. 10=User2); indexes the theme's per-style colour slot (SQ-0331). `GLK_STYLE_TYPED_INPUT` marks the player's typed command (SQ-1758)
+    #[serde(default)]
+    pub ink: u32, // typed-command runs only: the STORY's own input colour (packed ZColour; 0 = no opinion) — `fg`/`bg` stay the prompt line's colours (SQ-1758)
 }
+
+/// `StyleRun::glk_style` value (past every Glk class, 0..=10) marking the span of
+/// a transcript line the PLAYER typed after the game's own `>` prompt (SQ-1758).
+/// The renderer draws it in the `transcript_input` theme style, unless the story
+/// stated an input style of its own (`bits`/`ink`) and `honor_game_colours` is on.
+pub const GLK_STYLE_TYPED_INPUT: u8 = 0xFF;
 
 /// Per-paragraph layout formatting for one transcript line, derived from the Glk
 /// paragraph stylehints (SQ-0330). A logical transcript line is one paragraph, so
@@ -5818,9 +5826,15 @@ impl AppState {
     /// Append `text` to the last transcript line in place (used in inline-prompt
     /// mode so the typed command joins the game's `>` line). If the transcript is
     /// empty, push `text` as a new line instead. Only the last line's String is
-    /// edited; its parallel runs/kinds/images/styles are left as-is (the appended
-    /// chars carry no style runs and render in the input style).
-    pub fn append_to_last_transcript_line(&mut self, text: &str) {
+    /// edited; its parallel kinds/images/styles are left as-is.
+    ///
+    /// The appended chars get a [`GLK_STYLE_TYPED_INPUT`] run (SQ-1758), so the
+    /// renderer draws them in the `transcript_input` style while the `>` before
+    /// them stays story text — the line's KIND is deliberately not changed. The run
+    /// carries `style`, the story's own input style (`bits`/`ink`), and the prompt
+    /// line's colours when it has any, so the game's background band stays
+    /// continuous across the command (SQ-0269, SQ-0263).
+    pub fn append_to_last_transcript_line(&mut self, text: &str, style: crate::engine::InputStyle) {
         if self.transcript.is_empty() {
             self.push_transcript_kind(text, TranscriptKind::Input);
             return;
@@ -5829,16 +5843,22 @@ impl AppState {
         let start = self.transcript.last().unwrap().chars().count();
         self.transcript.last_mut().unwrap().push_str(text);
         let end = start + text.chars().count();
-        // Inherit the colour of the line's trailing style run so the echoed command
-        // is drawn in the game's prompt colours instead of the uncoloured theme base,
-        // and the SQ-0263 background band stays continuous across it. Only fg/bg are
-        // carried (not reverse/bold bits or a hyperlink). No coloured run → plain
-        // append (the theme case), unchanged. (SQ-0269)
-        if let Some(runs) = self.transcript_runs.last_mut() {
-            if let Some(&StyleRun { fg, bg, .. }) = runs.last() {
-                if fg != 0 || bg != 0 {
-                    runs.push(StyleRun { start, end, bits: 0, fg, bg, link: 0, glk_style: 0 });
-                }
+        if end > start {
+            self.transcript_runs.resize(self.transcript.len(), Vec::new()); // self-heal alignment
+            if let Some(runs) = self.transcript_runs.last_mut() {
+                // The prompt's colours are the trailing run's fg/bg (SQ-0269). Only
+                // fg/bg are taken, not reverse/bold bits or a hyperlink.
+                let (fg, bg) = runs.last().map(|r| (r.fg, r.bg)).unwrap_or((0, 0));
+                runs.push(StyleRun {
+                    start,
+                    end,
+                    bits: style.bits,
+                    fg,
+                    bg,
+                    link: 0,
+                    glk_style: GLK_STYLE_TYPED_INPUT,
+                    ink: style.ink,
+                });
             }
         }
         // The only caller (`finish_command_turn`, inline-prompt mode) joins the
@@ -5952,7 +5972,7 @@ impl AppState {
                 Some(last) if last.end == c && last.bits == bits && last.fg == cf && last.bg == cb && last.link == link && last.glk_style == gs => {
                     last.end = c + 1;
                 }
-                _ => runs.push(StyleRun { start: c, end: c + 1, bits, fg: cf, bg: cb, link, glk_style: gs }),
+                _ => runs.push(StyleRun { start: c, end: c + 1, bits, fg: cf, bg: cb, link, glk_style: gs, ink: 0 }),
             }
         }
         if idx < self.transcript_runs.len() {
@@ -6138,7 +6158,7 @@ impl AppState {
                         Some(r) if r.end == col && r.bits == bits && r.fg == pfg && r.bg == pbg && r.link == link && r.glk_style == glk_style => {
                             r.end = col + 1;
                         }
-                        _ => runs.push(StyleRun { start: col, end: col + 1, bits, fg: pfg, bg: pbg, link, glk_style }),
+                        _ => runs.push(StyleRun { start: col, end: col + 1, bits, fg: pfg, bg: pbg, link, glk_style, ink: 0 }),
                     }
                 }
                 rem = rem.saturating_sub(1);
@@ -6860,7 +6880,7 @@ mod tests {
     fn append_to_last_transcript_line_appends_to_existing_last_line() {
         let mut s = AppState::default();
         s.push_transcript_kind(">", TranscriptKind::Story);
-        s.append_to_last_transcript_line("look");
+        s.append_to_last_transcript_line("look", Default::default());
         assert_eq!(s.transcript.len(), 1);
         assert_eq!(s.transcript[0], ">look");
     }
@@ -6869,7 +6889,7 @@ mod tests {
     fn append_to_last_transcript_line_pushes_new_line_when_empty_and_keeps_arrays_aligned() {
         let mut s = AppState::default();
         assert!(s.transcript.is_empty());
-        s.append_to_last_transcript_line("hi");
+        s.append_to_last_transcript_line("hi", Default::default());
         assert_eq!(s.transcript, vec!["hi".to_string()]);
         assert_eq!(s.transcript.len(), s.transcript_kinds.len());
         assert_eq!(s.transcript.len(), s.transcript_styles.len());
@@ -6887,24 +6907,37 @@ mod tests {
             TranscriptKind::Story,
             &[(1, 0, ZColour::Default, ZColour::True24(0x00FF_FFFF), 0, ParaFmt::default(), 0, false)],
         );
-        s.append_to_last_transcript_line("look");
+        s.append_to_last_transcript_line("look", Default::default());
         assert_eq!(s.transcript.last().unwrap(), ">look");
         let tail = s.transcript_runs.last().unwrap().last().unwrap();
         assert_eq!((tail.start, tail.end), (1, 5), "run covers the appended 'look'");
         assert_eq!(tail.bg, pack_zcolour(ZColour::True24(0x00FF_FFFF)),
             "echo inherits the prompt's white background (keeps the SQ-0263 band)");
-        assert_eq!(tail.bits, 0, "reverse/bold bits are not carried onto the echo");
+        assert_eq!(tail.bits, 0, "the PROMPT's reverse/bold bits are not carried onto the echo");
+        assert_eq!(tail.glk_style, GLK_STYLE_TYPED_INPUT);
     }
 
     #[test]
-    fn append_to_last_transcript_line_adds_no_run_when_prompt_is_uncoloured() {
+    fn append_to_last_transcript_line_marks_the_command_as_typed_input_on_an_uncoloured_prompt() {
         let mut s = AppState::default();
         s.push_transcript_kind(">", TranscriptKind::Story); // no coloured runs
-        let before = s.transcript_runs.last().map(|r| r.len()).unwrap_or(0);
-        s.append_to_last_transcript_line("look");
+        s.append_to_last_transcript_line("look", Default::default());
         assert_eq!(s.transcript.last().unwrap(), ">look");
-        let after = s.transcript_runs.last().map(|r| r.len()).unwrap_or(0);
-        assert_eq!(before, after, "no coloured trailing run → plain append (theme case unchanged)");
+        assert_eq!(s.transcript_kinds.last(), Some(&TranscriptKind::Story), "the line stays a Story line");
+        let runs = s.transcript_runs.last().unwrap();
+        assert_eq!(runs.len(), 1, "exactly one run: the typed command");
+        let r = runs[0];
+        assert_eq!((r.start, r.end, r.glk_style), (1, 5, GLK_STYLE_TYPED_INPUT));
+        assert_eq!((r.fg, r.bg, r.ink, r.bits), (0, 0, 0, 0), "no prompt colours, no story opinion");
+    }
+
+    #[test]
+    fn append_to_last_transcript_line_carries_the_stories_own_input_style() {
+        let mut s = AppState::default();
+        s.push_transcript_kind(">", TranscriptKind::Story);
+        s.append_to_last_transcript_line("look", crate::engine::InputStyle { bits: 0x02, ink: 0x0300_FF00 });
+        let r = s.transcript_runs.last().unwrap()[0];
+        assert_eq!((r.bits, r.ink), (0x02, 0x0300_FF00));
     }
 
     #[test]
@@ -7136,7 +7169,7 @@ mod tests {
         let mut s = AppState::default();
         s.push_transcript("room\n>");
         let e = s.transcript_epoch;
-        s.append_to_last_transcript_line("look");
+        s.append_to_last_transcript_line("look", Default::default());
         s.push_transcript("reply\n>");
         s.merge_line_into_previous(s.transcript.len() - 1);
         assert_eq!(s.transcript_epoch, e, "append / echo / fold do not move the epoch");
@@ -7244,7 +7277,7 @@ mod tests {
         s.push_transcript_runs("ab cd", TranscriptKind::Story,
             &[(2, 0x02, ZColour::Default, ZColour::Default, 0, ParaFmt::default(), 0, false), (3, 0, ZColour::Default, ZColour::Default, 0, ParaFmt::default(), 0, false)]);
         assert_eq!(s.transcript.last().unwrap(), "ab cd");
-        assert_eq!(s.transcript_runs.last().unwrap(), &vec![StyleRun { start: 0, end: 2, bits: 0x02, fg: 0, bg: 0, link: 0, glk_style: 0 }]);
+        assert_eq!(s.transcript_runs.last().unwrap(), &vec![StyleRun { start: 0, end: 2, bits: 0x02, fg: 0, bg: 0, link: 0, glk_style: 0, ink: 0 }]);
         assert_eq!(s.transcript.len(), s.transcript_runs.len());
         assert_eq!(s.transcript.len(), s.transcript_kinds.len());
     }
@@ -7260,8 +7293,8 @@ mod tests {
         let n = s.transcript.len();
         assert_eq!(s.transcript[n - 2], "A");
         assert_eq!(s.transcript[n - 1], "B");
-        assert_eq!(s.transcript_runs[n - 2], vec![StyleRun { start: 0, end: 1, bits: 0x02, fg: 0, bg: 0, link: 0, glk_style: 0 }]);
-        assert_eq!(s.transcript_runs[n - 1], vec![StyleRun { start: 0, end: 1, bits: 0x02, fg: 0, bg: 0, link: 0, glk_style: 0 }]);
+        assert_eq!(s.transcript_runs[n - 2], vec![StyleRun { start: 0, end: 1, bits: 0x02, fg: 0, bg: 0, link: 0, glk_style: 0, ink: 0 }]);
+        assert_eq!(s.transcript_runs[n - 1], vec![StyleRun { start: 0, end: 1, bits: 0x02, fg: 0, bg: 0, link: 0, glk_style: 0, ink: 0 }]);
     }
 
     #[test]

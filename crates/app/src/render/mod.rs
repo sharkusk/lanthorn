@@ -171,12 +171,16 @@ pub(crate) struct TextInk<'a> {
     /// generic prose case never hit this because Counterfeit Monkey colours
     /// every Normal-style RUN explicitly; nothing colours its own echo.
     game_input: Option<Style>,
+    /// The `transcript_input` style the player's typed command is drawn in
+    /// (SQ-1758), already re-grounded on the window's page by the transcript
+    /// body; `None` reads the theme's selector as it stands.
+    typed_input: Option<Style>,
 }
 
 impl<'a> TextInk<'a> {
     /// The ink the app is drawing with, from the one place that knows both facts.
     pub(crate) fn of(state: &'a crate::state::AppState) -> TextInk<'a> {
-        TextInk { honor: state.config.honor_game_colours, colors: &state.colors, game_input: None }
+        TextInk { honor: state.config.honor_game_colours, colors: &state.colors, game_input: None, typed_input: None }
     }
 
     /// [`Self::of`] plus the game's own page/ink pair, for a caller that has
@@ -196,7 +200,7 @@ impl<'a> TextInk<'a> {
     /// place these facts are decided.
     #[cfg(all(test, feature = "t-render"))]
     pub(crate) fn new(honor: bool, colors: &'a ColorScheme) -> TextInk<'a> {
-        TextInk { honor, colors, game_input: None }
+        TextInk { honor, colors, game_input: None, typed_input: None }
     }
 
     /// [`Self::new`] plus a stated game-input pair, for the SQ-1462 tests.
@@ -206,7 +210,20 @@ impl<'a> TextInk<'a> {
         colors: &'a ColorScheme,
         game_input: Option<Style>,
     ) -> TextInk<'a> {
-        TextInk { honor, colors, game_input }
+        TextInk { honor, colors, game_input, typed_input: None }
+    }
+
+    /// [`Self::of_with_game_input`] plus the re-grounded `transcript_input` style
+    /// the transcript body already resolved for its Input lines, so a typed
+    /// command inside a Story line is the same colour as one on its own line.
+    pub(crate) fn with_typed_input(self, typed_input: Style) -> TextInk<'a> {
+        TextInk { typed_input: Some(typed_input), ..self }
+    }
+
+    /// The style the player's typed command is drawn in: the (re-grounded)
+    /// `transcript_input` theme style (SQ-1758).
+    pub(crate) fn typed_input(self) -> Style {
+        self.typed_input.unwrap_or_else(|| self.colors.theme.get("transcript_input").style)
     }
 
     pub(crate) fn honor(self) -> bool {

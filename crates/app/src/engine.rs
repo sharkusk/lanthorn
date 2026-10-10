@@ -885,6 +885,20 @@ impl std::error::Error for EngineError {}
 
 // ── The Engine trait ────────────────────────────────────────────────────────
 
+/// How the STORY had its input text styled when it asked for the line the player
+/// then typed (SQ-1758) — the engine-neutral answer the host draws the echoed
+/// command with.
+///
+/// `Default` (no bits, no ink) is "no opinion": the theme's `transcript_input`
+/// style applies unchanged. Colour is a packed ZColour ([`crate::state::pack_zcolour`],
+/// `0` = none) and is honoured only under `honor_game_colours`; `bits` use the
+/// transcript style bits (1 = reverse, 2 = bold, 4 = italic).
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct InputStyle {
+    pub bits: u8,
+    pub ink: u32,
+}
+
 /// The app-facing handle to a running game, independent of the underlying VM.
 ///
 /// The app holds a `Box<dyn Engine>` where it once held a concrete
@@ -935,6 +949,15 @@ pub trait Engine {
     /// v1–v5 stories, Glulx and Scott all keep the default.
     fn output_continued_line(&self) -> bool {
         false
+    }
+    /// The story's own input style for the line most recently handed to
+    /// `submit` — captured as the submit began, because the style the story had
+    /// switched on at its read is gone by the time the turn has run (SQ-1758).
+    /// Glulx answers from its Input stylehints (bold unless a weight hint says
+    /// otherwise, per the Glk convention); the Z-machine from the text style and
+    /// colour active at the `@read`; Scott has none. DEFAULT: no opinion.
+    fn last_input_style(&self) -> InputStyle {
+        InputStyle::default()
     }
     /// When false, the game's own trailing `>` read prompt is preserved in the
     /// transcript (inline-prompt mode) instead of being stripped for the app's

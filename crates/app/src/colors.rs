@@ -510,6 +510,40 @@ pub struct ColorScheme {
     pub machine_palette: zvm::screen::Palette,
 }
 
+/// The sRGB triple behind a colour we can know without asking the terminal: a
+/// literal RGB, or the two named colours whose value no theme moves. Anything the
+/// terminal's palette decides (the other named colours, indexed, `Reset`) is `None`.
+fn known_rgb(c: Color) -> Option<(u8, u8, u8)> {
+    match c {
+        Color::Rgb(r, g, b) => Some((r, g, b)),
+        Color::Black => Some((0, 0, 0)),
+        Color::White => Some((255, 255, 255)),
+        _ => None,
+    }
+}
+
+/// WCAG 2.x contrast ratio (1.0..=21.0) between two colours, or `None` when
+/// either cannot be resolved to RGB without the terminal's palette. Callers treat
+/// `None` as "cannot judge, so do not override" (SQ-1758: a typed command drawn
+/// over a game-coloured prompt line falls back to the game's own ink only when the
+/// theme's input colour is provably hard to read there).
+pub fn contrast_ratio(a: Color, b: Color) -> Option<f64> {
+    fn luminance((r, g, b): (u8, u8, u8)) -> f64 {
+        let lin = |v: u8| {
+            let v = f64::from(v) / 255.0;
+            if v <= 0.03928 { v / 12.92 } else { ((v + 0.055) / 1.055).powf(2.4) }
+        };
+        0.2126 * lin(r) + 0.7152 * lin(g) + 0.0722 * lin(b)
+    }
+    let (la, lb) = (luminance(known_rgb(a)?), luminance(known_rgb(b)?));
+    let (hi, lo) = if la >= lb { (la, lb) } else { (lb, la) };
+    Some((hi + 0.05) / (lo + 0.05))
+}
+
+/// The smallest [`contrast_ratio`] at which a typed command is left in its chosen
+/// colour (WCAG's floor for large text and UI components).
+pub const MIN_INPUT_CONTRAST: f64 = 3.0;
+
 /// Build the seed `glk_styles` array (SQ-0331): buffer Input(8) ← `input_text`,
 /// buffer Subheader(4) ← `transcript_location`; every other slot inherits its
 /// element (left `None`), so Normal is definitionally the element and the
@@ -1029,6 +1063,17 @@ mod tests {
         }
         assert_eq!(expand_path("/abs/p", base), Path::new("/abs/p"));
         assert_eq!(expand_path("rel/p", base), base.join("rel/p"));
+    }
+
+    #[test]
+    fn contrast_ratio_matches_wcag_extremes_and_declines_unknown_colours() {
+        let bw = contrast_ratio(Color::Rgb(0, 0, 0), Color::Rgb(255, 255, 255)).unwrap();
+        assert!((bw - 21.0).abs() < 1e-9, "black on white is 21:1, got {bw}");
+        assert_eq!(contrast_ratio(Color::Black, Color::White), Some(bw), "named black/white resolve");
+        let same = contrast_ratio(Color::Rgb(9, 9, 9), Color::Rgb(9, 9, 9)).unwrap();
+        assert!((same - 1.0).abs() < 1e-9);
+        assert_eq!(contrast_ratio(Color::Blue, Color::White), None, "a palette-dependent colour cannot be judged");
+        assert_eq!(contrast_ratio(Color::Reset, Color::White), None);
     }
 
     #[test]

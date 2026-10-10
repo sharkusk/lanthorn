@@ -298,8 +298,10 @@ pub fn finish_command_turn(
         state.push_transcript_kind(&format!("> {}", cmd), TranscriptKind::Input);
     } else {
         // Inline mode: the game's own `>` is already the last transcript line;
-        // append the typed command so `>look` persists in scrollback.
-        state.append_to_last_transcript_line(cmd);
+        // append the typed command so `>look` persists in scrollback. It is marked
+        // as typed input (drawn in `transcript_input`, not as story text) and
+        // carries the story's own input style for the renderer to prefer (SQ-1758).
+        state.append_to_last_transcript_line(cmd, session.last_input_style());
     }
     let before_push = state.transcript.len();
     if silent {

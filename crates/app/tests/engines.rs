@@ -212,6 +212,8 @@ mod sq1515_kerkerkruip_restore_arrange;
 mod sq1712_restore_window_contents;
 #[path = "suites/sq1715_rewind_transcript.rs"]
 mod sq1715_rewind_transcript;
+#[path = "suites/sq1758_typed_input.rs"]
+mod sq1758_typed_input;
 #[path = "suites/sq1529_kerkerkruip_grid_fg_ground.rs"]
 mod sq1529_kerkerkruip_grid_fg_ground;
 #[path = "suites/sq1565_kerkerkruip_title_rule_pixel_height.rs"]

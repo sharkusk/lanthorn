@@ -175,7 +175,7 @@ fn render_echo(
         state.push_transcript_kind(line, app::state::TranscriptKind::Story);
     }
     if committed {
-        state.append_to_last_transcript_line(typed);
+        state.append_to_last_transcript_line(typed, Default::default());
     } else {
         state.input.set(typed, true);
     }
@@ -272,10 +272,21 @@ fn the_macintosh_types_in_the_same_ink_it_commits_in() {
         let needle = format!(">{TYPED}");
         let live_span = span_look(area, &live, &needle);
         let done_span = span_look(area, &done, &needle);
-        assert_eq!(
-            live_span, done_span,
-            "{archive:?}: the echo and the committed text must render the same characters the same way",
+        // SQ-1758: the committed command is now drawn in the `transcript_input` ink so
+        // it stands out from story text, while keeping the machine's PAGE under it. The
+        // game's `>` and the caret cell still agree exactly; the typed letters share
+        // the page and differ only in ink.
+        let input_ink = format!(
+            "{:?}",
+            app::colors::ColorScheme::terminal_default().theme.get("transcript_input").style.fg.expect("the theme names an input ink")
         );
+        let n = TYPED.chars().count();
+        assert_eq!(live_span[0], done_span[0], "{archive:?}: the game's `>` is the same in both");
+        assert_eq!(live_span[n + 1], done_span[n + 1], "{archive:?}: and so is the cell after the span");
+        for (l, d) in live_span[1..=n].iter().zip(&done_span[1..=n]) {
+            assert_eq!(l.1, d.1, "{archive:?}: the committed command stays on the machine's page");
+            assert_eq!(d.0, input_ink, "{archive:?}: and is drawn in the transcript_input ink");
+        }
 
         // …and what they agree ON is the machine's own pair, so the case cannot be
         // satisfied by both paths going equally wrong. Black ink on a white page,

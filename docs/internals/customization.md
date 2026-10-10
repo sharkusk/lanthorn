@@ -274,7 +274,16 @@ switches that make lanthorn feel like yours without opening the whole registry.
 - **Transcript text styling** — color each transcript category independently via
   bare selectors — `transcript`, `transcript_input`, `transcript_meta`,
   `transcript_warning`, `transcript_system`, `transcript_crash` (`fg`/`bg`/
-  `bold`/`italic`). Story lines also run through styling rules: built-in ones for
+  `bold`/`italic`). `transcript_input` dresses the command you type in BOTH
+  prompt modes: the command bar's own `> cmd` line, and — in the default inline
+  mode — the span you typed after the game's `>` (a marked run on the story line,
+  `StyleRun::glk_style == GLK_STYLE_TYPED_INPUT`, so the prompt itself stays story
+  text). A game's own input style wins where it states one: Glulx `style_Input`
+  stylehints (bold unless a weight hint says otherwise), or the Z-machine text
+  style and colour in force at the `@read`; its COLOUR only with
+  `honor_game_colours` on. On a game-coloured prompt line the command keeps the
+  game's background and falls back to the game's prompt ink when the chosen colour
+  contrasts too little with it (`colors::MIN_INPUT_CONTRAST`). Story lines also run through styling rules: built-in ones for
   the room-name **location** header (`transcript_location`) and bracketed
   **system** lines such as `[Your score just went up.]` (`transcript_system`),
   plus your own ordered `[[transcript.rule]]` regex rules in `style.toml` (e.g.

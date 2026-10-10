@@ -101,7 +101,7 @@ pub fn glk_style_bits(style: GlkStyle) -> u8 {
 /// Colour is recorded unconditionally — the `honor_game_colours` gate is applied
 /// at *render* time by `cell_style`/`draw_str_runs`, exactly like the Z-machine,
 /// so toggling it (F2) recolours already-drawn output too.
-fn resolve_glk_colour(style: GlkStyle, colour: StyleColour, attrs: StyleAttrs) -> (u8, u32, u32) {
+pub(crate) fn resolve_glk_colour(style: GlkStyle, colour: StyleColour, attrs: StyleAttrs) -> (u8, u32, u32) {
     let mut bits = glk_style_bits(style);
     match attrs.weight {
         Some(1) => bits |= 0x02,
@@ -2013,7 +2013,7 @@ fn log_to_lines(
                             {
                                 last.end = col + 1
                             }
-                            _ => r.push(StyleRun { start: col, end: col + 1, bits: *bits, fg: *fg, bg: *bg, link: *link, glk_style: *glk_style }),
+                            _ => r.push(StyleRun { start: col, end: col + 1, bits: *bits, fg: *fg, bg: *bg, link: *link, glk_style: *glk_style, ink: 0 }),
                         }
                     }
                 }
@@ -2922,7 +2922,7 @@ mod tests {
         assert_eq!(inline.lines, vec!["abCD".to_string(), "x".to_string()]);
         // "CD" (cols 2..4) is bold (Header → 0x02), merged into one run; it
         // carries the Header Glk style class (3) for the theme colour slot.
-        assert_eq!(inline.runs[0], vec![StyleRun { start: 2, end: 4, bits: 0x02, fg: 0, bg: 0, link: 0, glk_style: 3 }]);
+        assert_eq!(inline.runs[0], vec![StyleRun { start: 2, end: 4, bits: 0x02, fg: 0, bg: 0, link: 0, glk_style: 3, ink: 0 }]);
         assert!(inline.runs[1].is_empty());
     }
 

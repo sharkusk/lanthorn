@@ -885,6 +885,9 @@ pub struct GameSession {
     /// Whether the turn just drained began printing exactly where the previous
     /// output left the cursor — see [`Engine::output_continued_line`].
     output_continued: bool,
+    /// The story's own input style captured as the last line was submitted — see
+    /// [`Engine::last_input_style`] (SQ-1758).
+    echo_style: crate::engine::InputStyle,
     /// Lazily-built, memoized disassembly cache (routine-discovery boundaries).
     /// `RefCell` because the Debugger read-path is `&self`; consistent with the
     /// existing `mem_fault` interior-mutability pattern.
@@ -1331,7 +1334,7 @@ impl GameSession {
         let (pending, quit, line_preload) = run_settled(&mut machine, default_turn_budget());
 
         Ok(GameSession {
-            machine, quit, pending, strip_prompt: true, pen_before_char: None, output_continued: false,
+            machine, quit, pending, strip_prompt: true, pen_before_char: None, output_continued: false, echo_style: Default::default(),
             disasm_cache: std::cell::RefCell::new(None),
             turn_budget: default_turn_budget(),
             world: std::cell::OnceCell::new(),
@@ -1822,11 +1825,27 @@ impl GameSession {
     /// known prefix is stripped back off here first — passing the untouched
     /// `command` through unchanged would double it.
     pub fn submit_line_with_terminator(&mut self, command: &str, terminator: u8) -> TurnResult {
+        self.echo_style = self.read_input_style();
         let typed = command.strip_prefix(self.line_preload.as_str()).unwrap_or(command);
         self.machine.supply_line(typed, terminator);
         self.line_preload.clear();
         self.line_preload_seeded = false;
         self.advance_after_input(false)
+    }
+
+    /// The input style the story had switched on when it asked for the line now
+    /// pending (SQ-1758): its text style and colours at the `@read`, which is what
+    /// a story that wants its typed text styled sets just before reading. Roman
+    /// text in the default colours — nearly every story — is "no opinion", so the
+    /// theme's input style applies. Fixed-pitch is not an emphasis and is dropped.
+    fn read_input_style(&self) -> crate::engine::InputStyle {
+        let s = &self.machine.screen;
+        let ink = if s.current_fg == zvm::screen::ZColour::Default {
+            0
+        } else {
+            crate::state::pack_zcolour(s.current_fg)
+        };
+        crate::engine::InputStyle { bits: s.text_style & 0x07, ink }
     }
 
     /// v5+: does `ch` terminate a line read per the game's terminating-characters
@@ -6086,6 +6105,10 @@ impl Engine for GameSession {
         self.output_continued
     }
 
+    fn last_input_style(&self) -> crate::engine::InputStyle {
+        self.echo_style
+    }
+
     fn pending_input(&self) -> InputKind {
         self.pending
     }
@@ -8607,6 +8630,68 @@ mod tests {
         assert!(lines[1].starts_with("memory fault: read16 @"), "fault line: {}", lines[1]);
     }
 
+    // ── SQ-1758: the style the story had on at its @read ──────────────────────
+
+    /// A v5 story that runs `prelude` (raw Z-code) and then `aread` into
+    /// buffers at 0x0200/0x0240 before quitting.
+    fn styled_read_story_v5(prelude: &[u8]) -> Vec<u8> {
+        let mut buf = read_char_story_v5();
+        let mut code = prelude.to_vec();
+        code.extend([0xE4, 0x0F, 0x02, 0x00, 0x02, 0x40, 0x10]); // aread 0x0200 0x0240 -> G0
+        code.push(0xBA); // quit
+        buf[0x0040..0x0040 + code.len()].copy_from_slice(&code);
+        buf[0x0200] = 20; // text buffer: max length
+        buf[0x0240] = 4; // parse buffer: max words
+        buf
+    }
+
+    fn input_style_after_read(prelude: &[u8]) -> crate::engine::InputStyle {
+        let mut s = GameSession::new(styled_read_story_v5(prelude), true, false, None).expect("GameSession::new");
+        assert_eq!(s.pending_input(), InputKind::Line, "premise: parked on the aread");
+        let _ = Engine::submit(&mut s, "look");
+        s.last_input_style()
+    }
+
+    #[test]
+    fn roman_default_colour_at_the_read_is_no_opinion() {
+        assert_eq!(input_style_after_read(&[]), crate::engine::InputStyle::default());
+    }
+
+    #[test]
+    fn bold_set_before_the_read_is_the_stories_input_style() {
+        // set_text_style 2 (VAR:241)
+        let st = input_style_after_read(&[0xF1, 0x7F, 0x02]);
+        assert_eq!(st.bits, 0x02, "bold");
+        assert_eq!(st.ink, 0);
+    }
+
+    #[test]
+    fn a_colour_set_before_the_read_is_the_stories_input_ink() {
+        // set_colour fg=3 (red), bg=1 (default) (2OP:27 in variable form)
+        let st = input_style_after_read(&[0xDB, 0x5F, 0x03, 0x01]);
+        assert_eq!(st.ink, crate::state::pack_zcolour(zvm::screen::ZColour::Standard(3)));
+        assert_eq!(st.bits, 0);
+    }
+
+    #[test]
+    fn fixed_pitch_alone_is_not_an_emphasis() {
+        // set_text_style 8 (fixed-pitch) says nothing about how input should look.
+        assert_eq!(input_style_after_read(&[0xF1, 0x7F, 0x08]), crate::engine::InputStyle::default());
+    }
+
+    #[test]
+    fn the_style_is_captured_at_submit_not_after_the_turn_has_run() {
+        // The story switches to roman AFTER its read returns (set_text_style 0
+        // follows the aread), so a style read back after the turn would be wrong.
+        let mut buf = styled_read_story_v5(&[0xF1, 0x7F, 0x02]);
+        // Replace the trailing quit with set_text_style 0, then quit.
+        let at = 0x0040 + 3 + 7;
+        buf[at..at + 4].copy_from_slice(&[0xF1, 0x7F, 0x00, 0xBA]);
+        let mut s = GameSession::new(buf, true, false, None).expect("GameSession::new");
+        let _ = Engine::submit(&mut s, "look");
+        assert_eq!(s.last_input_style().bits, 0x02, "bold, as it was AT the read");
+    }
+
     #[test]
     fn pending_input_is_char_after_new_on_read_char_story() {
         let story = read_char_story_v5();
@@ -9334,7 +9419,7 @@ mod tests {
         // source that resolves resource #1 to the red 2x2 PNG.
         let blorb = crate::graphics::test_blorb_with_pict(1, &png_bytes_2x2_red());
         let mut sess = GameSession {
-            machine, quit: false, pending: InputKind::Line, strip_prompt: true, pen_before_char: None, output_continued: false,
+            machine, quit: false, pending: InputKind::Line, strip_prompt: true, pen_before_char: None, output_continued: false, echo_style: Default::default(),
             disasm_cache: std::cell::RefCell::new(None),
             turn_budget: default_turn_budget(),
             world: std::cell::OnceCell::new(),
@@ -9412,7 +9497,7 @@ mod tests {
 
         let blorb = crate::graphics::test_blorb_with_pict(1, &png_bytes_red(320, 200));
         let mut sess = GameSession {
-            machine, quit: false, pending: InputKind::Line, strip_prompt: true, pen_before_char: None, output_continued: false,
+            machine, quit: false, pending: InputKind::Line, strip_prompt: true, pen_before_char: None, output_continued: false, echo_style: Default::default(),
             disasm_cache: std::cell::RefCell::new(None),
             turn_budget: default_turn_budget(),
             world: std::cell::OnceCell::new(),
@@ -9485,7 +9570,7 @@ mod tests {
 
         let blorb = crate::graphics::test_blorb_with_pict(1, &png_bytes_2x2_red());
         let mut sess = GameSession {
-            machine, quit: false, pending: InputKind::Line, strip_prompt: true, pen_before_char: None, output_continued: false,
+            machine, quit: false, pending: InputKind::Line, strip_prompt: true, pen_before_char: None, output_continued: false, echo_style: Default::default(),
             disasm_cache: std::cell::RefCell::new(None),
             turn_budget: default_turn_budget(),
             world: std::cell::OnceCell::new(),
@@ -9547,7 +9632,7 @@ mod tests {
         // A 2×2 picture; every draw covers 4×4 unit pixels (V6_ART_SCALE).
         let blorb = crate::graphics::test_blorb_with_pict(1, &png_bytes_2x2_red());
         let mut sess = GameSession {
-            machine, quit: false, pending: InputKind::Line, strip_prompt: true, pen_before_char: None, output_continued: false,
+            machine, quit: false, pending: InputKind::Line, strip_prompt: true, pen_before_char: None, output_continued: false, echo_style: Default::default(),
             disasm_cache: std::cell::RefCell::new(None),
             turn_budget: default_turn_budget(),
             world: std::cell::OnceCell::new(),
@@ -9652,7 +9737,7 @@ mod tests {
 
         let blorb = crate::graphics::test_blorb_with_pict(1, &png_bytes_2x2_red());
         let mut sess = GameSession {
-            machine, quit: false, pending: InputKind::Line, strip_prompt: true, pen_before_char: None, output_continued: false,
+            machine, quit: false, pending: InputKind::Line, strip_prompt: true, pen_before_char: None, output_continued: false, echo_style: Default::default(),
             disasm_cache: std::cell::RefCell::new(None),
             turn_budget: default_turn_budget(),
             world: std::cell::OnceCell::new(),
@@ -9716,7 +9801,7 @@ mod tests {
 
         let blorb = crate::graphics::test_blorb_with_pict(3, &png_bytes_red(23, 200));
         let mut sess = GameSession {
-            machine, quit: false, pending: InputKind::Line, strip_prompt: true, pen_before_char: None, output_continued: false,
+            machine, quit: false, pending: InputKind::Line, strip_prompt: true, pen_before_char: None, output_continued: false, echo_style: Default::default(),
             disasm_cache: std::cell::RefCell::new(None),
             turn_budget: default_turn_budget(),
             world: std::cell::OnceCell::new(),
@@ -9764,7 +9849,7 @@ mod tests {
 
         let blorb = crate::graphics::test_blorb_with_pict(1, &png_bytes_2x2_red());
         let mut sess = GameSession {
-            machine, quit: false, pending: InputKind::Line, strip_prompt: true, pen_before_char: None, output_continued: false,
+            machine, quit: false, pending: InputKind::Line, strip_prompt: true, pen_before_char: None, output_continued: false, echo_style: Default::default(),
             disasm_cache: std::cell::RefCell::new(None),
             turn_budget: default_turn_budget(),
             world: std::cell::OnceCell::new(),
@@ -9826,7 +9911,7 @@ mod tests {
         machine.screen.v6 = Some(V6Windows::new(windows, 1));
 
         let mut sess = GameSession {
-            machine, quit: false, pending: InputKind::Line, strip_prompt: true, pen_before_char: None, output_continued: false,
+            machine, quit: false, pending: InputKind::Line, strip_prompt: true, pen_before_char: None, output_continued: false, echo_style: Default::default(),
             disasm_cache: std::cell::RefCell::new(None),
             turn_budget: default_turn_budget(),
             world: std::cell::OnceCell::new(),
@@ -9926,7 +10011,7 @@ mod tests {
         machine.screen.v6 = Some(V6Windows::new(windows, 1));
 
         let mut sess = GameSession {
-            machine, quit: false, pending: InputKind::Line, strip_prompt: true, pen_before_char: None, output_continued: false,
+            machine, quit: false, pending: InputKind::Line, strip_prompt: true, pen_before_char: None, output_continued: false, echo_style: Default::default(),
             disasm_cache: std::cell::RefCell::new(None),
             turn_budget: default_turn_budget(),
             world: std::cell::OnceCell::new(),
@@ -9984,7 +10069,7 @@ mod tests {
         windows[7] = ZWindow::new(0, 0, 0xFFFF, 0xFFFF);
         machine.screen.v6 = Some(V6Windows::new(windows, 7));
         let mut sess = GameSession {
-            machine, quit: false, pending: InputKind::Line, strip_prompt: true, pen_before_char: None, output_continued: false,
+            machine, quit: false, pending: InputKind::Line, strip_prompt: true, pen_before_char: None, output_continued: false, echo_style: Default::default(),
             disasm_cache: std::cell::RefCell::new(None),
             turn_budget: default_turn_budget(),
             world: std::cell::OnceCell::new(),
@@ -10596,7 +10681,7 @@ mod tests {
             &metric,
         );
         GameSession {
-            machine, quit: false, pending: InputKind::Line, strip_prompt: true, pen_before_char: None, output_continued: false,
+            machine, quit: false, pending: InputKind::Line, strip_prompt: true, pen_before_char: None, output_continued: false, echo_style: Default::default(),
             disasm_cache: std::cell::RefCell::new(None),
             turn_budget: default_turn_budget(),
             world: std::cell::OnceCell::new(),

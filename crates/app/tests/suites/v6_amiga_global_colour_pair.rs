@@ -771,7 +771,7 @@ fn render_echo(s: &GameSession, lines: &[String], honor: bool, typed: &str, comm
     }
     state.push_transcript_kind(">", app::state::TranscriptKind::Story);
     if committed {
-        state.append_to_last_transcript_line(typed);
+        state.append_to_last_transcript_line(typed, Default::default());
     } else {
         state.input.set(typed, true);
     }
@@ -827,11 +827,25 @@ fn the_amigas_typed_echo_stands_on_the_same_pair_as_its_committed_one() {
     let (area, live) = render_echo(&s, &lines, true, "look", false);
     let (_, done) = render_echo(&s, &lines, true, "look", true);
     let live_span = span_look(area, &live, ">look");
-    assert_eq!(
-        live_span,
-        span_look(area, &done, ">look"),
-        "{who}: the echo and the committed text must render the same characters the same way",
+    // SQ-1758: the committed command is drawn in the `transcript_input` ink so it
+    // stands out from story text, on the same machine page; the game's `>` and the
+    // cell after the span still agree exactly.
+    let done_span = span_look(area, &done, ">look");
+    let input_ink = format!(
+        "{:?}",
+        app::colors::ColorScheme::terminal_default_in(s.machine.palette())
+            .theme
+            .get("transcript_input")
+            .style
+            .fg
+            .expect("the theme names an input ink")
     );
+    assert_eq!(live_span[0], done_span[0], "{who}: the game's `>` is the same in both");
+    assert_eq!(live_span[5], done_span[5], "{who}: and so is the cell after the span");
+    for (l, d) in live_span[1..=4].iter().zip(&done_span[1..=4]) {
+        assert_eq!(l.1, d.1, "{who}: the committed command stays on the machine's page");
+        assert_eq!(d.0, input_ink, "{who}: and is drawn in the transcript_input ink");
+    }
     for cell in &live_span[1..=4] {
         assert_eq!(
             (cell.0.clone(), cell.1.clone()),

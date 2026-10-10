@@ -82,7 +82,7 @@ fn apply_command(state: &mut AppState, cmd: &str, r: &TurnResult) {
         state.mark_screen_clear();
     }
     if state.last_transcript_line_is_story() {
-        state.append_to_last_transcript_line(cmd);
+        state.append_to_last_transcript_line(cmd, Default::default());
     } else {
         state.push_transcript_kind(&format!("> {}", cmd), TranscriptKind::Input);
     }

@@ -733,7 +733,7 @@ fn hybrid_pane_with_input(
     if let Some(cmd) = echo {
         // Inline mode: the game's own `>` is the last transcript line, so the
         // committed command is appended to it (turn.rs's echo path).
-        state.append_to_last_transcript_line(cmd);
+        state.append_to_last_transcript_line(cmd, Default::default());
     }
     state.input.set(typed, true);
     let mut buf = Buffer::empty(area);
@@ -825,10 +825,9 @@ fn a_game_that_sets_no_page_types_the_live_input_in_the_theme() {
     assert_eq!(Some(text.fg), theme_input_style().fg, "with no game pair the theme still owns the typed line");
 }
 
-/// The committed echo (`>look` in scrollback) already resolved the game's pair —
-/// it inherits the prompt line's trailing run (SQ-0269) — and must keep doing so,
-/// in the SAME pair the live line now uses. Pinning both together is what stops
-/// the two halves of one prompt from diverging again.
+/// The committed echo (`>look` in scrollback) keeps the game's PAGE — it inherits the
+/// prompt line's trailing run (SQ-0269) — while its ink is `transcript_input`
+/// (SQ-1758). The live line keeps the game's whole pair.
 #[test]
 fn zork0_hybrid_echoes_the_committed_command_in_the_live_inputs_pair() {
     let Some((s, turn)) = v6_at_prompt("zork0-r393-s890714.z6", true) else { return };
@@ -841,6 +840,11 @@ fn zork0_hybrid_echoes_the_committed_command_in_the_live_inputs_pair() {
     let (echo, _) = drawn_cells(&buf, area, "xyzzyq");
     let (live, _) = drawn_cells(&buf, area, "plugh");
     eprintln!("Zork0 hybrid echo: fg={:?} bg={:?}; live: fg={:?} bg={:?}", echo.fg, echo.bg, live.fg, live.bg);
-    assert_eq!((echo.fg, echo.bg), (black, white), "the committed echo keeps the game's pair");
-    assert_eq!((live.fg, live.bg), (echo.fg, echo.bg), "the live line and its committed echo are one prompt");
+    // SQ-1758: the committed command stands out in the `transcript_input` ink, but
+    // stays on the game's page (the prompt line's band) -- the live line keeps the
+    // game's whole pair.
+    let input_ink = app::colors::ColorScheme::terminal_default().theme.get("transcript_input").style.fg;
+    assert_eq!(echo.bg, white, "the committed echo keeps the game's page");
+    assert_eq!(Some(echo.fg), input_ink, "and is drawn in the transcript_input ink");
+    assert_eq!((live.fg, live.bg), (black, white), "the live line keeps the game's pair");
 }

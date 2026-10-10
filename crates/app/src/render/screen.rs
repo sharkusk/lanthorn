@@ -12439,8 +12439,8 @@ mod tests {
         let last = state.transcript.len() - 1;
         state.transcript_runs[last] = vec![
             // "bbbbb" bold (chars 6..11), the trailing "cc" of "ccccc" italic.
-            crate::state::StyleRun { start: 6, end: 11, bits: 2, fg: 0, bg: 0, link: 0, glk_style: 0 },
-            crate::state::StyleRun { start: 15, end: 17, bits: 4, fg: 0, bg: 0, link: 0, glk_style: 0 },
+            crate::state::StyleRun { start: 6, end: 11, bits: 2, fg: 0, bg: 0, link: 0, glk_style: 0, ink: 0 },
+            crate::state::StyleRun { start: 15, end: 17, bits: 4, fg: 0, bg: 0, link: 0, glk_style: 0, ink: 0 },
         ];
         let (main, _) = build_main_text(&state, 12, 8);
         assert_eq!(main.lines, vec!["aaaaa bbbbb", "ccccc"], "wraps into two rows");
@@ -12451,7 +12451,7 @@ mod tests {
         // Reverse/fixed-pitch bits are dropped (no block to swap in the prose
         // raster, and the bitmap font is fixed-pitch already) — and a line with
         // no emphasis at all allocates no style row.
-        state.transcript_runs[last] = vec![crate::state::StyleRun { start: 0, end: 17, bits: 1 | 8, fg: 0, bg: 0, link: 0, glk_style: 0 }];
+        state.transcript_runs[last] = vec![crate::state::StyleRun { start: 0, end: 17, bits: 1 | 8, fg: 0, bg: 0, link: 0, glk_style: 0, ink: 0 }];
         let (main, _) = build_main_text(&state, 12, 8);
         assert!(main.styles.iter().all(|r| r.is_empty()), "reverse/fixed-pitch leave every row roman, got {:?}", main.styles);
     }
@@ -13912,7 +13912,7 @@ mod tests {
     #[test]
     fn inline_buffer_renders_styled_runs() {
         let mut b = inline_buffer("abCD");
-        b.runs = vec![vec![StyleRun { start: 2, end: 4, bits: 0x02, fg: 0, bg: 0, link: 0, glk_style: 0 }]];
+        b.runs = vec![vec![StyleRun { start: 2, end: 4, bits: 0x02, fg: 0, bg: 0, link: 0, glk_style: 0, ink: 0 }]];
         let mut state = AppState::default();
         state.colors = crate::colors::ColorScheme::terminal_default();
         let area = Rect::new(0, 0, 10, 3);
@@ -13979,7 +13979,7 @@ mod tests {
         let mut b = inline_buffer("go [here] now");
         // "here" — chars 4..8 — is the link, as a game's own
         // `glk_set_hyperlink(7)` around those glyphs would leave it.
-        b.runs = vec![vec![StyleRun { start: 4, end: 8, bits: 0, fg: 0, bg: 0, link: 7, glk_style: 0 }]];
+        b.runs = vec![vec![StyleRun { start: 4, end: 8, bits: 0, fg: 0, bg: 0, link: 7, glk_style: 0, ink: 0 }]];
         let mut state = AppState::default();
         state.colors = crate::colors::ColorScheme::terminal_default();
         let area = Rect::new(3, 2, 20, 3);

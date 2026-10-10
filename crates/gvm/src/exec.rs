@@ -3456,6 +3456,14 @@ impl Machine {
         self.glk.style_colour(wintype, style)
     }
 
+    /// The non-colour stylehints (Weight, Oblique) a `style` renders with for a
+    /// `wintype` window, from the game's `glk_stylehint_set` table — the
+    /// attribute counterpart of [`Self::style_colour`] (SQ-1758: a host drawing
+    /// the player's typed line needs the game's `style_Input` weight).
+    pub fn style_attrs(&self, wintype: WinType, style: GlkStyle) -> glk::StyleAttrs {
+        self.glk.style_attrs(wintype, style)
+    }
+
     /// The Glk file VFS as a standalone sidecar blob, for the host to persist
     /// to disk between sessions (mirrors the Z-machine's aux store). (SQ-0278)
     pub fn vfs_bytes(&self) -> Vec<u8> {

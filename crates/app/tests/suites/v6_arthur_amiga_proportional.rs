@@ -552,7 +552,7 @@ fn a_bold_prose_line_wraps_at_the_width_it_will_be_drawn_at() {
         fg: 0,
         bg: 0,
         link: 0,
-        glk_style: 0,
+        glk_style: 0, ink: 0
     }]];
     state.transcript_images = vec![None];
 
