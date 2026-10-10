@@ -6,7 +6,7 @@ All notable changes to lanthorn are recorded here.
 [`.github/workflows/release.yml`](.github/workflows/release.yml)). A tag whose
 name contains a hyphen — `v0.1.0-beta.1`, `v0.2.0-rc.1` — is published as a
 **pre-release**; a bare `vMAJOR.MINOR.PATCH` is a full release. The workspace
-version in `Cargo.toml` (currently `0.9.3`) versions every crate and every
+version in `Cargo.toml` (currently `0.9.4`) versions every crate and every
 binary's `--version` at once, and carries any pre-release suffix so a build
 identifies itself without reading its git hash.
 
@@ -19,13 +19,22 @@ Absolute URLs or no link.
 
 ---
 
-## Unreleased
+## v0.9.4 — 2026-10-10
 
-*This section is drained when a version is cut. README.md describes the
-RELEASED build; prose for a feature that is in `main` but not yet released
-goes into the README in place, at its normal destination, marked with the
-visible tag `*Next release:*`. `release.yml` refuses to cut a release
-while any such tag, or this Unreleased section, still exists.*
+### Highlights
+
+- **The commands you type now stand out from the story text** in the default
+  inline-prompt mode, drawn in their own colour and honouring a game's own
+  input styling.
+- **IFDB search notices games you already have**, even in a library subfolder,
+  and shows the true average rating.
+- **Maps are right from the first room.** Inform 7 Glulx games know the opening
+  room's contents before your first move, Dialog games map again, and a character
+  name on a status line is no longer mistaken for a room.
+- **Rewind keeps the transcript intact**, including text printed after a
+  "press any key" pause.
+
+### Changed
 
 - **The commands you type now stand out from the story text.** In the default
   inline-prompt mode your command used to blend into the game's own prose; it is
@@ -33,20 +42,57 @@ while any such tag, or this Unreleased section, still exists.*
   command bar uses), while the `>` prompt stays story-coloured. If a game styles
   its own input line, lanthorn honours that too: a Glulx game's input colour,
   weight and slant, and a Z-machine game's bold, italic or colour switched on for
-  your command specifically (colours only while game colours are on). On a page the
-  game has coloured, your command keeps the game's background and switches to the
-  game's own ink if your theme's colour would be hard to read there.
+  your command specifically (colours only while game colours are on). A game that
+  merely colours all its text, like Photopia, is not treated as styling your
+  input. On a page the game has coloured, your command keeps the game's
+  background and switches to the game's own ink if your theme's colour would be
+  hard to read there.
 - **IFDB search now notices games you already have in a subfolder.** If the game
   you pick is already somewhere in your library, even tucked away in a folder like
   `infocom/` or `glulx/`, the download chooser says so at the top with where it
   lives, and marks each file you already have in a subfolder (`✓ in glulx/`),
   instead of letting you fetch a duplicate.
+- **IFDB search results show the true average rating**, to one decimal like the
+  story list, rather than a rounded half-star value.
+- **Hint programs that read the screen width now lay themselves out to the
+  hints panel**, instead of assuming an 80x24 screen.
+
+### Fixed
+
 - **A document on a host that compresses its downloads now shows its real size
   and previews.** The documents chooser used to show the compressed size (a
   295 KB page read as 44 KB), and previewing it failed with a bogus "Too large to
   download (over 100 MB)". Sizes are now the file's true size, shown blank when a
   host will not say, and a too-large message names the limit that was actually
   hit.
+- **Photopia clears its page properly.** When a Glulx game wipes the screen by
+  closing its story window, the old scene no longer stays in view above the new
+  text on a tall pane.
+- **Dialog games get maps again.** The Impossible Bottle and similar Dialog
+  stories had lost their automap; only menu-driven Version 6 games such as
+  Journey are left unmapped.
+- **The first room is mapped and saved correctly.** A save made before your
+  first move now records your location, and resuming, restoring or restarting no
+  longer maps a status line that is not a room. Beyond Zork's character
+  sheet, which shows your character's name (Frank Booth by default) on the status
+  line, is no longer mistaken for a room, on the map or in the status and save
+  summaries.
+- **Inform 7 Glulx games know their opening room.** Room contents and item
+  sightings are available before your first move, games whose rooms have no exits
+  (like Toby's Nose) are recognised, and a room's objects are listed by the word
+  the room text used (carpet, sofa, door) without the scent, kind and person
+  scaffolding Inform keeps internally. "He" and "him" style placeholders are no
+  longer listed as room contents.
+- **Word reveal no longer lights up direction words and pronouns** such as
+  "up", "out", "north" or "he" on Inform games.
+- **Scott Adams map labels are shorter.** Rooms described by a sentence such as
+  "I'm on the shore of a lake" are labelled on the map as "shore of a lake".
+- **Hints panel:** a "type HINT" suggestion no longer appears over a running hint
+  companion, or for a game whose HINT command only advertises Infocom's printed
+  InvisiClues booklet (Beyond Zork).
+- **Rewind keeps your transcript.** Rewinding used to rebuild the transcript from
+  your commands and lose text printed after a "press any key" pause and any
+  styling; it now cuts the real transcript back to the earlier turn.
 
 ## v0.9.3 — 2026-10-07
 
