@@ -5877,13 +5877,25 @@ impl AppState {
     ///
     /// The prompt's style is read from the transcript's last line -- its trailing
     /// run, else the colour prevailing before it -- never from engine memory, which
-    /// a Save State restore would reset.
+    /// a Save State restore would reset. With neither, there is no reference and
+    /// the story's ink (and Z-machine bits) count as no opinion.
     pub fn input_style_against_prompt(&self, raw: crate::engine::InputStyle) -> crate::engine::InputStyle {
         let trailing = self.transcript_runs.last().and_then(|runs| runs.last());
+        let prevailing = self.prevailing_run_colour_before(self.transcript.len());
+        // Nothing on screen to compare with (the boot banner is pushed as flat text):
+        // a story's own colour wins only by being SHOWN to differ from its prompt, so
+        // the theme applies. The same goes for Z-machine bits; Glulx hints still stand.
+        if trailing.is_none() && prevailing.is_none() {
+            return crate::engine::InputStyle {
+                bits: if raw.bits_vs_prompt { 0 } else { raw.bits },
+                ink: 0,
+                bits_vs_prompt: raw.bits_vs_prompt,
+            };
+        }
         let bits = trailing.map(|r| r.bits & 0x07).unwrap_or(0);
         let fg = match trailing {
             Some(r) if r.fg != 0 => r.fg,
-            _ => self.prevailing_run_colour_before(self.transcript.len()).map(|(fg, _)| fg).unwrap_or(0),
+            _ => prevailing.map(|(fg, _)| fg).unwrap_or(0),
         };
         crate::engine::InputStyle {
             bits: if raw.bits_vs_prompt && raw.bits == bits { 0 } else { raw.bits },
@@ -7007,6 +7019,18 @@ mod tests {
         let s = prompt_in(0x02, ZColour::True24(0));
         let st = s.input_style_against_prompt(raw(0x02, black, false));
         assert_eq!((st.bits, st.ink), (0x02, 0));
+    }
+
+    #[test]
+    fn with_nothing_on_screen_to_compare_the_story_has_no_opinion() {
+        use zvm::screen::ZColour;
+        let mut s = AppState::default();
+        s.push_transcript_kind(">", TranscriptKind::Story); // flat banner text: no runs anywhere
+        let red = pack_zcolour(ZColour::Standard(3));
+        let z = s.input_style_against_prompt(raw(0x02, red, true));
+        assert_eq!((z.bits, z.ink), (0, 0), "Z-machine: ink and bits both drop");
+        let g = s.input_style_against_prompt(raw(0x02, red, false));
+        assert_eq!((g.bits, g.ink), (0x02, 0), "Glulx: bits stand, ink drops");
     }
 
     #[test]

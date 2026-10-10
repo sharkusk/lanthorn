@@ -248,3 +248,24 @@ fn glulx_photopia_commands_take_the_theme_colour_on_the_games_page() {
         let _ = std::fs::remove_dir_all(&home);
     }
 }
+
+/// Photopia z5's very FIRST command, at the boot "Would you like instructions?"
+/// prompt: the banner is flat text with no colour runs, so there is nothing on
+/// screen to compare the story's page ink with -- no opinion, theme colour.
+#[test]
+fn the_first_command_at_the_boot_banner_prompt_has_no_story_ink() {
+    for honor in [true, false] {
+        let home = app::scratch_dir("sq1758-banner");
+        let mut b = boot(&home, honor);
+        assert!(
+            b.state.transcript_runs.last().is_none_or(|r| r.is_empty()),
+            "premise: the banner prompt line carries no runs"
+        );
+        play(&mut b, "no");
+        let (line, text) = typed_spans(&b).into_iter().next().expect("a typed span");
+        assert_eq!(text, "no");
+        let run = b.state.transcript_runs[line].iter().find(|r| r.glk_style == GLK_STYLE_TYPED_INPUT).unwrap();
+        assert_eq!((run.ink, run.bits), (0, 0), "honor={honor}: {run:?}");
+        let _ = std::fs::remove_dir_all(&home);
+    }
+}
