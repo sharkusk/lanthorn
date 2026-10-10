@@ -356,15 +356,16 @@ fn mount(path: &Path) -> Option<MountedVolume> {
 /// one read it always did. The nine packed 5.25-inch volumes in the corpus are
 /// the only ones that pay, and what they pay is the reads they need.
 fn mount_across(path: &Path, members: Option<&[(u64, PathBuf)]>) -> Option<MountedVolume> {
-    let raw = std::fs::read(path).ok()?;
-    blorb::medium::DiskImage::detect(&raw)?;
-    let disk = blorb::medium::MountedDisk::mount_set(raw, || {
+    // Opened through `blorb::image`, so a launch that has already read this
+    // image (the story step did) does not read it again (SQ-1762).
+    let file = blorb::image::open_disk(path)?;
+    let disk = blorb::medium::MountedDisk::mount_file(&file, || {
         members
             .unwrap_or_default()
             .iter()
             .map(|(_, m)| m)
             .filter(|m| m.as_path() != path)
-            .filter_map(|m| std::fs::read(m).ok())
+            .filter_map(|m| blorb::image::open_disk(m).map(|f| f.bytes().to_vec()))
             .collect()
     })
     .ok()?;

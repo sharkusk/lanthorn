@@ -27,6 +27,10 @@ goes into the README in place, at its normal destination, marked with the
 visible tag `*Next release:*`. `release.yml` refuses to cut a release
 while any such tag, or this Unreleased section, still exists.*
 
+### Fixed
+
+- **Opening a game from a disk image reads the image once.** Launching a story off a disk image used to read the whole file four or five times over, once per step of the launch. It is read once now and shared, which matters most for a big image on a network drive.
+
 ## v0.9.4 — 2026-10-10
 
 ### Highlights

@@ -346,6 +346,10 @@ fn without_test_modules(src: &str) -> String {
     out
 }
 
+/// `MountedDisk::mount_file` with no companions: [`MountedDisk::mount`] for an
+/// image already opened through `blorb::image`.
+const PLATTER_ALONE_FILE: &str = "MountedDisk::mount_file(&file, Vec::new)";
+
 /// **No production code outside the seam mounts one platter** (SQ-0961).
 ///
 /// Asserted over the source because there is no runtime signal for it: a call
@@ -368,7 +372,10 @@ fn no_production_code_mounts_the_platter_alone() {
         // A plain substring scan: it cannot tell a call from a mention, so a file
         // naming the function in prose is reported. Reword the prose rather than
         // routing around the rule.
-        if src.contains("MountedDisk::mount(") {
+        //
+        // `mount_file(.., Vec::new)` is the same mount from an image opened through
+        // `blorb::image` (SQ-1762), with the same "no companions" meaning.
+        if src.contains("MountedDisk::mount(") || src.contains(PLATTER_ALONE_FILE) {
             offenders.push(name);
         }
     }
@@ -398,7 +405,7 @@ fn the_seam_itself_is_what_the_rule_exempts() {
         .find(|(n, _)| n.ends_with(THE_SEAM))
         .expect("cli-host/src/disk_set.rs is part of the checkout");
     assert!(
-        seam.1.contains("MountedDisk::mount("),
+        seam.1.contains("MountedDisk::mount(") || seam.1.contains(PLATTER_ALONE_FILE),
         "the exempt file no longer calls the platter mount — if that is deliberate, delete the \
          exemption rather than leaving a rule with a hole in it",
     );

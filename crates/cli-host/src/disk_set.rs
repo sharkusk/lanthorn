@@ -436,7 +436,28 @@ pub fn mount_at(
     path: &Path,
     raw: Vec<u8>,
 ) -> Result<blorb::medium::MountedDisk, blorb::medium::MountError> {
-    let disk = mount_one(path, raw)?;
+    widen_to_the_release(path, mount_one(path, raw)?)
+}
+
+/// [`mount_at`] for an image already opened through [`blorb::image`] — the
+/// door a launch uses, so the file is read once however many steps mount it
+/// (SQ-1762).
+pub fn mount_file_at(
+    path: &Path,
+    file: &blorb::image::DiskFile,
+) -> Result<blorb::medium::MountedDisk, blorb::medium::MountError> {
+    widen_to_the_release(
+        path,
+        blorb::medium::MountedDisk::mount_file(file, || sibling_images(path))?,
+    )
+}
+
+/// The widening [`mount_at`] documents: a volume with no story of its own asks
+/// its release's other volumes.
+fn widen_to_the_release(
+    path: &Path,
+    disk: blorb::medium::MountedDisk,
+) -> Result<blorb::medium::MountedDisk, blorb::medium::MountError> {
     if !disk.stories().is_empty() {
         return Ok(disk);
     }
@@ -453,14 +474,18 @@ fn mount_one(
     path: &Path,
     raw: Vec<u8>,
 ) -> Result<blorb::medium::MountedDisk, blorb::medium::MountError> {
-    blorb::medium::MountedDisk::mount_set(raw, || {
-        members(path)
-            .unwrap_or_default()
-            .into_iter()
-            .filter(|m| m != path)
-            .filter_map(|m| std::fs::read(m).ok())
-            .collect()
-    })
+    blorb::medium::MountedDisk::mount_set(raw, || sibling_images(path))
+}
+
+/// The rest of `path`'s release, as whole images and in disk order — read only
+/// when the mount asks for them.
+fn sibling_images(path: &Path) -> Vec<Vec<u8>> {
+    members(path)
+        .unwrap_or_default()
+        .into_iter()
+        .filter(|m| m != path)
+        .filter_map(|m| blorb::image::open_disk(&m).map(|f| f.bytes().to_vec()))
+        .collect()
 }
 
 /// The volume of `path`'s release that carries the one story the release holds,
@@ -476,8 +501,8 @@ fn story_elsewhere_in_the_release(path: &Path) -> Option<blorb::medium::MountedD
         if m == path {
             continue;
         }
-        let Ok(raw) = std::fs::read(&m) else { continue };
-        let Ok(disk) = blorb::medium::MountedDisk::mount(raw) else { continue };
+        let Some(file) = blorb::image::open_disk(&m) else { continue };
+        let Ok(disk) = blorb::medium::MountedDisk::mount_file(&file, Vec::new) else { continue };
         match disk.stories().len() {
             0 => {}
             1 if found.is_none() => found = Some(disk),
@@ -564,8 +589,8 @@ pub fn stories_across_the_release(path: &Path, disk: &blorb::medium::MountedDisk
         // volumes was already reassembled above from whichever volume was named,
         // so the only thing left to look for is a story a sibling holds on its
         // own — the same argument `story_elsewhere_in_the_release` makes.
-        let Ok(raw) = std::fs::read(&m) else { continue };
-        let Ok(sibling) = blorb::medium::MountedDisk::mount(raw) else { continue };
+        let Some(file) = blorb::image::open_disk(&m) else { continue };
+        let Ok(sibling) = blorb::medium::MountedDisk::mount_file(&file, Vec::new) else { continue };
         for s in sibling.stories() {
             let image = sibling.image_for(&s.name);
             match build_of(image, &s.bytes) {

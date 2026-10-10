@@ -262,7 +262,7 @@ fn scan_fonts(dir: &Path) -> Vec<UserFace> {
         let Some(disk) = path.file_name().and_then(|n| n.to_str()).map(str::to_string) else {
             continue;
         };
-        let Ok(bytes) = std::fs::read(&path) else { continue };
+        let Ok(bytes) = blorb::image::read_bytes(&path) else { continue };
         out.extend(faces_on(&path, &disk, bytes));
     }
     out

@@ -505,7 +505,9 @@ impl InterpreterProfile {
 
     /// The release medium at `path`, or `None` when it is not one. The single
     /// read this module does, and only the fallback — [`Self::resolve`]'s
-    /// `mounted_as` is preferred, being both per-story and already paid for.
+    /// `mounted_as` is preferred, being both per-story and already paid for. It
+    /// goes through [`blorb::image`], so even the fallback costs no second read
+    /// of an image the launch has already opened (SQ-1762).
     ///
     /// Content, not extension: [`blorb::medium::DiskImage::detect`] reads the
     /// filesystem, exactly as `PictSource::resolve` and `hints::read_story_file`
@@ -514,8 +516,7 @@ impl InterpreterProfile {
     /// reaches the same conclusion off the same bytes (SQ-0839) — this only
     /// supplies the file.
     fn medium(path: &Path) -> Option<blorb::medium::DiskImage> {
-        let raw = std::fs::read(path).ok()?;
-        blorb::medium::DiskImage::detect(&raw)
+        blorb::image::detect_at(path)
     }
 
     /// The interpreter number to advertise in header `$1E`, or `None` to leave

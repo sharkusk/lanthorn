@@ -1003,11 +1003,8 @@ pub struct DiskStories {
 /// [`mounted_stories`], keeping the difference between "not a disk" and "a disk
 /// with nothing playable on it" (see [`DiskScan`]).
 pub fn scan_mounted_stories(path: &Path) -> DiskScan {
-    let Ok(raw) = std::fs::read(path) else { return DiskScan::NotADisk };
-    if blorb::medium::DiskImage::detect(&raw).is_none() {
-        return DiskScan::NotADisk;
-    }
-    let Ok(disk) = mount_disk(path, raw) else { return DiskScan::NotADisk };
+    let Some(file) = blorb::image::open_disk(path) else { return DiskScan::NotADisk };
+    let Ok(disk) = mount_disk(path, &file) else { return DiskScan::NotADisk };
     let format = disk.format();
     let mut stories: Vec<_> = disk
         .stories()
@@ -1258,8 +1255,8 @@ fn saga_us_platform_slug(platform: scott::SagaPlatform) -> &'static str {
     }
 }
 
-/// Open the disk image `path`, whose bytes are `raw`, with the other volumes of
-/// its multi-disk release available to it (SQ-0864).
+/// Open the disk image `path`, already opened as `file`, with the other volumes
+/// of its multi-disk release available to it (SQ-0864).
 ///
 /// **The one place `app` mounts a disk**, and the reason it is one place: a
 /// story can live on no single floppy. The Apple II 5.25-inch presses of
@@ -1280,9 +1277,112 @@ fn saga_us_platform_slug(platform: scott::SagaPlatform) -> &'static str {
 /// because there is nothing left to drift.
 fn mount_disk(
     path: &Path,
-    raw: Vec<u8>,
+    file: &blorb::image::DiskFile,
 ) -> Result<blorb::medium::MountedDisk, blorb::medium::MountError> {
-    cli_host::disk_set::mount_at(path, raw)
+    cli_host::disk_set::mount_file_at(path, file)
+}
+
+/// [`read_story_file`]'s disk-image arm: the story `want` names (or the format's
+/// tiebreak) off `file`, which the caller has already opened and so already paid
+/// to read (SQ-1762).
+fn read_story_off_disk(
+    path: &Path,
+    want: Option<&str>,
+    file: &blorb::image::DiskFile,
+) -> io::Result<(Vec<u8>, Option<DiskImage>)> {
+    // An original release floppy, whichever machine pressed it (SQ-0719,
+    // SQ-0837, SQ-0840). One mount path answers for every format: take the file
+    // whose CONTENT is a story, because a release disk's names are a tiebreak
+    // and never a guarantee — AmigaDOS has no extensions at all, and every Atari
+    // ST story is called `STORY.DAT`.
+    let disk = mount_disk(path, file)
+        .map_err(|e| io::Error::new(io::ErrorKind::InvalidData, e.to_string()))?;
+    // A named story is the browser's row (SQ-0859): the picker listed every
+    // story on the image and this is the one the player chose, so it is
+    // looked up by that same name and NOT quietly replaced by the tiebreak
+    // if it has gone — an image edited between the scan and the launch must
+    // say so rather than open a different game.
+    if let Some(want) = want {
+        // A named story is either one `disk.stories()` already answers for
+        // (Z-code/Glulx/Blorb), or a Scott Adams program file `stories()`
+        // never lists — a Commodore *Mysterious Adventures* row (SQ-1414).
+        let found = disk
+            .stories()
+            .into_iter()
+            .find(|s| s.name == want || s.name.eq_ignore_ascii_case(want))
+            .or_else(|| {
+                scott_disk_stories(&disk)
+                    .into_iter()
+                    .find(|s| s.name == want || s.name.eq_ignore_ascii_case(want))
+            });
+        return match found {
+            // `image_for`, not `format`: on a hybrid disc the story's own
+            // half of the platter decides, so a DOS build sitting on a
+            // Macintosh filesystem reports DOS and advertises the IBM PC's
+            // interpreter number rather than the Macintosh's (SQ-0876).
+            // Every other medium answers its one format, as before.
+            Some(story) => {
+                let image = disk.image_for(&story.name);
+                Ok((story.bytes, Some(image)))
+            }
+            None => Err(io::Error::new(
+                io::ErrorKind::NotFound,
+                format!("no story named '{want}' on the disk image {}", path.display()),
+            )),
+        };
+    }
+    if let Some(story) = disk.story() {
+        let image = disk.image_for(&story.name);
+        return Ok((story.bytes, Some(image)));
+    }
+    // `MountedDisk::story`'s tiebreak is Z-code/Glulx/Blorb-only by
+    // design (`scott_disk_stories`'s own doc), so it answers `None` for
+    // a disk whose one story is a Scott Adams database — every Atari
+    // 8-bit or Apple II US S.A.G.A. side (SQ-1470). A bare `lanthorn
+    // <disk.atr>` launch names no entry (`startup.rs`: "the format's own
+    // tiebreak"), and has to reach that one candidate the same way
+    // `scott-cli` does without `--story`. Ambiguous (zero, or more than
+    // one) falls through to the refusal below, exactly as before.
+    let ScottScan { stories: mut scott, crunched } = scott_disk_scan(&disk);
+    if scott.len() == 1 {
+        let story = scott.remove(0);
+        let image = disk.image_for(&story.name);
+        return Ok((story.bytes, Some(image)));
+    }
+    // SQ-1488: an honest, specific refusal for a disk whose one program
+    // is crunched and could not be turned into a playable game — rather
+    // than the generic "no story file" message below, which used to be
+    // the only thing a disk like the Hulk collection's could ever say
+    // (every file scanned, none of them a Scott table in the clear).
+    if scott.is_empty() {
+        if let Some(crunched) = crunched {
+            let name = crunched.name();
+            let reason = match crunched {
+                CrunchedProgram::NotUnpacked(_) => "lanthorn could not unpack it",
+                CrunchedProgram::Unrecognised(_) => {
+                    "lanthorn unpacked it, but it is not a Scott Adams game lanthorn recognises"
+                }
+            };
+            return Err(io::Error::new(
+                io::ErrorKind::InvalidData,
+                format!(
+                    "the disk image {} holds a crunched program ('{name}') — {reason}",
+                    path.display(),
+                ),
+            ));
+        }
+    }
+    Err(io::Error::new(
+        io::ErrorKind::NotFound,
+        format!(
+            "no story file on the disk image {} ({} files{}; is this the boot disk?)",
+            path.display(),
+            disk.file_count(),
+            // Only some formats keep a volume name; the message says so
+            // when there is one and reads naturally when there is not.
+            disk.volume_name().map(|n| format!(" on {n}")).unwrap_or_default(),
+        ),
+    ))
 }
 
 /// Read a story file's executable bytes, transparently unwrapping a ZIP whose
@@ -1300,112 +1400,20 @@ fn mount_disk(
 /// what a bare path has always opened, and what every single-story disk and
 /// single-story archive means whatever is passed.
 fn read_story_file(path: &Path, want: Option<&str>) -> io::Result<(Vec<u8>, Option<DiskImage>)> {
-    let raw = std::fs::read(path)?;
-    // An original release floppy, whichever machine pressed it (SQ-0719,
-    // SQ-0837, SQ-0840). One mount path answers for every format: take the file
-    // whose CONTENT is a story, because a release disk's names are a tiebreak
-    // and never a guarantee — AmigaDOS has no extensions at all, and every Atari
-    // ST story is called `STORY.DAT`.
-    //
-    // `detect` first because `mount` consumes the bytes, and a plain story file
-    // has to fall through to the paths below with them intact.
-    if blorb::medium::DiskImage::detect(&raw).is_some() {
-        let disk = mount_disk(path, raw)
-            .map_err(|e| io::Error::new(io::ErrorKind::InvalidData, e.to_string()))?;
-        // A named story is the browser's row (SQ-0859): the picker listed every
-        // story on the image and this is the one the player chose, so it is
-        // looked up by that same name and NOT quietly replaced by the tiebreak
-        // if it has gone — an image edited between the scan and the launch must
-        // say so rather than open a different game.
-        if let Some(want) = want {
-            // A named story is either one `disk.stories()` already answers for
-            // (Z-code/Glulx/Blorb), or a Scott Adams program file `stories()`
-            // never lists — a Commodore *Mysterious Adventures* row (SQ-1414).
-            let found = disk
-                .stories()
-                .into_iter()
-                .find(|s| s.name == want || s.name.eq_ignore_ascii_case(want))
-                .or_else(|| {
-                    scott_disk_stories(&disk)
-                        .into_iter()
-                        .find(|s| s.name == want || s.name.eq_ignore_ascii_case(want))
-                });
-            return match found {
-                // `image_for`, not `format`: on a hybrid disc the story's own
-                // half of the platter decides, so a DOS build sitting on a
-                // Macintosh filesystem reports DOS and advertises the IBM PC's
-                // interpreter number rather than the Macintosh's (SQ-0876).
-                // Every other medium answers its one format, as before.
-                Some(story) => {
-                    let image = disk.image_for(&story.name);
-                    Ok((story.bytes, Some(image)))
-                }
-                None => Err(io::Error::new(
-                    io::ErrorKind::NotFound,
-                    format!("no story named '{want}' on the disk image {}", path.display()),
-                )),
-            };
-        }
-        if let Some(story) = disk.story() {
-            let image = disk.image_for(&story.name);
-            return Ok((story.bytes, Some(image)));
-        }
-        // `MountedDisk::story`'s tiebreak is Z-code/Glulx/Blorb-only by
-        // design (`scott_disk_stories`'s own doc), so it answers `None` for
-        // a disk whose one story is a Scott Adams database — every Atari
-        // 8-bit or Apple II US S.A.G.A. side (SQ-1470). A bare `lanthorn
-        // <disk.atr>` launch names no entry (`startup.rs`: "the format's own
-        // tiebreak"), and has to reach that one candidate the same way
-        // `scott-cli` does without `--story`. Ambiguous (zero, or more than
-        // one) falls through to the refusal below, exactly as before.
-        let ScottScan { stories: mut scott, crunched } = scott_disk_scan(&disk);
-        if scott.len() == 1 {
-            let story = scott.remove(0);
-            let image = disk.image_for(&story.name);
-            return Ok((story.bytes, Some(image)));
-        }
-        // SQ-1488: an honest, specific refusal for a disk whose one program
-        // is crunched and could not be turned into a playable game — rather
-        // than the generic "no story file" message below, which used to be
-        // the only thing a disk like the Hulk collection's could ever say
-        // (every file scanned, none of them a Scott table in the clear).
-        if scott.is_empty() {
-            if let Some(crunched) = crunched {
-                let name = crunched.name();
-                let reason = match crunched {
-                    CrunchedProgram::NotUnpacked(_) => "lanthorn could not unpack it",
-                    CrunchedProgram::Unrecognised(_) => {
-                        "lanthorn unpacked it, but it is not a Scott Adams game lanthorn recognises"
-                    }
-                };
-                return Err(io::Error::new(
-                    io::ErrorKind::InvalidData,
-                    format!(
-                        "the disk image {} holds a crunched program ('{name}') — {reason}",
-                        path.display(),
-                    ),
-                ));
-            }
-        }
-        return Err(io::Error::new(
-            io::ErrorKind::NotFound,
-            format!(
-                "no story file on the disk image {} ({} files{}; is this the boot disk?)",
-                path.display(),
-                disk.file_count(),
-                // Only some formats keep a volume name; the message says so
-                // when there is one and reads naturally when there is not.
-                disk.volume_name().map(|n| format!(" on {n}")).unwrap_or_default(),
-            ),
-        ));
-    }
+    // The file is read ONCE (SQ-1762): a disk image comes back mounted-ready and
+    // is shared with every other step of the launch; anything else comes back as
+    // the bytes read to find that out.
+    let raw = match blorb::image::open(path)? {
+        blorb::image::Opened::Disk(file) => return read_story_off_disk(path, want, &file),
+        blorb::image::Opened::Plain(raw) => raw,
+    };
     if raw.starts_with(ZIP_MAGIC) {
         // A ZIP is somebody's DOWNLOAD, not a lanthorn container (the `.lanthorn`
         // archive is that, and it is a zip too — see `crate::archive`). So it is
         // opened the way a release floppy is: by asking what is INSIDE each
         // entry, not what its name claims. SQ-1085.
         // A named entry is the browser's row (SQ-1098), exactly as it is on a
-        // disk image twenty lines above: the picker listed every story in the
+        // disk image ([`read_story_off_disk`]): the picker listed every story in the
         // archive and this is the one the player chose.
         let scan = zip_story(path, want)?;
         return match scan.story {
@@ -1963,7 +1971,7 @@ fn apple_scrambled_picture_files(boot: &Path, side: &Path) -> Vec<(String, Vec<u
     let Some(look) = saga_apple_look_table(boot) else {
         return Vec::new();
     };
-    let Ok(raw) = std::fs::read(side) else {
+    let Ok(raw) = blorb::image::read_bytes(side) else {
         return Vec::new();
     };
     let Some(image) = blorb::medium::apple_raw_sectors(&raw) else {
@@ -1996,13 +2004,10 @@ fn apple_scrambled_picture_files(boot: &Path, side: &Path) -> Vec<(String, Vec<u
 
 /// One disk image's picture files, by `platform`'s naming rule.
 fn picture_files_on(path: &Path, platform: scott::SagaPlatform) -> Vec<(String, Vec<u8>)> {
-    let Ok(raw) = std::fs::read(path) else {
+    let Some(file) = blorb::image::open_disk(path) else {
         return Vec::new();
     };
-    if blorb::medium::DiskImage::detect(&raw).is_none() {
-        return Vec::new();
-    }
-    let Ok(disk) = mount_disk(path, raw) else {
+    let Ok(disk) = mount_disk(path, &file) else {
         return Vec::new();
     };
     let names: fn(&str) -> bool = match platform {
@@ -2041,9 +2046,8 @@ pub fn saga_apple_scrambled(path: &Path) -> bool {
 /// whether this is one of §7.4's scrambled three, and which close-ups it draws
 /// — so that neither has to know how a `.dsk` is opened.
 fn saga_apple_m2(path: &Path) -> Option<Vec<u8>> {
-    let raw = std::fs::read(path).ok()?;
-    blorb::medium::DiskImage::detect(&raw)?;
-    let disk = mount_disk(path, raw).ok()?;
+    let file = blorb::image::open_disk(path)?;
+    let disk = mount_disk(path, &file).ok()?;
     disk.read_named("M2")
 }
 
@@ -2131,7 +2135,7 @@ pub fn saga_companion_side(path: &Path) -> Option<PathBuf> {
 /// here answers with.
 pub fn saga_atari_companion_side(path: &Path) -> Option<Vec<u8>> {
     let side = saga_companion_side(path)?;
-    std::fs::read(&side).ok()
+    blorb::image::read_bytes(&side).ok()
 }
 
 /// Load story bytes from `path`, restricted to **Z-code** images.

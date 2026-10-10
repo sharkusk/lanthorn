@@ -23,6 +23,7 @@ pub mod dos_order;
 pub mod fat12;
 pub mod g64;
 pub mod hfs;
+pub mod image;
 pub mod infocom_boot;
 pub mod infocom_packed;
 pub mod infocom_pics;

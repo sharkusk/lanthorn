@@ -364,7 +364,8 @@ pub fn resolve(request: &FaceRequest<'_>) -> FaceSet {
 /// and every graphical game on it therefore drew its 7x15 cell with the 8-wide
 /// fallback.
 fn release_face(story_path: &Path, entry: Option<&str>) -> Option<BitmapFont> {
-    match blorb::hfs::Hfs::mount(std::fs::read(story_path).ok()?) {
+    let file = blorb::image::open_disk(story_path)?;
+    match blorb::hfs::Hfs::mount_file(&file) {
         Ok(hfs) => {
             // `entry` is `None` for every loose file and single-story floppy — and
             // also for a direct launch of a multi-game image, where `Hfs::story` is
@@ -919,7 +920,9 @@ pub fn detected(request: &FaceRequest<'_>) -> Vec<DiskFace> {
     // A Macintosh names its faces, so report the ids: an id is family × 128 +
     // point size, which is what tells a reader that a release ships a body face
     // AND an alternate rather than two of the same thing.
-    if let Some(hfs) = std::fs::read(story_path).ok().and_then(|b| blorb::hfs::Hfs::mount(b).ok()) {
+    if let Some(hfs) = blorb::image::open_disk(story_path)
+        .and_then(|f| blorb::hfs::Hfs::mount_file(&f).ok())
+    {
         let opened = entry.map(str::to_string).or_else(|| hfs.story().map(|(p, _)| p));
         if let Some(p) = opened {
             let faces: Vec<DiskFace> = blorb::mac_font::faces_beside(&hfs, &p)

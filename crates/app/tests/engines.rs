@@ -205,6 +205,8 @@ mod native_disk_sound;
 mod dialog_story_degradation;
 #[path = "suites/lost_treasures_iso_dedupe.rs"]
 mod lost_treasures_iso_dedupe;
+#[path = "suites/image_read_once.rs"]
+mod image_read_once;
 
 #[path = "suites/sq1515_kerkerkruip_restore_arrange.rs"]
 mod sq1515_kerkerkruip_restore_arrange;

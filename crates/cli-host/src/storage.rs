@@ -383,20 +383,23 @@ pub fn story_key_at_from(story_path: &Path, entry: Option<&str>) -> String {
 /// `disk_entry` names which story when the image holds several; without one the
 /// format's own tiebreak decides, as it always did.
 fn mounted_build(story_path: &Path, disk_entry: Option<&str>) -> Option<DiskBuild> {
-    let raw = std::fs::read(story_path).ok()?;
-    // `detect` first: mounting consumes the bytes, and the overwhelming majority
-    // of calls are about an ordinary story file. Its answer is only a
-    // pre-filter here — see the per-story lookup below for why the medium
-    // itself is not taken from it.
-    if blorb::medium::DiskImage::detect(&raw).is_none() {
-        // Not a disk image at all. A story named inside a CONTAINER (a zip
-        // entry) has no build to find in these bytes — they are the archive's,
-        // not any one entry's — so that case is left to `story_key_for`'s
-        // `(None, Some(entry))` arm, unaffected. A genuinely loose file
-        // (`disk_entry: None`) may still be a KNOWN commercial release read
-        // straight off its own header (SQ-1635) — see `build_for_key`'s docs.
-        return if disk_entry.is_some() { None } else { build_for_key(&raw, None) };
-    }
+    // One read of the file however many steps ask about it (SQ-1762): an image
+    // comes back mountable, an ordinary story file as the bytes read to find
+    // that out. The medium is only a pre-filter here — see the per-story lookup
+    // below for why it is not taken from the container.
+    let file = match blorb::image::open(story_path).ok()? {
+        blorb::image::Opened::Disk(file) => file,
+        blorb::image::Opened::Plain(raw) => {
+            // Not a disk image at all. A story named inside a CONTAINER (a zip
+            // entry) has no build to find in these bytes — they are the
+            // archive's, not any one entry's — so that case is left to
+            // `story_key_for`'s `(None, Some(entry))` arm, unaffected. A
+            // genuinely loose file (`disk_entry: None`) may still be a KNOWN
+            // commercial release read straight off its own header (SQ-1635) —
+            // see `build_for_key`'s docs.
+            return if disk_entry.is_some() { None } else { build_for_key(&raw, None) };
+        }
+    };
     // Across the SET, exactly as the launch path mounts (SQ-0952). This used to
     // be `MountedDisk::mount` — the platter alone — so a volume whose story comes
     // from the RELEASE rather than from itself found nothing, returned `None`,
@@ -414,7 +417,7 @@ fn mounted_build(story_path: &Path, disk_entry: Option<&str>) -> Option<DiskBuil
     // Costs sibling reads only when the platter yields nothing: `mount_at`
     // returns as soon as the named volume has a story of its own, which is every
     // loose file and every single-disk press.
-    let disk = crate::disk_set::mount_at(story_path, raw).ok()?;
+    let disk = crate::disk_set::mount_file_at(story_path, &file).ok()?;
     let chosen = match disk_entry {
         Some(want) => disk
             .stories()
