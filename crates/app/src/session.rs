@@ -95,6 +95,11 @@ pub struct CaptureSink {
     /// where it lands. The LAST erase of a turn wins: it is the one whose screen
     /// the player is left looking at.
     cleared_at: Option<usize>,
+    /// The text style bits (emphasis only) and foreground the most recent
+    /// printed text carried -- what the prompt was printed IN. It survives
+    /// drains, so [`GameSession::read_input_style`] can tell a style the story
+    /// switched on for the read from the one its page text already had (SQ-1758).
+    last_print: (u8, ZColour),
     /// Where the Z-machine's output streams 2 and 4, and its input stream 1,
     /// meet the disk (ZMSD §7.1.1, §7.1.2, §10.2). Empty until
     /// [`crate::engine::Engine::set_stream_files`] names the game's directory.
@@ -229,8 +234,14 @@ impl CaptureSink {
             runs: Vec::new(),
             buffering: true,
             cleared_at: None,
+            last_print: (0, ZColour::Default),
             streams: StreamFiles::default(),
         }
+    }
+
+    /// See [`CaptureSink::last_print`].
+    pub fn last_print(&self) -> (u8, ZColour) {
+        self.last_print
     }
 
     /// Name the directory the stream files live in (see [`StreamFiles`]).
@@ -262,16 +273,19 @@ impl CaptureSink {
 
 impl Output for CaptureSink {
     fn print(&mut self, s: &str) {
+        self.last_print = (0, ZColour::Default);
         let nowrap = !self.buffering;
         self.runs.push((s.chars().count(), 0, ZColour::Default, ZColour::Default, 0, ParaFmt::default(), 0, nowrap));
         self.text.push_str(s);
     }
     fn print_styled(&mut self, s: &str, style: u8) {
+        self.last_print = (style & 0x07, ZColour::Default);
         let nowrap = !self.buffering;
         self.runs.push((s.chars().count(), style, ZColour::Default, ZColour::Default, 0, ParaFmt::default(), 0, nowrap));
         self.text.push_str(s);
     }
     fn print_attr(&mut self, s: &str, attrs: TextAttrs) {
+        self.last_print = (attrs.style & 0x07, attrs.fg);
         let nowrap = !self.buffering;
         self.runs.push((s.chars().count(), attrs.style, attrs.fg, attrs.bg, 0, ParaFmt::default(), 0, nowrap));
         self.text.push_str(s);
@@ -1834,18 +1848,29 @@ impl GameSession {
     }
 
     /// The input style the story had switched on when it asked for the line now
-    /// pending (SQ-1758): its text style and colours at the `@read`, which is what
-    /// a story that wants its typed text styled sets just before reading. Roman
-    /// text in the default colours — nearly every story — is "no opinion", so the
-    /// theme's input style applies. Fixed-pitch is not an emphasis and is dropped.
+    /// pending (SQ-1758): its text style and colour at the `@read`, but only where
+    /// they DIFFER from what the prompt was just printed in. A story that colours
+    /// all its text (Photopia's black page ink) is not styling its input, so that
+    /// is "no opinion" and the theme's input style applies. Bits and colour are
+    /// compared separately: bold turned on only for the read gives bold plus the
+    /// theme colour. Fixed-pitch is not an emphasis and is dropped.
     fn read_input_style(&self) -> crate::engine::InputStyle {
         let s = &self.machine.screen;
-        let ink = if s.current_fg == zvm::screen::ZColour::Default {
+        let (printed_bits, printed_fg) = self
+            .machine
+            .output()
+            .as_any()
+            .downcast_ref::<CaptureSink>()
+            .map(CaptureSink::last_print)
+            .unwrap_or((0, ZColour::Default));
+        let bits = s.text_style & 0x07;
+        let bits = if bits == printed_bits { 0 } else { bits };
+        let ink = if s.current_fg == ZColour::Default || s.current_fg == printed_fg {
             0
         } else {
             crate::state::pack_zcolour(s.current_fg)
         };
-        crate::engine::InputStyle { bits: s.text_style & 0x07, ink }
+        crate::engine::InputStyle { bits, ink }
     }
 
     /// v5+: does `ch` terminate a line read per the game's terminating-characters
@@ -8671,6 +8696,41 @@ mod tests {
         let st = input_style_after_read(&[0xDB, 0x5F, 0x03, 0x01]);
         assert_eq!(st.ink, crate::state::pack_zcolour(zvm::screen::ZColour::Standard(3)));
         assert_eq!(st.bits, 0);
+    }
+
+    // print_char '>' (VAR:229), set_colour fg=3 bg=1 (2OP:27 variable form), set_text_style n.
+    const PRINT_PROMPT: [u8; 3] = [0xE5, 0x7F, 0x3E];
+    const RED: [u8; 4] = [0xDB, 0x5F, 0x03, 0x01];
+    fn bold_on() -> [u8; 3] { [0xF1, 0x7F, 0x02] }
+
+    #[test]
+    fn a_page_colour_equal_to_the_prompts_is_no_opinion() {
+        // Photopia's shape: the whole page is red and the prompt is printed red.
+        let prelude: Vec<u8> = [&RED[..], &PRINT_PROMPT[..]].concat();
+        assert_eq!(input_style_after_read(&prelude), crate::engine::InputStyle::default());
+    }
+
+    #[test]
+    fn a_colour_changed_just_for_the_read_is_honoured() {
+        let prelude: Vec<u8> = [&PRINT_PROMPT[..], &RED[..]].concat();
+        let st = input_style_after_read(&prelude);
+        assert_eq!(st.ink, crate::state::pack_zcolour(zvm::screen::ZColour::Standard(3)));
+        assert_eq!(st.bits, 0);
+    }
+
+    #[test]
+    fn bold_only_for_the_input_is_bold_with_the_theme_colour() {
+        // Red page, prompt printed roman, then bold switched on for the read.
+        let prelude: Vec<u8> = [&RED[..], &PRINT_PROMPT[..], &bold_on()[..]].concat();
+        let st = input_style_after_read(&prelude);
+        assert_eq!(st.bits, 0x02);
+        assert_eq!(st.ink, 0, "the page colour is the prompt's own, so the theme colour applies");
+    }
+
+    #[test]
+    fn bold_throughout_the_page_is_no_opinion() {
+        let prelude: Vec<u8> = [&bold_on()[..], &PRINT_PROMPT[..]].concat();
+        assert_eq!(input_style_after_read(&prelude), crate::engine::InputStyle::default());
     }
 
     #[test]

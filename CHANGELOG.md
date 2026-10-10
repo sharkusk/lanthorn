@@ -32,8 +32,8 @@ while any such tag, or this Unreleased section, still exists.*
   now drawn in its own colour (the `transcript_input` style, the same one the
   command bar uses), while the `>` prompt stays story-coloured. If a game styles
   its own input line, lanthorn honours that too: a Glulx game's input colour,
-  weight and slant, and a Z-machine game's bold, italic or colour in force when it
-  asks for your command (colours only while game colours are on). On a page the
+  weight and slant, and a Z-machine game's bold, italic or colour switched on for
+  your command specifically (colours only while game colours are on). On a page the
   game has coloured, your command keeps the game's background and switches to the
   game's own ink if your theme's colour would be hard to read there.
 - **IFDB search now notices games you already have in a subfolder.** If the game

@@ -280,7 +280,7 @@ switches that make lanthorn feel like yours without opening the whole registry.
   `StyleRun::glk_style == GLK_STYLE_TYPED_INPUT`, so the prompt itself stays story
   text). A game's own input style wins where it states one: Glulx `style_Input`
   stylehints (bold unless a weight hint says otherwise), or the Z-machine text
-  style and colour in force at the `@read`; its COLOUR only with
+  style and colour at the `@read` that differ from the prompt just printed; its COLOUR only with
   `honor_game_colours` on. On a game-coloured prompt line the command keeps the
   game's background and falls back to the game's prompt ink when the chosen colour
   contrasts too little with it (`colors::MIN_INPUT_CONTRAST`). Story lines also run through styling rules: built-in ones for

@@ -3,7 +3,7 @@
 //! everything that carries transcript lines.
 //!
 //! Photopia (a manifest fixture, so this runs on CI) is a game-COLOURED story that
-//! sets its text colour before reading, so its typed spans carry the story's ink.
+//! colours all its text, so its typed spans carry no story ink of their own.
 //! Every case pins both `honor_game_colours` modes.
 
 use app::engine::{Engine, KeyInput};
@@ -78,7 +78,7 @@ fn typed_spans(b: &BootedStory) -> Vec<(usize, String)> {
 }
 
 #[test]
-fn an_inline_command_is_a_typed_span_of_the_prompt_line_and_carries_the_stories_ink() {
+fn an_inline_command_is_a_typed_span_of_the_prompt_line_and_takes_the_theme_colour_when_the_story_colours_all_its_text() {
     for honor in [true, false] {
         let home = app::scratch_dir("sq1758-mark");
         let mut b = boot(&home, honor);
@@ -88,10 +88,11 @@ fn an_inline_command_is_a_typed_span_of_the_prompt_line_and_carries_the_stories_
         assert!(spans.iter().all(|(_, t)| t == "no"), "each span covers exactly the typed text: {spans:?}");
         let (line, _) = spans[0];
         assert_eq!(b.state.transcript_kinds[line], app::state::TranscriptKind::Story, "the line stays a Story line");
-        // Photopia has set its text colour by the time it reads, so the story HAS an
-        // input colour (an explicit non-default one at the @read) and the span carries it.
+        // Photopia colours ALL its text and prints the prompt in that same colour, so
+        // it states no input style: the span carries no story ink and the theme's
+        // `transcript_input` colour applies (contrast is the renderer's fallback).
         let run = b.state.transcript_runs[line].iter().find(|r| r.glk_style == GLK_STYLE_TYPED_INPUT).unwrap();
-        assert!(run.ink != 0, "non-vacuity: the story's colour at its @read reached the span: {run:?}");
+        assert_eq!((run.ink, run.bits), (0, 0), "a page colour equal to the prompt's is no opinion: {run:?}");
         let _ = std::fs::remove_dir_all(&home);
     }
 }
