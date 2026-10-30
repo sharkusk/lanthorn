@@ -381,6 +381,23 @@ impl ScreenView {
         self.menus = on;
     }
 
+    /// Forget the last non-TTY upper-window block so the next
+    /// [`frame`](Self::frame) prints it again.
+    ///
+    /// Piped and `--plain` output skips an upper window identical to the
+    /// previous one. Call this before a `@read_char` prompt that should
+    /// show that window even when the text has not changed.
+    ///
+    /// Does nothing while a host-driven menu walk is in progress. The walk
+    /// uses an unchanged block to report the line the marker is on, and
+    /// clearing the block would re-list the whole menu.
+    pub fn invalidate_dedupe(&mut self) {
+        if self.menu.walking() {
+            return;
+        }
+        self.last_block = None;
+    }
+
     /// The open menu re-listed on demand (`/menu`), or `None` when none is open.
     pub fn menu_listing(&self) -> Option<String> {
         self.menu.listing()
@@ -831,6 +848,55 @@ mod view_tests {
         assert!(!first.contains('\x1b'), "inline block carries no ANSI: {first:?}");
         let second = v.render(1, &p, &a, "");
         assert_eq!(second, "", "unchanged region dedupes to empty");
+    }
+
+    /// After `invalidate_dedupe`, an unchanged upper window is printed once
+    /// more, then deduped again on the following frame.
+    #[test]
+    fn invalidate_dedupe_reemits_an_unchanged_block() {
+        let (p, a) = v3_rows();
+        let mut v = ScreenView::new(false, false, false, 24, 80);
+        assert!(v.render(1, &p, &a, "").contains("West of House"));
+        assert_eq!(v.render(1, &p, &a, ""), "");
+        v.invalidate_dedupe();
+        let again = v.render(1, &p, &a, "");
+        assert!(again.contains("West of House"), "{again:?}");
+        assert_eq!(v.render(1, &p, &a, ""), "", "the next frame dedupes again");
+    }
+
+    /// With menu recognition on, the standing menu is re-listed and numbered.
+    #[test]
+    fn invalidate_dedupe_relists_an_unchanged_menu() {
+        let mut v = ScreenView::new(false, false, true, 24, 80);
+        v.set_menus(true);
+        let rows = menu_rows(0);
+        let first = v.render(4, &rows, &rows, "");
+        assert!(first.contains(cli_host::menu::MENU_HINT), "{first:?}");
+        assert_eq!(v.render(4, &rows, &rows, ""), "");
+        v.invalidate_dedupe();
+        let again = v.render(4, &rows, &rows, "");
+        assert!(
+            again.contains(cli_host::menu::MENU_HINT),
+            "standing menu must be re-listed: {again:?}"
+        );
+        assert!(again.contains("Credits"), "{again:?}");
+        assert_eq!(v.render(4, &rows, &rows, ""), "");
+    }
+
+    /// A number jump still in progress keeps its one-line announcement.
+    /// Clearing the block here would re-list the menu and end the walk.
+    #[test]
+    fn invalidate_dedupe_leaves_an_in_progress_menu_walk_alone() {
+        let mut v = ScreenView::new(false, false, true, 24, 80);
+        v.set_menus(true);
+        let rows = menu_rows(0);
+        v.render(4, &rows, &rows, "");
+        assert_eq!(v.typed_at_menu("3"), cli_host::Typed::Jump);
+        assert!(v.next_menu_key().is_some(), "the walk owes the game a key");
+        v.invalidate_dedupe();
+        let out = v.render(4, &rows, &rows, "");
+        assert_eq!(out, ">1. Credits (1 of 3)\n", "walk still owns this stop: {out:?}");
+        assert!(v.next_menu_key().is_none(), "the unchanged stop ends the walk");
     }
 
     /// The DEFAULT is unchanged from before SQ-0909: pinned at the top, where
