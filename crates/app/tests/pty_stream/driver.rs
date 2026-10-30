@@ -550,6 +550,11 @@ fn spawn(spec: &Spec, pty: &Pty) -> std::io::Result<Child> {
     for stale in ["TMUX", "TMUX_PANE", "WEZTERM_EXECUTABLE", "KONSOLE_VERSION", "TERM_PROGRAM", "LC_TERMINAL"] {
         cmd.env_remove(stale);
     }
+    // A kitty unicode placeholder carries its image id in an SGR foreground.
+    // Crossterm omits every SGR when `NO_COLOR` is set, so the child would
+    // place nothing and the oracle would report an empty screen. This harness
+    // is a kitty terminal; the variable is not one of its properties.
+    cmd.env_remove("NO_COLOR");
     unsafe {
         cmd.pre_exec(move || {
             // Own a session and make the pty its controlling terminal, or

@@ -20,9 +20,22 @@ use std::process::{Command, Output, Stdio};
 /// Run `zvm-cli <image> [args]` with `stdin_script` piped in — so stdin is
 /// never a terminal, which is the non-interactive path under test.
 fn run(image: &std::path::Path, extra_args: &[&str], stdin_script: &str) -> Output {
+    // These cases read the story's own transcript, including header bytes
+    // `$2C` and `$2D`. Two inherited variables change that transcript without
+    // appearing in `extra_args`:
+    //
+    // * `NO_COLOR` makes zvm-cli withhold the colour bytes, the same answer as
+    //   `--game-colours off`.
+    // * `TERM=dumb` selects plain mode. Plain mode holds a line that has no
+    //   newline until the next prompt, and a story that quits on that line
+    //   never sends it.
+    //
+    // Clearing both leaves the flags the case passed as the only input.
     let mut child = Command::new(env!("CARGO_BIN_EXE_zvm-cli"))
         .arg(image)
         .args(extra_args)
+        .env_remove("NO_COLOR")
+        .env_remove("TERM")
         .stdin(Stdio::piped())
         .stdout(Stdio::piped())
         .stderr(Stdio::piped())

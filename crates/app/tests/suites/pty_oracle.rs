@@ -584,6 +584,12 @@ mod emitter {
     /// viewport is FIXED so nothing consults the real terminal this test may or may
     /// not be attached to.
     fn terminal() -> (Terminal<CrosstermBackend<Sink>>, Sink) {
+        // Kitty unicode placeholders store the image id in an SGR foreground.
+        // Crossterm drops every SGR when `NO_COLOR` is set, and it remembers that
+        // decision for the process, so clearing the variable after the first
+        // colour check would not restore the sequence. This sink is standing in
+        // for a kitty terminal, which has to be allowed to emit that SGR.
+        crossterm::style::Colored::set_ansi_color_disabled(false);
         let sink = Sink::default();
         let term = Terminal::with_options(
             CrosstermBackend::new(sink.clone()),
