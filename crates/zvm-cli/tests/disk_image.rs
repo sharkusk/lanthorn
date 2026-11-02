@@ -23,6 +23,9 @@ fn run(image: &std::path::Path, extra_args: &[&str], stdin_script: &str) -> Outp
     let mut child = Command::new(env!("CARGO_BIN_EXE_zvm-cli"))
         .arg(image)
         .args(extra_args)
+        // The parent cargo process may carry NO_COLOR; header $2C/$2D tests
+        // need the child's own `--game-colours` / `--colour` to be the rule.
+        .env_remove("NO_COLOR")
         .stdin(Stdio::piped())
         .stdout(Stdio::piped())
         .stderr(Stdio::piped())
@@ -219,37 +222,34 @@ fn a_macintosh_volume_is_mounted_like_any_other_disk() {
 }
 
 /// The real Macintosh release disk: *Zork Zero* release 296 / serial 881019, an
-/// HFS volume inside a DiskCopy 4.2 wrapper. It mounts, and is then declined at
-/// load because `zvm-cli` renders no v6 graphics — which is this front-end's own
-/// limitation and the same answer the five graphical Amiga floppies get. **The
-/// user must see the v6 refusal, not a disk error**; that is what says the mount
-/// worked.
+/// HFS volume inside a DiskCopy 4.2 wrapper. It mounts, and Version 6 now
+/// loads. Empty stdin ends the run at the first `read_char`. **The user must
+/// not see a disk error**; that is what says the mount worked.
 ///
 /// FALSIFICATION: with `looks_like_image` narrowed back to `Adf`, this reads
 /// `Error: Z-machine version 14 is not supported.` — 14 being the Pascal length
 /// of the DiskCopy header's disk name, `Zork Zero Disk`.
 #[test]
-fn the_real_macintosh_release_disk_mounts_and_is_declined_as_v6() {
+fn the_real_macintosh_release_disk_mounts_as_v6() {
     let Some(image) = story_path("Zork Zero Disk.image") else { return };
-    let out = run(&image, &[], "");
+    let out = run(&image, &["--pager", "off"], "");
     let err = stderr_of(&out);
-    assert!(err.contains("v6 graphical games are not supported"), "the v6 refusal:\n{err}");
-    assert!(!err.contains("version"), "not a version-number complaint about the image:\n{err}");
-    assert!(!err.contains("disk image"), "not a disk error — the disk mounted fine:\n{err}");
+    assert!(!err.contains("not supported"), "v6 loads after a successful mount:\n{err}");
+    assert!(!err.contains("disk image"), "not a disk error; the disk mounted:\n{err}");
 }
 
-/// The same disk on the other medium, for contrast: the Amiga *Zork Zero* is
-/// also v6 and gets the identical refusal. Two formats, one behaviour — which is
-/// the whole of the user's rule.
+/// The same disk on the other medium: the Amiga *Zork Zero* is also v6 and
+/// loads the same way. Two formats, one behaviour.
 #[test]
-fn an_amiga_v6_floppy_is_declined_exactly_as_the_macintosh_one_is() {
+fn an_amiga_v6_floppy_loads_exactly_as_the_macintosh_one_does() {
     let Some(amiga) = story_path("Zork Zero - The Revenge of Megaboz.adf") else { return };
     let Some(mac) = story_path("Zork Zero Disk.image") else { return };
-    assert_eq!(
-        stderr_of(&run(&amiga, &[], "")),
-        stderr_of(&run(&mac, &[], "")),
-        "the medium changes nothing about how the CLI declines a v6 game"
-    );
+    let amiga_err = stderr_of(&run(&amiga, &["--pager", "off"], ""));
+    let mac_err = stderr_of(&run(&mac, &["--pager", "off"], ""));
+    assert!(!amiga_err.contains("not supported"), "amiga v6 loads:\n{amiga_err}");
+    assert!(!mac_err.contains("not supported"), "mac v6 loads:\n{mac_err}");
+    assert!(!amiga_err.contains("disk image"), "amiga mounted:\n{amiga_err}");
+    assert!(!mac_err.contains("disk image"), "mac mounted:\n{mac_err}");
 }
 
 // ── the menu ──────────────────────────────────────────────────────────────────
@@ -615,9 +615,8 @@ fn a_real_release_floppy_tells_the_game_which_machine_it_is() {
 // ── a release that is on no single disk (SQ-0874) ────────────────────────────
 
 /// Every multi-volume release in the corpus, named by a volume that carries no
-/// whole story of its own. `v6` marks the ones this front-end will mount and then
-/// decline, which is a pass: the refusal is about the GAME, so it proves the
-/// mount reached one.
+/// whole story of its own. `v6` marks the Version 6 titles: they mount and
+/// load, and empty stdin ends the run at the first input request.
 const ACROSS_THE_SET: &[(&str, bool)] = &[
     ("TRINITY1.D64", false),
     ("TRINITY2.D64", false),
@@ -655,16 +654,16 @@ fn a_release_paged_across_its_volumes_opens_from_any_one_of_them() {
     for (name, v6) in ACROSS_THE_SET {
         let Some(image) = story_path(name) else { continue };
         ran += 1;
-        let out = run(&image, &["--pager", "off"], "\nversion\nquit\ny\n");
+        let script = if *v6 { "" } else { "\nversion\nquit\ny\n" };
+        let out = run(&image, &["--pager", "off"], script);
         let err = stderr_of(&out);
         assert!(
             !err.contains("no story file on this disk image"),
             "{name}: the set was never consulted:\n{err}"
         );
         if *v6 {
-            // Mounted, then declined for what it is — this front-end renders no
-            // v6 graphics. A disk error here would mean the mount failed.
-            assert!(err.contains("v6 graphical games are not supported"), "{name}: {err}");
+            // Mounted and loaded. A disk error here would mean the mount failed.
+            assert!(!err.contains("not supported"), "{name}: v6 loads:\n{err}");
             assert!(!err.contains("disk image"), "{name}: not a disk error:\n{err}");
         } else {
             let text = stdout_of(&out);
@@ -694,16 +693,17 @@ fn a_release_paged_across_its_volumes_opens_from_any_one_of_them() {
 fn a_set_offers_exactly_the_one_story_the_release_carries() {
     let Some(image) = story_path("shogun_s1.dsk") else { return };
     // Out of range says what the range is, which is how the name gets shown
-    // without the v6 refusal cutting the run short.
+    // without a later load error cutting the run short.
     let err = stderr_of(&run(&image, &["--story", "2"], ""));
     assert!(err.contains("pick 1 to 1"), "one story, so one choice:\n{err}");
     let row = "1) Shogun  (v6 r311 s890510)  SHOGUN.D1";
     assert!(err.contains(row), "the build it reassembled:\n{err}");
 
-    // …and the name really does select it: this reaches the v6 refusal, which
-    // only a story that was found can be refused for.
-    let err = stderr_of(&run(&image, &["--story", "shogun"], ""));
-    assert!(err.contains("v6 graphical games are not supported"), "--story picked it:\n{err}");
+    // …and the name really does select it: this reaches a Version 6 load, which
+    // only a story that was found can do.
+    let err = stderr_of(&run(&image, &["--pager", "off", "--story", "shogun"], ""));
+    assert!(!err.contains("not supported"), "--story picked it:\n{err}");
+    assert!(!err.contains("no story file"), "--story picked it:\n{err}");
 }
 
 /// **The other half: a lone volume is still a lone volume.** *Hitchhiker's* is a
@@ -743,9 +743,9 @@ fn a_disk_with_no_story_says_what_it_mounted() {
 /// A Version 5 story that prints header `$1E`, `$2C` and `$2D` as `[n/bg/fg/]`.
 ///
 /// Version 5 because `$2C`/`$2D` are colour bytes from V5 on — below that
-/// `write_default_colours` correctly declines — and because `zvm-cli` refuses
-/// Version 6 outright, so v5 is the highest machine this front-end can be asked
-/// about.
+/// `write_default_colours` correctly declines. A v6 story would also report
+/// them; this fixture stays v5 so the rest of the suite can drive it as text
+/// without a windowed boot.
 fn machine_reporting_story() -> Vec<u8> {
     let mut b = quitting_story(5, 88, "840726");
     let mut code: Vec<u8> = vec![0xE5, 0x7F, 0x5B]; // print_char '['
@@ -844,8 +844,7 @@ fn an_explicit_machine_brings_its_default_colours_with_it() {
 
     // And the Amiga is the one machine whose page a v5 story cannot be told:
     // colour 12 is a Version 6 grey (§8.3.1), so `clamp_default_colour` folds it
-    // back to black. Stated so the clamp reads as measured rather than missed —
-    // `zvm-cli` refuses Version 6, so the Amiga's dark grey never reaches it.
+    // back to black. Stated so the clamp reads as measured rather than missed.
     let amiga = stdout_of(&run(&story, &["-I", "4"], ""));
     assert!(amiga.contains("[4/2/9/]"), "12 is a v6-only grey and clamps here:\n{amiga}");
 

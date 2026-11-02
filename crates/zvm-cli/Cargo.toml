@@ -25,6 +25,7 @@ zvm = { package = "lanthorn-zvm", path = "../zvm", version = "0.9.9" }
 blorb = { package = "lanthorn-blorb", path = "../blorb", version = "0.9.9" }
 audio = { package = "lanthorn-audio", path = "../audio", version = "0.9.9" }
 crossterm = "0.29"
+image = { version = "0.25", default-features = false, features = ["png", "jpeg"] }
 
 # SQ-0909: the terminal itself is the scrollback, and a DECSTBM scroll region is
 # what stops it working — lines scrolled out of a region are DISCARDED rather than

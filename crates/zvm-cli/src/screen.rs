@@ -263,6 +263,54 @@ use cli_host::{enter_region, leave_and_park, pinned_origin};
 
 use zvm::cpu::exec::Machine;
 
+/// Text from Version 6 paint windows (status bars, title cards, menus).
+///
+/// Inform v6 titles such as advent.z6 keep the room name in window 1 with
+/// wrapping clear, so it never reaches the output sink. `V6Text.x`/`y` are
+/// 1-based pixels (ZMSD §8.8.1 / §15 `set_cursor`); padding those as columns
+/// wraps "Score: 36" onto the next line in an 80-column terminal. Rows use
+/// the run's screen cell (`grow`/`gcol`) instead.
+fn v6_chrome_rows(machine: &Machine) -> Vec<String> {
+    let Some(v6) = machine.screen.v6.as_ref() else {
+        return Vec::new();
+    };
+    let mut by_row: std::collections::BTreeMap<u16, Vec<(u16, &str)>> =
+        std::collections::BTreeMap::new();
+    for w in &v6.windows {
+        if w.prose_window() {
+            continue;
+        }
+        for t in &w.texts {
+            if !t.text.is_empty() {
+                by_row.entry(t.grow).or_default().push((t.gcol, t.text.as_str()));
+            }
+        }
+    }
+    by_row
+        .into_values()
+        .filter_map(|mut runs| {
+            runs.sort_by_key(|&(c, _)| c);
+            let mut cells: std::collections::BTreeMap<u16, char> =
+                std::collections::BTreeMap::new();
+            for (start, text) in runs {
+                for (i, ch) in text.chars().enumerate() {
+                    cells.insert(start.saturating_add(i as u16), ch);
+                }
+            }
+            let end = *cells.keys().next_back()?;
+            let line: String = (0..=end)
+                .map(|c| cells.get(&c).copied().unwrap_or(' '))
+                .collect();
+            let trimmed = line.trim_end().to_string();
+            if trimmed.is_empty() {
+                None
+            } else {
+                Some(trimmed)
+            }
+        })
+        .collect()
+}
+
 /// The one block source zvm-cli has: the upper window (or the v1–v3 status
 /// line, which is the same region by another name).
 const SOURCE_UPPER: u32 = 0;
@@ -407,7 +455,9 @@ impl ScreenView {
 
     /// Number of pinned top rows for the current machine state.
     fn top_rows(machine: &Machine) -> u16 {
-        if machine.mem.version() < 4 {
+        if machine.mem.version() == 6 {
+            v6_chrome_rows(machine).len() as u16
+        } else if machine.mem.version() < 4 {
             1 // v1-v3: a status line is always shown
         } else {
             // The grid's own row count: equals `upper_window_rows` normally, but
@@ -425,7 +475,9 @@ impl ScreenView {
         if top == 0 {
             return Vec::new();
         }
-        if machine.mem.version() < 4 {
+        if machine.mem.version() == 6 {
+            v6_chrome_rows(machine)
+        } else if machine.mem.version() < 4 {
             vec![status_text(&machine.status_line(), cols)]
         } else {
             (1..=top).map(|r| upper_row_text(&machine.screen.upper, r)).collect()
@@ -443,7 +495,9 @@ impl ScreenView {
         if top == 0 {
             return Vec::new();
         }
-        if machine.mem.version() < 4 {
+        if machine.mem.version() == 6 {
+            v6_chrome_rows(machine)
+        } else if machine.mem.version() < 4 {
             vec![status_band_ansi(&status_text(&machine.status_line(), cols), look)]
         } else {
             (1..=top)
@@ -1007,6 +1061,97 @@ mod view_tests {
         // ScreenView::status_now goes to the machine, which these row-level tests
         // do not build; what is pinned here is that the dedupe it must bypass is
         // real. The end-to-end behaviour is covered by the CLI's own runs.
+    }
+
+    #[test]
+    fn v6_paint_window_text_is_the_status_region() {
+        let mut buf = vec![0u8; 0x400];
+        buf[0x00] = 6;
+        buf[0x04] = 0x04;
+        buf[0x06] = 0x00;
+        buf[0x07] = 0x10;
+        buf[0x0C] = 0x03;
+        buf[0x0E] = 0x04;
+        buf[0x18] = 0x00;
+        buf[0x19] = 0x40;
+        let mem = zvm::memory::Memory::new(buf).expect("v6 header");
+        let mut m = Machine::boot(
+            mem,
+            Box::new(zvm::io::BufferOutput::new()),
+            zvm::cpu::exec::BootConfig::new(),
+        );
+        {
+            let v6 = m.screen.v6_mut().expect("v6 window table");
+            v6.windows[1].attributes = 0b1000;
+            v6.windows[1].texts.push(zvm::screen::V6Text::derived(
+                1,
+                1,
+                "At End Of Road".into(),
+                0,
+                ZColour::Default,
+                ZColour::Default,
+                zvm::screen::V6Cell::DEFAULT,
+            ));
+        }
+        assert_eq!(ScreenView::status_now(&m), "At End Of Road");
+        assert_eq!(v6_chrome_rows(&m), vec!["At End Of Road".to_string()]);
+    }
+
+    #[test]
+    fn v6_status_places_score_beside_its_label() {
+        // advent.z6 `set_cursor`s Score/Moves in pixels. Treating those as
+        // columns padded ~400 spaces and wrapped the values onto the next line.
+        let mut buf = vec![0u8; 0x400];
+        buf[0x00] = 6;
+        buf[0x04] = 0x04;
+        buf[0x06] = 0x00;
+        buf[0x07] = 0x10;
+        buf[0x0C] = 0x03;
+        buf[0x0E] = 0x04;
+        buf[0x18] = 0x00;
+        buf[0x19] = 0x40;
+        let mem = zvm::memory::Memory::new(buf).expect("v6 header");
+        let mut m = Machine::boot(
+            mem,
+            Box::new(zvm::io::BufferOutput::new()),
+            zvm::cpu::exec::BootConfig::new(),
+        );
+        {
+            let v6 = m.screen.v6_mut().expect("v6 window table");
+            v6.windows[1].attributes = 0b1000;
+            let cell = zvm::screen::V6Cell::DEFAULT;
+            for (y, x, text) in [
+                (1u16, 1u16, "At End Of Road"),
+                (1, 241, "Score: "),
+                (1, 297, "36"),
+                (1, 401, "Moves: "),
+                (1, 457, "2"),
+            ] {
+                v6.windows[1].texts.push(zvm::screen::V6Text::derived(
+                    y,
+                    x,
+                    text.into(),
+                    0,
+                    ZColour::Default,
+                    ZColour::Default,
+                    cell,
+                ));
+            }
+        }
+        let rows = v6_chrome_rows(&m);
+        assert_eq!(rows.len(), 1, "one status row, not a wrap: {rows:?}");
+        let row = &rows[0];
+        assert!(row.contains("At End Of Road"), "{row:?}");
+        assert!(
+            row.contains("Score: 36"),
+            "score must sit beside its label: {row:?}"
+        );
+        assert!(
+            row.contains("Moves: 2"),
+            "moves must sit beside its label: {row:?}"
+        );
+        assert!(row.len() <= 80, "must fit a standard terminal: {row:?}");
+        assert_eq!(ScreenView::status_now(&m), row.as_str());
     }
 
     #[test]

@@ -15,7 +15,7 @@ use std::any::Any;
 use std::collections::HashMap;
 use std::env;
 use std::fs;
-use std::io::{self, Write};
+use std::io::{self, Read, Write};
 use std::path::Path;
 
 use crossterm::event::{self, Event, KeyCode, KeyModifiers};
@@ -30,6 +30,8 @@ use zvm::memory::Memory;
 mod screen;
 mod auxiliary; // "aux" is a reserved filename on Windows — module renamed accordingly
 mod media;
+mod pictures;
+mod graphics;
 
 // ── sound ──────────────────────────────────────────────────────────────────────
 
@@ -673,6 +675,10 @@ fn build_machine(
     machine_colours: bool,
     // Plain mode: hold the game's prompt back so the status can precede it.
     hold_prompt: bool,
+    // Version 6 picture space from a Blorb `Reso` chunk, when the archive names one.
+    v6_screen_px: Option<(u16, u16)>,
+    // Version 6 `picture_data` table, in the archive's own pixels.
+    picture_dims: Vec<(u16, u16, u16)>,
 ) -> Result<Machine, String> {
     use zvm::error::ZError;
     let mem = Memory::new(story).map_err(|e| match e {
@@ -681,24 +687,6 @@ fn build_machine(
         ZError::Truncated => "Error: story file is truncated.".to_string(),
         _ => format!("Error loading story: {e:?}"),
     })?;
-    // v6 is a graphical, mouse-and-menu format: its games drive a windowed
-    // display this front-end has no way to present, and none of them can be
-    // driven through a plain character stream. Measured (SQ-0601): every v6
-    // story we have — Zork Zero, Shogun, Arthur, Journey, advent.z6 — runs away
-    // the moment its opening screen asks for input, whatever key it is given.
-    // Zork Zero and Arthur flood the terminal with newlines; Shogun spins
-    // silently with no output at all and no prompt to interrupt.
-    //
-    // So refuse here rather than hang. The refusal is the FRONT-END's, not the
-    // library's: `zvm` supports v6 fully and lanthorn plays these games — run
-    // them there.
-    if mem.version() == 6 {
-        return Err(
-            "Error: Z-machine v6 graphical games are not supported by zvm-cli.\n\
-             Run it with lanthorn, which renders v6 graphics and menus."
-                .to_string(),
-        );
-    }
     // The machine's own table, resolved BEFORE the sink is built: a sink is owned
     // by the machine and cannot ask it back, so both are told once from here.
     let machine_row = interpreter_number.and_then(zvm::interpreter::machine);
@@ -716,6 +704,14 @@ fn build_machine(
         // centred for 80 in a 50-column terminal). Kept in sync on resize by
         // `Machine::set_screen_dims`, which is the mid-run door.
         .with_screen_grid(term_rows.min(255) as u8, term_cols.min(255) as u8);
+    if mem.version() == 6 {
+        if let Some(px) = v6_screen_px {
+            config = config.with_v6_screen_px(px);
+        }
+        if !picture_dims.is_empty() {
+            config = config.with_picture_dims(picture_dims);
+        }
+    }
     // …and the REST of that machine (SQ-0872). Setting `$1E` alone told the story
     // which machine it was on and left it to work out what that machine looked
     // like from zvm's own §8.3.2 seed, which is nobody's machine — so off a
@@ -801,6 +797,8 @@ struct Args {
     volume: Option<u8>,
     /// `--pin <top|bottom>` (or `--scrollback`): where the fixed rows sit.
     pin: cli_host::Pin,
+    /// `--image-protocol`: how Version 6 pictures are drawn when the run may.
+    image_protocol: graphics::Choice,
 }
 
 /// Every option `zvm-cli` accepts. The scanner in `cli_host::args` applies the
@@ -831,6 +829,7 @@ const OPTS: &[cli_host::Opt] = &[
     cli_host::Opt::valued(&["--story"]),
     cli_host::Opt::valued(&["--pin"]),
     cli_host::Opt::flag(&["--scrollback"]),
+    cli_host::Opt::valued(&["--image-protocol"]),
 ];
 
 /// `--colour terminal|machine`: which source the story pane's DEFAULT page and
@@ -897,6 +896,7 @@ fn parse_args(argv: &[String]) -> Result<Args, String> {
             .value("--pin")
             .and_then(cli_host::Pin::parse)
             .unwrap_or(if m.has("--scrollback") { cli_host::Pin::Bottom } else { cli_host::Pin::Top }),
+        image_protocol: graphics::parse_choice(m.value("--image-protocol"))?,
     })
 }
 
@@ -1414,6 +1414,22 @@ fn read_byte_stdin() -> u8 {
     }
 }
 
+/// One raw byte of piped Version 6 `read_char` input.
+///
+/// Inform v6 titles such as sunburst build their command line with `read_char`,
+/// so a piped `look` plus return has to arrive as five codes, not as the first
+/// letter of a cooked line. LF/CR become ZSCII 13 (ZMSD §3.8).
+fn read_v6_piped_char() -> u8 {
+    let mut buf = [0u8; 1];
+    match io::stdin().read(&mut buf) {
+        Ok(1) => match buf[0] {
+            b'\n' | b'\r' => 13,
+            b => b,
+        },
+        _ => cli_host::input::exit_at_eof(&crate::screen::leave_region()),
+    }
+}
+
 // ── terminal resize helper ────────────────────────────────────────────────────
 
 /// Apply a new terminal size `(new_rows, new_cols)` if it differs from the
@@ -1488,8 +1504,11 @@ Arguments:
                         A compilation disk holds several stories; pick one with
                         --story, and each of them keeps its own saves. A release
                         pressed across several volumes is opened by naming ANY
-                        one of them — the rest are found beside it. Graphical v6
-                        stories are not supported — play those with lanthorn.
+                        one of them — the rest are found beside it. Version 6
+                        stories play as text. Pictures draw when the terminal
+                        can: kitty first, then sixel, else half-block colour
+                        cells. A pipe, --plain, TERM=dumb or NO_COLOR stay
+                        text.
 
 Host commands (never passed to the game):
   /status               Repeat the current status line / upper window
@@ -1555,6 +1574,12 @@ Options:
                         and its search. Nothing is buffered by lanthorn either
                         way. Swap it mid-game with /pin.
       --scrollback      Alias for --pin bottom, named for what it is for.
+      --image-protocol <auto|kitty|sixel|halfblocks|off>
+                        How Version 6 pictures are drawn. Default auto, which
+                        picks kitty, sixel or half-blocks from the terminal
+                        and stays text when none of those apply. Piped
+                        stdout, --plain, TERM=dumb and NO_COLOR stay text
+                        even when this names a protocol.
       --timed-input <on|off>
                         Honour timed-input interrupts (read / read_char with a
                         time and a routine). Default on.
@@ -1834,6 +1859,11 @@ fn main() {
         );
     }
 
+    let (v6_screen_px, picts) = pictures::load(&story_path);
+    let picture_dims: Vec<(u16, u16, u16)> = picts
+        .iter()
+        .map(|p| (p.number, p.width, p.height))
+        .collect();
     let mut machine = match build_machine(
         story_bytes,
         stdout_is_tty,
@@ -1845,6 +1875,8 @@ fn main() {
         interpreter,
         machine_colours,
         mode.plain(),
+        v6_screen_px,
+        picture_dims,
     ) {
         Ok(m) => m,
         Err(e) => {
@@ -1984,6 +2016,10 @@ fn main() {
     // time, so announcing what it already says would be noise (SQ-0616).
     let mut score_watch = cli_host::ScoreWatch::new();
     let announce_scores = mode.plain() && !args.story_only;
+    let mut gfx = graphics::Host::open(args.image_protocol, stdout_is_tty, mode.plain(), picts);
+    if let Some(ref host) = gfx {
+        eprintln!("zvm: Version 6 pictures via {:?}", host.protocol());
+    }
     print!("{}", view.start());
     print!("{}", view.prime(&machine));
     let _ = io::stdout().flush();
@@ -2038,10 +2074,25 @@ fn main() {
         // Persist aux tables as soon as the game commits one.
         aux_flush(&mut machine, &aux_file, args.aux);
 
+        // Version 6 pictures. Piped / plain / NO_COLOR / TERM=dumb never open
+        // a host, so a harness still sees text.
+        if machine.mem.version() == 6 {
+            let events = machine.take_paint_events();
+            if let Some(host) = gfx.as_mut() {
+                let drawn = host.render(&events);
+                if !drawn.is_empty() {
+                    print!("{drawn}");
+                    let _ = io::stdout().flush();
+                }
+            }
+        }
         match step {
             StepResult::Continue => {}
 
             StepResult::Quit => {
+                // Plain mode holds an unterminated last line; let it out before
+                // teardown or a print-and-quit story is silent under TERM=dumb.
+                release_prompt(&mut machine);
                 // `view.leave()` is the renderer's own teardown (drop the scroll
                 // region, park the cursor below it); the guard does the rest.
                 guard.restore(&view.leave());
@@ -2204,6 +2255,9 @@ fn main() {
                 // the first press (SQ-0609).
                 let (ch, resize, aborted) = match view.next_menu_key() {
                     Some(key) => (key, None, false),
+                    None if machine.mem.version() == 6 && !mode.stdin_tty() => {
+                        (read_v6_piped_char(), None, false)
+                    }
                     None if plain_menus => (read_cooked_char(&mut machine, &mut view), None, false),
                     None => {
                         read_char_input(stdin_is_tty, &mut machine, &mut view, timeout, &mut sound)
@@ -2281,27 +2335,16 @@ mod v6_tests {
     }
 
     fn build(story: Vec<u8>) -> Result<Machine, String> {
-        build_machine(story, false, false, 24, 24, 80, true, None, true, false)
+        build_machine(story, false, false, 24, 24, 80, true, None, true, false, None, Vec::new())
     }
 
-    /// SQ-0601: v6 is a graphical, mouse-and-menu format this front-end cannot
-    /// present, and every v6 story we have runs away the moment its opening
-    /// screen asks for input — whatever key it is given. Zork Zero and Arthur
-    /// flood the terminal; Shogun spins silently with nothing to interrupt.
-    /// Refusing at load is the only outcome that neither crashes nor hangs.
     #[test]
-    fn a_v6_story_is_refused_rather_than_run() {
-        let err = match build(story_of_version(6)) {
-            Err(e) => e,
-            Ok(_) => panic!("v6 must be refused, not loaded"),
-        };
-        assert!(err.contains("not supported by zvm-cli"), "{err}");
-        assert!(err.contains("lanthorn"), "the message points at the front-end that can: {err}");
+    fn a_v6_story_loads() {
+        let m = build(story_of_version(6)).expect("v6 must load");
+        assert_eq!(m.mem.version(), 6);
     }
 
-    /// The refusal is zvm-cli's alone — the library still supports v6, which is
-    /// what lanthorn plays. A version check that lived in `Memory::new` would
-    /// take the TUI's v6 support down with it.
+    /// The library has always loaded v6; this front-end now hosts it as well.
     #[test]
     fn the_library_still_loads_a_v6_story() {
         let mem = Memory::new(story_of_version(6)).expect("zvm itself accepts v6");
@@ -2588,6 +2631,7 @@ mod arg_tests {
             ("--aux", "on"), ("--pager", "off"), ("--timed-input", "on"),
             ("--sound", "off"), ("--game-colours", "on"), ("--game-colors", "on"),
             ("--colour", "machine"), ("--color", "terminal"),
+            ("--image-protocol", "auto"),
         ] {
             let a = parse_args(&["zvm-cli".into(), flag.into(), value.into(), "g".into()]).expect("valid args");
             assert_eq!(a.story.as_deref(), Some("g"), "{flag} {value} swallowed the story path");
@@ -2625,6 +2669,7 @@ mod arg_tests {
         }
         assert!(err(&["--sound"]).contains("--sound needs a value"));
         assert!(err(&["--colour", "chartreuse", "g"]).contains("terminal or machine"));
+        assert!(err(&["--image-protocol", "raster", "g"]).contains("auto, kitty, sixel"));
         // The value `lanthorn` takes and this binary cannot, named rather than
         // merely absent: it is the right word at the wrong front-end.
         assert!(err(&["--colour", "theme", "g"]).contains("style.toml"));
@@ -2761,6 +2806,16 @@ mod arg_tests {
         // Lenient: a bad value falls back to the engine default rather than
         // refusing to start.
         assert_eq!(p(&["-I", "notanumber", "g"]).interpreter, None);
+
+        assert_eq!(p(&["g"]).image_protocol, graphics::Choice::Auto);
+        assert_eq!(
+            p(&["--image-protocol", "kitty", "g"]).image_protocol,
+            graphics::Choice::Force(graphics::Protocol::Kitty)
+        );
+        assert_eq!(
+            p(&["--image-protocol", "off", "g"]).image_protocol,
+            graphics::Choice::Off
+        );
     }
 
 }
@@ -3154,7 +3209,7 @@ mod centring_tests {
     #[test]
     fn the_width_declared_to_the_story_is_the_width_the_sink_renders_at() {
         for cols in [40u16, 60, 80, 100, 132] {
-            let m = build_machine(v6_tests::story_of_version(5), true, false, 24, 24, cols, true, None, true, false)
+            let m = build_machine(v6_tests::story_of_version(5), true, false, 24, 24, cols, true, None, true, false, None, Vec::new())
                 .expect("a v5 story builds");
             assert_eq!(m.mem.read_byte(0x21) as u16, cols, "$21 = screen width in characters (§8.4)");
             assert_eq!(m.mem.read_word(0x22), cols, "$22 = screen width in units (§8.4.3)");
@@ -3173,7 +3228,7 @@ mod centring_tests {
     /// a grid still the old one (SQ-0679, which the app has had all along).
     #[test]
     fn a_resize_retells_the_story_and_retunes_the_sink_together() {
-        let mut m = build_machine(v6_tests::story_of_version(5), true, false, 24, 24, 80, true, None, true, false)
+        let mut m = build_machine(v6_tests::story_of_version(5), true, false, 24, 24, 80, true, None, true, false, None, Vec::new())
             .expect("a v5 story builds");
         // A live one-row upper window, as a boot-time `split_window 1` leaves.
         m.screen.upper.resize(1, 80);

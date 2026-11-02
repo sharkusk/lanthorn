@@ -27,6 +27,10 @@ goes into the README in place, at its normal destination, marked with the
 visible tag `*Next release:*`. `release.yml` refuses to cut a release
 while any such tag, or this Unreleased section, still exists.*
 
+### Added
+
+- **`zvm-cli` plays Z-machine Version 6 stories, pictures included.** Inform titles such as *Adventure* and *Sunburst Contamination* boot to a prompt and accept commands. Pictures draw from a Blorb PNG or JPEG when the terminal can: kitty first, then sixel, else Unicode half-blocks. A pipe, `--plain`, `TERM=dumb` or `NO_COLOR` stay text. `--image-protocol` selects one.
+
 ## v0.9.9 — 2026-10-25
 
 ### Highlights
