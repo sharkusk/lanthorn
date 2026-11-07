@@ -1980,6 +1980,11 @@ fn main() {
     // that must stay byte-identical (SQ-0609).
     let plain_menus = mode.plain() && !args.story_only;
     view.set_menus(plain_menus);
+    // Set after a player key at `@read_char`. The next char prompt clears
+    // the upper-window dedupe so an unchanged window is printed. A
+    // host-driven menu walk does not set this, and `@read` does not clear
+    // the dedupe.
+    let mut relist_after_player_key = false;
     // Screen-reader mode only: elsewhere the status line is on screen the whole
     // time, so announcing what it already says would be noise (SQ-0616).
     let mut score_watch = cli_host::ScoreWatch::new();
@@ -2177,6 +2182,10 @@ fn main() {
             StepResult::NeedChar => {
                 // Poll for terminal resize before char input.
                 maybe_resize(both_tty, &mut term_rows, &mut term_cols, &mut page_height, &mut machine, &mut view);
+                if relist_after_player_key {
+                    view.invalidate_dedupe();
+                    relist_after_player_key = false;
+                }
                 let frame = view.frame(&machine);
                 print_frame(&mut machine, mode.plain(), &frame);
                 // Between the status and the held prompt: the announcement is
@@ -2204,9 +2213,23 @@ fn main() {
                 // the first press (SQ-0609).
                 let (ch, resize, aborted) = match view.next_menu_key() {
                     Some(key) => (key, None, false),
-                    None if plain_menus => (read_cooked_char(&mut machine, &mut view), None, false),
+                    None if plain_menus => {
+                        relist_after_player_key = true;
+                        (read_cooked_char(&mut machine, &mut view), None, false)
+                    }
                     None => {
-                        read_char_input(stdin_is_tty, &mut machine, &mut view, timeout, &mut sound)
+                        let (ch, resize, aborted) = read_char_input(
+                            stdin_is_tty,
+                            &mut machine,
+                            &mut view,
+                            timeout,
+                            &mut sound,
+                        );
+                        // A timed read that aborted never took a player key.
+                        if !aborted {
+                            relist_after_player_key = true;
+                        }
+                        (ch, resize, aborted)
                     }
                 };
                 // Handle any resize that happened DURING the char read.
