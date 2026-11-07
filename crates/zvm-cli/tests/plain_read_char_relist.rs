@@ -99,7 +99,7 @@ fn story_bytes() -> Vec<u8> {
 fn story_file() -> PathBuf {
     static N: AtomicUsize = AtomicUsize::new(0);
     let n = N.fetch_add(1, Ordering::Relaxed);
-    let path = std::env::temp_dir().join(format!("lanthorn-zvm-readchar-{n}.z5"));
+    let path = std::env::temp_dir().join(format!("lanthorn-zvm-readchar-{}-{n}.z5", std::process::id()));
     std::fs::write(&path, story_bytes()).expect("write story");
     path
 }
