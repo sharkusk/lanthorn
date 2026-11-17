@@ -49,6 +49,26 @@ fn decode_glk_keycode(code: KeyCode) -> u32 {
     }
 }
 
+/// A human-readable name for a Glk char-input keycode, for the ignored-key
+/// notice below.
+fn glk_key_name(key: u32) -> String {
+    match key {
+        keycode::RETURN => "Return".to_string(),
+        keycode::DELETE => "Delete".to_string(),
+        keycode::TAB => "Tab".to_string(),
+        keycode::ESCAPE => "Escape".to_string(),
+        keycode::UP => "Up".to_string(),
+        keycode::DOWN => "Down".to_string(),
+        keycode::LEFT => "Left".to_string(),
+        keycode::RIGHT => "Right".to_string(),
+        32 => "Space".to_string(),
+        k => match char::from_u32(k) {
+            Some(c) if !c.is_control() => format!("'{c}'"),
+            _ => format!("key 0x{k:x}"),
+        },
+    }
+}
+
 // ── Blorb extraction ──────────────────────────────────────────────────────────
 
 /// Get the runnable Glulx image: the `GLUL` executable inside a Blorb, or the
@@ -232,6 +252,13 @@ fn read_line_raw(is_tty: bool, echo: LineEcho) -> (String, u32) {
 /// stdin: return the first byte of the next line.
 /// Read one keypress, and hand back the line it came from.
 ///
+/// Piped stdin maps one LINE to one key — the line's first byte is the key
+/// sent, so ` \n` is a space and `x\n` is `x` — except that an empty line is
+/// Return. That makes every key a controller might need expressible, but also
+/// means a controller poking a char prompt with bare newlines sends Return,
+/// which a story-authored `[ MORE ]` gate may silently ignore (see the
+/// ignored-key notice in `drive`).
+///
 /// The line is empty in raw mode, and is the whole cooked line off a TTY —
 /// screen-reader mode hands line editing to the kernel, so a "keypress" there
 /// really is a line terminated by Enter. That is what lets the host recognise
@@ -367,6 +394,7 @@ fn drive(
     honor: bool,
     stdout_is_tty: bool,
     announce_scores: bool,
+    notice_ignored_keys: bool,
     mut before_input: impl FnMut(&mut Machine),
     mut read_line: impl FnMut(LineEcho) -> (String, u32),
     mut read_char: impl FnMut() -> (u32, String),
@@ -389,6 +417,14 @@ fn drive(
     // timer and selects forever without ever reaching input.
     const MAX_CONSECUTIVE_TIMER_TICKS: u64 = 10_000;
     let mut consecutive_timer_ticks: u64 = 0;
+    // The key supplied at the last char request, with the backend's output
+    // generation as it was right after supplying it. If the game asks for a
+    // char again without the generation moving, it ignored the key and printed
+    // nothing — a story-authored [ MORE ] that only advances on a printable key
+    // is the exemplar (Pythos Mask ignores Return there). On a TTY that is
+    // visible as-is; piped or in plain mode it is indistinguishable from a hang,
+    // so `notice_ignored_keys` emits a host line to break the silence.
+    let mut last_char_supply: Option<(u32, u64)> = None;
     loop {
         // Flush the Glk file VFS to its sidecar whenever a game mutation dirtied
         // it, each iteration, so a game's files survive even if the process is
@@ -426,6 +462,8 @@ fn drive(
             }
             StepResult::NeedLine { .. } => {
                 consecutive_timer_ticks = 0;
+                // A line request means the char gate (if any) has been passed.
+                last_char_supply = None;
                 emit_page_bg(machine, honor, stdout_is_tty, &mut last_page_bg);
                 before_input(machine);
                 // Status, then the announcement, THEN the released prompt — the
@@ -489,6 +527,24 @@ fn drive(
                 emit_page_bg(machine, honor, stdout_is_tty, &mut last_page_bg);
                 before_input(machine);
                 release_prompt(machine);
+                // The game ignored the previous key and re-requested char input
+                // without printing anything. Say so (plain/piped only), or the
+                // controller on the other end of the pipe sees 0 bytes and
+                // reads the session as hung.
+                if notice_ignored_keys {
+                    if let Some((prev, gen)) = last_char_supply {
+                        if with_backend(machine, |t| t.output_generation()) == Some(gen) {
+                            let msg = format!(
+                                "[the game ignored {} and is still waiting for a key; \
+                                 try another key such as a space]",
+                                glk_key_name(prev)
+                            );
+                            if let Some(t) = backend(machine) {
+                                t.announce_ignored_key(&msg);
+                            }
+                        }
+                    }
+                }
                 // A menu walk feeds the game its own navigation keys instead of
                 // reading stdin, and steers from where the marker actually
                 // landed — asked here, after `before_input` observed the frame
@@ -522,6 +578,8 @@ fn drive(
                     }
                 };
                 machine.supply_char(key);
+                last_char_supply =
+                    with_backend(machine, |t| t.output_generation()).map(|g| (key, g));
             }
             // Game create_by_prompt: ask the user for a filename (blank = cancel).
             // The prompt goes to STDOUT: it is interactive dialogue, not a
@@ -910,6 +968,9 @@ fn main() {
         honor,
         stdout_is_tty,
         mode.plain() && !m.has("--story-only"),
+        // Piped stdin or plain mode: an ignored key is invisible silence there,
+        // where on an interactive TTY the player just presses another key.
+        !stdin_is_tty || mode.plain(),
         |m| {
             // Re-poll terminal size before each input (interactive TTY only).
             if both_tty {
@@ -1282,7 +1343,7 @@ mod tests {
 
         let mut m = build_machine(image_for(body), Box::new(TestBackend::new())).unwrap();
         let mut keys = vec![b'Z' as u32].into_iter();
-        drive(&mut m, std::path::Path::new("unused.glkvfs"), true, false, false, |_| {}, |_echo| (String::new(), 0), move || (keys.next().unwrap_or(keycode::RETURN), String::new()));
+        drive(&mut m, std::path::Path::new("unused.glkvfs"), true, false, false, false, |_| {}, |_echo| (String::new(), 0), move || (keys.next().unwrap_or(keycode::RETURN), String::new()));
         let text = m.backend_mut().as_any_mut().downcast_mut::<TestBackend>().unwrap().all_text();
         assert_eq!(text, "Z", "the typed key was supplied, stored, and echoed");
     }
@@ -1306,7 +1367,7 @@ mod tests {
 
         let mut m = build_machine(image_for(body), Box::new(TestBackend::new())).unwrap();
         let mut lines = vec!["hello".to_string()].into_iter();
-        drive(&mut m, std::path::Path::new("unused.glkvfs"), true, false, false, |_| {}, move |_echo| (lines.next().unwrap_or_default(), 0), || (keycode::RETURN, String::new()));
+        drive(&mut m, std::path::Path::new("unused.glkvfs"), true, false, false, false, |_| {}, move |_echo| (lines.next().unwrap_or_default(), 0), || (keycode::RETURN, String::new()));
         let text = m.backend_mut().as_any_mut().downcast_mut::<TestBackend>().unwrap().all_text();
         assert_eq!(text, "hello", "the typed line was supplied into the buffer and printed");
     }
@@ -1408,7 +1469,7 @@ mod tests {
         // Run 1: a game writes "Hi" into a Glk file, then quits. drive's in-loop,
         // dirty-gated flush should persist the VFS to the sidecar.
         let mut m = build_machine(vfs_image(write_hi_program(), 2), Box::new(TestBackend::new())).unwrap();
-        drive(&mut m, &vfs_path, true, false, false, |_| {}, |_echo| (String::new(), 0), || (keycode::RETURN, String::new()));
+        drive(&mut m, &vfs_path, true, false, false, false, |_| {}, |_echo| (String::new(), 0), || (keycode::RETURN, String::new()));
 
         assert!(vfs_path.exists(), "the .glkvfs sidecar is written to disk");
         let blob = fs::read(&vfs_path).unwrap();
@@ -1421,7 +1482,7 @@ mod tests {
         let mut m2 = build_machine(vfs_image(read_hi_program(), 4), Box::new(TestBackend::new())).unwrap();
         m2.load_vfs(&fs::read(&vfs_path).unwrap());
         m2.clear_vfs_dirty();
-        drive(&mut m2, &vfs_path, true, false, false, |_| {}, |_echo| (String::new(), 0), || (keycode::RETURN, String::new()));
+        drive(&mut m2, &vfs_path, true, false, false, false, |_| {}, |_echo| (String::new(), 0), || (keycode::RETURN, String::new()));
         let text = m2.backend_mut().as_any_mut().downcast_mut::<TestBackend>().unwrap().all_text();
         assert_eq!(text, "Hi", "the persisted bytes are readable after load_vfs");
 
@@ -1501,7 +1562,7 @@ mod tests {
         let save_path_str = save_path.to_str().unwrap().to_string();
         let mut m =
             build_machine(vfs_image(save_restore_by_prompt_program(), 4), Box::new(TestBackend::new())).unwrap();
-        drive(&mut m, &vfs_path, true, false, false, |_| {}, move |_echo| (save_path_str.clone(), 0), || {
+        drive(&mut m, &vfs_path, true, false, false, false, |_| {}, move |_echo| (save_path_str.clone(), 0), || {
             (keycode::RETURN, String::new())
         });
 
