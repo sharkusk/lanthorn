@@ -623,6 +623,11 @@ pub struct TerminalBackend {
     /// streams (`glk_stream_open_resource`). `None` for a plain `.ulx` — the
     /// resource open then fails, per spec.
     data_blorb: Option<blorb::Blorb>,
+    /// Bumped on every game write (buffer text, grid text, grid clear). The
+    /// drive loop compares snapshots of it across a char event to tell "the
+    /// game answered the key" from "the game silently ignored it and is
+    /// re-waiting" — the silent-MORE stall a piped controller cannot see.
+    output_gen: u64,
 }
 
 impl TerminalBackend {
@@ -681,6 +686,7 @@ impl TerminalBackend {
             pending_echo: None,
             debug,
             data_blorb: None,
+            output_gen: 0,
         }
     }
 
@@ -781,6 +787,7 @@ impl TerminalBackend {
             pending_echo: None,
             debug: false,
             data_blorb: None,
+            output_gen: 0,
         }
     }
 
@@ -1032,6 +1039,23 @@ impl TerminalBackend {
         out.push_str(text);
         out.push('\n');
         self.write_sink(&out);
+    }
+
+    /// Monotone count of game writes (buffer text, grid text, grid clears).
+    /// Snapshot it when a char event is supplied and compare at the next char
+    /// request: an unchanged count means the game ignored the key without
+    /// printing anything.
+    pub fn output_generation(&self) -> u64 {
+        self.output_gen
+    }
+
+    /// Announce that the game silently ignored a char-input key and is waiting
+    /// for another (plain/piped mode). Flushed immediately: the caller is about
+    /// to block on stdin, and a buffered notice would be the very silence it
+    /// exists to break.
+    pub fn announce_ignored_key(&mut self, text: &str) {
+        self.write_host_line(text);
+        let _ = self.out.flush();
     }
 
     /// Write a host answer (`/status`) mid-turn: start a fresh line, print it,
@@ -1527,6 +1551,9 @@ impl GlkBackend for TerminalBackend {
     }
 
     fn put_text_attr(&mut self, win: u32, style: GlkStyle, colour: StyleColour, attrs: StyleAttrs, _link: u32, s: &str) {
+        if !s.is_empty() {
+            self.output_gen += 1;
+        }
         // Windowed mode: each buffer keeps its own wrapped lines and is drawn at
         // its own rect, so a game whose UI is several buffer windows renders as
         // panels rather than one interleaved stream (SQ-0603).
@@ -1630,6 +1657,9 @@ impl GlkBackend for TerminalBackend {
     }
 
     fn grid_put_attr(&mut self, win: u32, x: u32, y: u32, style: GlkStyle, colour: StyleColour, attrs: StyleAttrs, _link: u32, s: &str) {
+        if !s.is_empty() {
+            self.output_gen += 1;
+        }
         if self.debug {
             eprintln!("[term] grid_put: win={win} x={x} y={y} len={}", s.chars().count());
         }
@@ -1647,6 +1677,7 @@ impl GlkBackend for TerminalBackend {
     }
 
     fn grid_clear(&mut self, win: u32) {
+        self.output_gen += 1;
         if let Some(g) = self.grids.iter_mut().find(|g| g.id == win) {
             for row in &mut g.cells {
                 for cell in row.iter_mut() {
